@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="pt-BR" dir="ltr">
+
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta charset="utf-8">
+  <title>TWT airpack</title>
+  <link rel="stylesheet" type="text/css" href="style.css?v7">
+  <link href="https://db.onlinewebfonts.com/c/860c3ec7bbc5da3e97233ccecafe512e?family=Circular+Std+Book"
+    rel="stylesheet" type="text/css" />
+
+</head>
+
+<body id="corpse">
+
+
+  <div id="preloader" role="status" aria-live="polite" aria-label="Consultando informações" aria-hidden="true">
+    <div class="inner">
+      <div class="bolas">
+        <div></div>
+        <div></div>
+        <div></div>
+      </div>
+      <div class="bolas preloader-label">
+        Buscando
+      </div>
+    </div>
+  </div>
+
+
+  <header id="pageHeader">
+    <h1 class="visually-hidden">TWT Airpack — transporte e logística</h1>
+
+    <div class="logo">
+      <img src="assets/twtlogosince.png" alt="TWT Airpack">
+    </div>
+
+    <div class="contact-social">
+      <div class="icon-text">
+        <img src="./assets/phone.svg" alt="Icone de telefone" aria-hidden="true">
+        <p><a href="tel:+555133424425">51 3342-4425</a></p>
+      </div>
+
+      <div class="social">
+        <a target="_blank" rel="noopener noreferrer" aria-label="TWT no LinkedIn"
+          href="http://linkedin.com/company/twtlog"><img class="icon" src="./assets/linkedin.svg"
+            alt="Icone do LinkedIn" aria-hidden="true"></a>
+        <a target="_blank" rel="noopener noreferrer" aria-label="Conversar com a TWT pelo WhatsApp"
+          href="https://api.whatsapp.com/send/?phone=%2B5551993162358&text&type=phone_number&app_absent=0"><img
+            class="icon" src="./assets/whatsapp.svg" alt="Icone do WhatsApp" aria-hidden="true"></a>
+        <a target="_blank" rel="noopener noreferrer" aria-label="TWT no Facebook" href="http://facebook.com/TWTlog">
+          <img class="icon" src="./assets/facebook.svg" alt="Icone do Facebook" aria-hidden="true"></a>
+      </div>
+    </div>
+
+    <nav class="menu" aria-label="Navegação principal">
+      <ul>
+        <li class="menuLink active"><a href="#services">Serviços</a></li>
+        <li><button class="menu-action js-show-price" type="button" aria-haspopup="dialog"
+            aria-controls="mask">Cotação</button></li>
+        <li class="menuLink"><a href="#rastreamento">Rastreamento</a></li>
+        <li class="menuLink"><a href="#contact">Contato</a></li>
+        <li><a target="_blank" rel="noopener noreferrer" href="https://twt.brudam.com.br/site/">Portal do Cliente</a>
+        </li>
+      </ul>
+    </nav>
+    <button class="mobileHamburguer js-show-menu" type="button" aria-label="Abrir menu" aria-controls="mobileNavigation"
+      aria-expanded="false">
+      <img src="./assets/menu.svg" alt="" aria-hidden="true" />
+    </button>
+  </header>
+
+  <a target="_blank" rel="noopener noreferrer" aria-label="Conversar com a TWT pelo WhatsApp"
+    href="https://api.whatsapp.com/send/?phone=%2B5551993162358&text&type=phone_number&app_absent=0">
+    <div class="whatsapp">
+      <img src="./assets/whatsapp-message.svg" alt="" aria-hidden="true">
+      <span class="whatsapp-button">WhatsApp</span>
+    </div>
+  </a>
+
+  <section class="about" id="about" aria-label="Sobre a TWT">
+
+    <div class="cell">
+
+      <img src="./assets/ecofriendly.svg" alt="Icone de folha representando sustentabilidade">
+      <h3>Empresa Eco friendly</h3>
+      <p>Empresa sustentavel e comprometida
+        com a natureza.</p>
+
+    </div>
+
+    <div class="cell">
+
+      <img src="./assets/Calculator.svg" alt="Icone de calculadora">
+      <h3>Cotação</h3>
+      <p>Faça uma cotação com a TWT e confira nossas condições de envios.</p>
+      <button class="js-show-price" type="button" aria-haspopup="dialog" aria-controls="mask">Clique aqui</button>
+
+    </div>
+
+    <div class="cell">
+
+      <img src="./assets/clients.svg" alt="Icone de clientes">
+      <h3>Clientes</h3>
+      <p>Compromissados a manter nossos clientes 100% satisfeitos.</p>
+
+    </div>
+
+  </section>
+
+  <section class="services" id="services" aria-labelledby="servicesTitle">
+
+    <h2 id="servicesTitle">Serviços</h2>
+
+    <div class="caroussel">
+
+      <button class="back js-carousel" data-direction="1" type="button" aria-label="Serviço anterior"><img
+          src="./assets/next.svg" alt="Seta para o serviço anterior" aria-hidden="true"></button>
+
+      <div id="items" role="group" aria-label="Lista de serviços">
+
+      </div>
+
+      <button class="next js-carousel" data-direction="0" type="button" aria-label="Próximo serviço"><img
+          src="./assets/next.svg" alt="Seta para o próximo serviço" aria-hidden="true"></button>
+
+    </div>
+
+    <div id="cell-info" role="status" aria-live="polite">Cargas e encomendas despachadas via malha aérea regular com
+      disponibilidade de acordo com o
+      destino (24, 48 e 72 horas), inclusive com interiorização para mais de 5.000 cidades brasileiras.</div>
+
+  </section>
+
+
+  <section class="services tracking-section" id="rastreamento" aria-labelledby="trackingTitle">
+    <h2 id="trackingTitle">Rastreamento</h2>
+    <div class="container">
+      <form class="contact-form" id="trackingForm" aria-label="Consultar rastreamento">
+        <fieldset class="tipos_orc_db tracking-types">
+          <legend class="visually-hidden">Tipo do documento</legend>
+          <label><input type="radio" name="document-type" value="nf" checked> Nota Fiscal</label>
+          <label><input type="radio" name="document-type" value="cte"> CT-e</label>
+          <label><input type="radio" name="document-type" value="minuta"> Minuta</label>
+        </fieldset>
+        <div class="text-input cnpj_orc_db" id="trackingTaxpayerField">
+          <label class="visually-hidden" for="your-cnpj">CPF ou CNPJ do remetente ou destinatário</label>
+          <input type="text" class="your-cnpj" id="your-cnpj" inputmode="numeric" autocomplete="off" maxlength="18"
+            required placeholder="CNPJ/CPF">
+        </div>
+        <div class="text-input cnpj_orc_db mg-20">
+          <label class="visually-hidden" for="your-document">Número do documento</label>
+          <input type="text" class="your-document" id="your-document" autocomplete="off" maxlength="60" required
+            placeholder="Número do documento">
+        </div>
+        <div class="text-input cnpj_orc_db mg-20">
+          <button class="form-button buscar_rastreamento" type="submit">Buscar</button>
+        </div>
+      </form>
+    </div>
+    <div class="erro_rastreamento" role="alert" aria-live="assertive" aria-atomic="true"></div>
+  </section>
+
+  <section class="contact" id="contact" aria-labelledby="contactTitle">
+
+    <h2 id="contactTitle">Nossa equipe aguarda seu contato!</h2>
+
+    <div class="container">
+
+      <div class="contact-info">
+
+        <div class="call-us">
+
+          <img src="./assets/call-us.svg" alt="Icone representando uma atendente de call center">
+          <h3>Ligue para a gente</h3>
+          <p>Tem alguma sugestão, duvida ou solicitação?</p>
+        </div>
+
+        <div class="contact-cell">
+
+          <div class="icon-text">
+            <img src="./assets/phone-call.svg" alt="Icone de telefone">
+            <p>Telefone:</p>
+          </div>
+
+          <p class="info-text">51 3342-4425</p>
+
+        </div>
+
+        <div class="contact-cell">
+
+          <div class="icon-text">
+            <img src="./assets/email.svg" alt="Icone de e-mail">
+            <p>E-mail:</p>
+          </div>
+
+          <p class="info-text">twt@twt.com.br</p>
+
+        </div>
+
+      </div>
+
+      <div class="location">
+
+        <img src="./assets/address.svg" alt="Icone de endereço">
+        <p class="title">Endereço</p>
+        <p class="address">Av. Sertório,4455 - loja 03
+          Jardim São Pedro
+          Porto Alegre - RS</p>
+        <a class="link" target="_blank" rel="noopener noreferrer" href="https://goo.gl/maps/hk95BhLimtEHsJgb6">Ver no
+          Google Maps</a>
+
+      </div>
+
+      <form class="contact-form" id="messageForm" aria-label="Enviar mensagem para a TWT">
+        <input type="hidden" name="recipient" value="twt@twt.com.br">
+        <input type="hidden" name="email" value="twt@twt.com.br">
+        <div class="text-input">
+
+          <input required type="text" id="messageName" name="Nome" autocomplete="name" />
+          <label for="messageName">Nome</label>
+
+        </div>
+
+        <div class="text-input">
+
+          <div class="verify-field" role="status" aria-live="polite" aria-atomic="true"><img src="" alt="" /></div>
+          <input required id="email-input" class="js-email" type="email" name="Email" autocomplete="email" />
+          <label for="email-input">Email</label>
+
+        </div>
+
+        <div class="estate-select">
+
+          <div class="text-input">
+
+            <input required type="text" id="messageCity" name="Cidade" autocomplete="address-level2" />
+            <label for="messageCity">Cidade</label>
+
+          </div>
+
+          <div class="select-container">
+
+            <div id="dropdown-id">
+
+            </div>
+
+          </div>
+
+        </div>
+
+        <div class="text-input">
+
+          <input required type="text" id="messageSubject" name="subject" />
+          <label for="messageSubject">Assunto</label>
+
+        </div>
+
+        <div class="text-box-input">
+
+          <textarea required id="messageBody" name="Mensagem"></textarea>
+          <label for="messageBody">Mensagem</label>
+
+        </div>
+
+        <button class="form-button" id="sendMessage" type="submit">Enviar</button>
+
+      </form>
+    </div>
+
+  </section>
+
+  <footer aria-label="Rodapé">
+
+    <p class="address">Av. Sertório,4455
+      Jardim São Pedro
+      Porto Alegre - RS</p>
+
+    <p class="copyright">Todos os direitos reservados. TWT <span id="currentYear"></span> ®️</p>
+
+    <div class="contact-social">
+
+      <div class="icon-text">
+        <img src="./assets/phone-call-footer.svg" alt="" aria-hidden="true">
+        <p><a href="tel:+555133424425">51 3342-4425</a></p>
+      </div>
+
+      <div class="social">
+
+        <a target="_blank" rel="noopener noreferrer" aria-label="TWT no LinkedIn"
+          href="http://linkedin.com/company/twtlog">
+          <svg class="icon" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg" width="32.314"
+            height="32.314" viewBox="0 0 32.314 32.314">
+            <path id="_1384014" data-name="1384014"
+              d="M16.157,0A16.157,16.157,0,1,0,32.314,16.157,16.159,16.159,0,0,0,16.157,0Zm-4.7,24.425H7.527V12.587h3.935ZM9.495,10.97H9.469a2.051,2.051,0,1,1,.052-4.091,2.052,2.052,0,1,1-.026,4.091ZM25.651,24.425H21.716V18.092c0-1.592-.57-2.677-1.994-2.677A2.154,2.154,0,0,0,17.7,16.854a2.7,2.7,0,0,0-.129.96v6.611H13.64s.052-10.728,0-11.839h3.935v1.676a3.907,3.907,0,0,1,3.546-1.954c2.589,0,4.53,1.692,4.53,5.328Zm0,0"
+              fill="#E8EBEE" />
+          </svg>
+        </a>
+        <a target="_blank" rel="noopener noreferrer" aria-label="Conversar com a TWT pelo WhatsApp"
+          href="https://wa.me/+5551993162358">
+          <svg class="icon" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg" width="31.81"
+            height="31.963" viewBox="0 0 31.81 31.963">
+            <path id="_1384023" data-name="1384023"
+              d="M27.425,4.645A15.842,15.842,0,0,0,2.5,23.756L.25,31.963l8.4-2.2a15.822,15.822,0,0,0,7.569,1.928h.007a15.845,15.845,0,0,0,11.2-27.043Zm-11.2,24.369h-.005a13.148,13.148,0,0,1-6.7-1.835l-.481-.285L4.053,28.2l1.33-4.858-.313-.5a13.164,13.164,0,1,1,11.152,6.169Zm7.221-9.86c-.4-.2-2.341-1.155-2.7-1.288s-.627-.2-.89.2-1.022,1.288-1.253,1.552-.462.3-.857.1a10.809,10.809,0,0,1-3.183-1.964,11.938,11.938,0,0,1-2.2-2.741c-.231-.4,0-.59.174-.808a11.2,11.2,0,0,0,.989-1.354.728.728,0,0,0-.033-.693c-.1-.2-.89-2.146-1.22-2.939-.322-.771-.647-.667-.891-.679s-.495-.014-.759-.014a1.454,1.454,0,0,0-1.055.5,4.439,4.439,0,0,0-1.385,3.3,7.7,7.7,0,0,0,1.616,4.094c.2.264,2.791,4.262,6.761,5.976a22.653,22.653,0,0,0,2.256.834,5.425,5.425,0,0,0,2.493.157A4.077,4.077,0,0,0,23.97,21.5a3.307,3.307,0,0,0,.231-1.882c-.1-.165-.363-.264-.758-.462Zm0,0"
+              transform="translate(-0.25)" fill="#E8EBEE" fill-rule="evenodd" />
+          </svg>
+        </a>
+        <a target="_blank" rel="noopener noreferrer" aria-label="TWT no Facebook" href="http://facebook.com/TWTlog">
+          <svg class="icon" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg" width="31.856"
+            height="31.856" viewBox="0 0 31.856 31.856">
+            <path id="_1051360" data-name="1051360"
+              d="M4.666,31.856H15.057V20.532H11.324V16.8h3.733V12.133a4.672,4.672,0,0,1,4.666-4.666H24.39V11.2H20.657a1.869,1.869,0,0,0-1.867,1.867V16.8h5.431L23.6,20.532H18.79V31.856h8.4a4.672,4.672,0,0,0,4.666-4.666V4.666A4.672,4.672,0,0,0,27.19,0H4.666A4.672,4.672,0,0,0,0,4.666V27.19A4.672,4.672,0,0,0,4.666,31.856Zm-2.8-27.19a2.8,2.8,0,0,1,2.8-2.8H27.19a2.8,2.8,0,0,1,2.8,2.8V27.19a2.8,2.8,0,0,1-2.8,2.8H20.657V22.4h4.524l1.244-7.466H20.657V13.066h5.6V5.6H19.724a6.54,6.54,0,0,0-6.533,6.533v2.8H9.457V22.4h3.733V29.99H4.666a2.8,2.8,0,0,1-2.8-2.8Zm0,0"
+              fill="#E8EBEE" />
+          </svg>
+        </a>
+      </div>
+
+    </div>
+  </footer>
+  <div id="mask" role="dialog" aria-modal="true" aria-labelledby="quotationTitle" aria-hidden="true" inert>
+    <div class="modal quotation-modal">
+      <button class="close-button js-hide-price" type="button" aria-label="Fechar cotação"><img src="assets/close.svg"
+          alt="Icone de fechar" aria-hidden="true" /></button>
+      <h2 id="quotationTitle">Faça uma cotação com a TWT</h2>
+      <form method="post" id="cotationForm" aria-label="Formulário de cotação">
+        <input type="hidden" name="recipient" value="twt@twt.com.br">
+        <input type="hidden" name="subject" value="Nova cotação">
+        <input type="hidden" name="email" value="twt@twt.com.br">
+
+        <div class="modal-fields">
+
+          <div class="text-input">
+
+            <input required type="text" id="quotationName" name="Nome" autocomplete="name" />
+            <label for="quotationName">Nome:</label>
+
+          </div>
+
+          <div class="text-input">
+            <div class="verify-field" role="status" aria-live="polite" aria-atomic="true"><img src="" alt="" /></div>
+            <input required class="js-email" id="quotationEmail" type="email" name="Email" autocomplete="email" />
+            <label for="quotationEmail">E-mail:</label>
+
+          </div>
+
+          <div class="text-input">
+            <div class="verify-field" role="status" aria-live="polite" aria-atomic="true"><img src="" alt="" /></div>
+            <input required type="tel" name="Telefone" id="phone" class="js-phone" inputmode="tel" />
+            <label for="phone">Telefone:</label>
+
+          </div>
+
+          <div class="text-input">
+
+            <input required type="text" id="quotationCompany" name="Empresa" autocomplete="organization" />
+            <label for="quotationCompany">Empresa:</label>
+
+          </div>
+
+          <div class="text-input">
+
+            <input required type="text" id="quotationOrigin" name="Origem" />
+            <label for="quotationOrigin">Origem:</label>
+
+          </div>
+
+          <div class="text-input">
+
+            <input required type="text" id="quotationDestination" name="Destino" />
+            <label for="quotationDestination">Destino:</label>
+
+          </div>
+
+          <div class="text-input">
+
+            <input required type="text" id="quotationQuantity" name="Quantidade" inputmode="numeric" />
+            <label for="quotationQuantity">Quantidade/Volume:</label>
+
+          </div>
+
+          <div class="text-input">
+
+            <input required type="text" id="quotationWeight" name="Peso" inputmode="decimal" />
+            <label for="quotationWeight">Peso (kg):</label>
+
+          </div>
+
+          <div class="text-input">
+
+            <input required type="text" id="quotationWidth" name="Largura" inputmode="decimal" />
+            <label for="quotationWidth">Largura (cm):</label>
+
+          </div>
+
+          <div class="text-input">
+
+            <input required type="text" id="quotationHeight" name="Altura" inputmode="decimal" />
+            <label for="quotationHeight">Altura (cm):</label>
+
+          </div>
+
+          <div class="text-input">
+
+            <input required type="text" id="quotationLength" name="Comprimento" inputmode="decimal" />
+            <label for="quotationLength">Comprimento (cm):</label>
+
+          </div>
+
+          <div class="text-input">
+
+            <input required type="text" id="quotationInvoiceValue" name="ValorNf" inputmode="decimal" />
+            <label for="quotationInvoiceValue">Valor da NF:</label>
+
+          </div>
+
+          <div class="text-input">
+            <div class="verify-field" role="status" aria-live="polite" aria-atomic="true"><img src="" alt="" /></div>
+            <input required type="text" name="remetente" id="senderDocument" class="js-document" inputmode="numeric"
+              maxlength="18" />
+            <label for="senderDocument">CPF/CNPJ remetente:</label>
+
+          </div>
+
+          <div class="text-input">
+            <div class="verify-field" role="status" aria-live="polite" aria-atomic="true"><img src="" alt="" /></div>
+            <input required type="text" name="destinatario" id="recipientDocument" class="js-document"
+              inputmode="numeric" maxlength="18" />
+            <label for="recipientDocument">CPF/CNPJ destinatário:</label>
+
+          </div>
+
+        </div>
+
+        <div class="text-box-input">
+
+          <textarea required id="quotationDescription" name="Descricao"></textarea>
+          <label for="quotationDescription">Descrição do conteúdo:</label>
+
+        </div>
+
+        <button class="form-button" type="submit">Enviar</button>
+      </form>
+    </div>
+  </div>
+
+  <div id="mask_rastreamento" role="dialog" aria-modal="true" aria-labelledby="trackingResultTitle" aria-hidden="true"
+    inert>
+    <div class="modal tracking-modal">
+      <button class="close-button js-hide-tracking" type="button" aria-label="Fechar resultado do rastreamento"><img
+          src="assets/close.svg" alt="Icone de fechar" aria-hidden="true" /></button>
+      <h2 id="trackingResultTitle">Resultado do Rastreamento</h2>
+      <div class="tracking-summary" aria-live="polite">
+        <div class="cell">
+          <img src="./assets/calendario.svg" alt="Icone de calendário">
+          <h3 id="deliveryDateTitle">Previsão de Entrega</h3>
+          <p id="prev_entrega"></p>
+        </div>
+        <div class="cell">
+          <img src="./assets/mercadoria.svg" alt="Caixa">
+          <h3>Documento</h3>
+          <p id="vol_peso"></p>
+        </div>
+        <div class="cell">
+          <img src="./assets/trecho.svg" alt="Icone de mapa representando o trecho do transporte">
+          <h3>Situação Atual</h3>
+          <p id="trecho"></p>
+        </div>
+      </div>
+      <div class="modal-fields ocorrencias" role="list" aria-label="Ocorrências do rastreamento"></div>
+    </div>
+  </div>
+
+  <nav class="mobileMenu" id="mobileNavigation" aria-label="Navegação móvel" aria-hidden="true" inert>
+    <button class="closeMenu js-hide-menu" type="button" aria-label="Fechar menu"><img src="assets/close-menu.svg"
+        alt="Icone de fechar menu" aria-hidden="true" /></button>
+    <ul>
+      <li class="mobileLink active"><a class="js-hide-menu" href="#about">Quem Somos</a></li>
+      <li class="mobileLink"><a class="js-hide-menu" href="#services">Serviços</a></li>
+      <li><button class="mobile-menu-action js-mobile-price" type="button" aria-haspopup="dialog"
+          aria-controls="mask">Cotação</button></li>
+      <li class="mobileLink"><a class="js-hide-menu" href="#contact">Contato</a></li>
+      <li><a class="js-hide-menu" target="_blank" rel="noopener noreferrer"
+          href="https://twt.brudam.com.br/site/">Portal do Cliente</a></li>
+    </ul>
+  </nav>
+
+  <script src="script.js?v5"></script>
+  <script src="rastreamento.js?v16"></script>
+</body>
+
+</html>
