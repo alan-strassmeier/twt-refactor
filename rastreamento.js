@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const BRUDAM_API_URL = 'https://twt.brudam.com.br/api/v1';
+  const TRACKING_API_URL = '/api/rastreamento';
   const REQUEST_TIMEOUT = 20000;
   const TYPE_LABELS = {
     nf: 'Nota Fiscal',
@@ -37,9 +37,6 @@
   const documentSummary = document.getElementById('vol_peso');
   const currentStatus = document.getElementById('trecho');
 
-  let credentials = null;
-  let accessToken = '';
-  let tokenExpiresAt = 0;
   let errorTimer;
 
   const selectedDocumentType = () => form
@@ -95,106 +92,6 @@
     }
   };
 
-  const requestCredentials = () => new Promise((resolve, reject) => {
-    const dialog = createElement('dialog', {
-      className: 'api-credentials-dialog',
-      attributes: {
-        'aria-labelledby': 'apiCredentialsTitle',
-        'aria-describedby': 'apiCredentialsWarning'
-      }
-    });
-    const credentialForm = createElement('form', { attributes: { method: 'dialog' } });
-    const title = createElement('h2', {
-      text: 'Acesso temporário à API',
-      attributes: { id: 'apiCredentialsTitle' }
-    });
-    const warning = createElement('p', {
-      className: 'api-credentials-warning',
-      text: 'Modo exclusivo para testes. As credenciais ficarão na memória desta aba até a página ser recarregada.',
-      attributes: { id: 'apiCredentialsWarning' }
-    });
-    const userLabel = createElement('label', { text: 'Usuário Brudam' });
-    const userInput = createElement('input', {
-      attributes: {
-        type: 'text',
-        minlength: '32',
-        maxlength: '32',
-        pattern: '[A-Fa-f0-9]{32}',
-        required: '',
-        autocomplete: 'off',
-        spellcheck: 'false'
-      }
-    });
-    const passwordLabel = createElement('label', { text: 'Senha Brudam' });
-    const passwordInput = createElement('input', {
-      attributes: {
-        type: 'password',
-        minlength: '64',
-        maxlength: '64',
-        pattern: '[A-Fa-f0-9]{64}',
-        required: '',
-        autocomplete: 'off'
-      }
-    });
-    const actions = createElement('div', { className: 'api-credentials-actions' });
-    const cancelButton = createElement('button', {
-      className: 'api-credentials-cancel',
-      text: 'Cancelar',
-      attributes: { type: 'button' }
-    });
-    const confirmButton = createElement('button', {
-      className: 'form-button',
-      text: 'Usar neste teste',
-      attributes: { type: 'submit' }
-    });
-
-    userLabel.appendChild(userInput);
-    passwordLabel.appendChild(passwordInput);
-    actions.append(cancelButton, confirmButton);
-    credentialForm.append(title, warning, userLabel, passwordLabel, actions);
-    dialog.appendChild(credentialForm);
-    document.body.appendChild(dialog);
-
-    const cancel = () => {
-      dialog.close();
-      dialog.remove();
-      reject(new Error('Configuração do acesso cancelada.'));
-    };
-
-    cancelButton.addEventListener('click', cancel);
-    dialog.addEventListener('cancel', (event) => {
-      event.preventDefault();
-      cancel();
-    }, { once: true });
-    credentialForm.addEventListener('submit', (event) => {
-      event.preventDefault();
-      if (!credentialForm.reportValidity()) return;
-
-      const temporaryCredentials = {
-        user: userInput.value.trim(),
-        password: passwordInput.value
-      };
-      passwordInput.value = '';
-      dialog.close();
-      dialog.remove();
-      resolve(temporaryCredentials);
-    }, { once: true });
-
-    dialog.showModal();
-    userInput.focus();
-  });
-
-  const tokenExpiration = (token) => {
-    try {
-      const encodedPayload = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
-      const padding = '='.repeat((4 - encodedPayload.length % 4) % 4);
-      const payload = JSON.parse(window.atob(encodedPayload + padding));
-      return Number(payload.exp) * 1000;
-    } catch {
-      return Date.now() + 240000;
-    }
-  };
-
   const fetchWithTimeout = async (url, options) => {
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
@@ -214,69 +111,26 @@
     return response.json();
   };
 
-  const authenticate = async (forceRefresh = false) => {
-    if (!forceRefresh && accessToken && Date.now() < tokenExpiresAt - 30000) {
-      return accessToken;
-    }
-    if (!credentials) credentials = await requestCredentials();
-
-    const response = await fetchWithTimeout(`${BRUDAM_API_URL}/acesso/auth/login`, {
+  const queryTracking = async (type, taxpayer, number) => {
+    const response = await fetchWithTimeout(TRACKING_API_URL, {
       method: 'POST',
       headers: {
         'Accept': 'application/json',
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        usuario: credentials.user,
-        senha: credentials.password
+        type,
+        taxpayer,
+        number
       }),
-      credentials: 'omit'
+      credentials: 'same-origin'
     });
     const payload = await readJson(response);
-    const newToken = payload?.data?.access_key;
 
-    if (!response.ok || typeof newToken !== 'string' || !newToken) {
-      credentials = null;
-      throw new Error(payload.message || 'Acesso Brudam inválido.');
-    }
-
-    accessToken = newToken;
-    tokenExpiresAt = tokenExpiration(newToken);
-    return accessToken;
-  };
-
-  const trackingUrl = (type, taxpayer, number) => {
-    const routes = {
-      nf: ['/tracking/ocorrencias/cnpj/nf', { documento: taxpayer, numero: number }],
-      cte: ['/tracking/ocorrencias/cnpj/cte', { documento: taxpayer, numero: number }],
-      minuta: ['/tracking/ocorrencias/minuta', { codigo: number }]
-    };
-    const [path, query] = routes[type];
-    return `${BRUDAM_API_URL}${path}?${new URLSearchParams(query)}`;
-  };
-
-  const queryTracking = async (type, taxpayer, number, retry = true) => {
-    const token = await authenticate();
-    const response = await fetchWithTimeout(trackingUrl(type, taxpayer, number), {
-      method: 'GET',
-      headers: {
-        'Accept': 'application/json',
-        'Authorization': `Bearer ${token}`
-      },
-      credentials: 'omit'
-    });
-
-    if (response.status === 401 && retry) {
-      accessToken = '';
-      tokenExpiresAt = 0;
-      await authenticate(true);
-      return queryTracking(type, taxpayer, number, false);
-    }
-
-    const payload = await readJson(response);
     if (!response.ok || payload.status !== 1) {
       throw new Error(payload.message || 'Nenhuma ocorrência encontrada.');
     }
+
     return payload;
   };
 

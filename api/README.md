@@ -1,14 +1,13 @@
-# Integração Brudam
+# Integração Brudam na Vercel
 
-> O site está temporariamente usando o modo de teste direto no navegador em `rastreamento.js`. As credenciais são solicitadas a cada recarregamento e mantidas somente na memória. Esse modo continua inadequado para produção.
+O rastreamento usa a função serverless `api/rastreamento.js`. O navegador chama apenas `/api/rastreamento`; usuário, senha e JWT da Brudam ficam nas variáveis de ambiente da Vercel e não são enviados para o cliente.
 
-O endpoint `rastreamento.php` mantém as credenciais da Brudam fora do navegador e expõe somente uma consulta normalizada ao site.
+Configure estas variáveis no painel da Vercel, em **Project Settings > Environment Variables**:
 
-Configure estas variáveis de ambiente no painel da hospedagem:
+- `BRUDAM_API_USER`: usuário hexadecimal de 32 caracteres da tela 669 da Brudam.
+- `BRUDAM_API_PASSWORD`: senha hexadecimal de 64 caracteres da tela 669 da Brudam.
+- `BRUDAM_API_URL`: opcional. Padrão: `https://twt.brudam.com.br/api/v1`.
 
-- `BRUDAM_API_USER`: usuário hexadecimal de 32 caracteres fornecido pela Brudam.
-- `BRUDAM_API_PASSWORD`: senha hexadecimal de 64 caracteres fornecida pela Brudam.
+Depois de configurar as variáveis, faça um novo deploy. Se o rastreamento retornar `Integração de rastreamento não configurada.`, alguma variável não foi criada no ambiente usado pelo deploy.
 
-Não coloque esses valores em JavaScript, HTML, arquivos versionados ou parâmetros de URL. O servidor precisa ter PHP com a extensão cURL habilitada; APCu é opcional e usado apenas para cache temporário do JWT.
-
-Revogue o token antigo que estava exposto no JavaScript e configure limitação de requisições também na hospedagem ou CDN. O endpoint possui uma proteção adicional por origem e, quando APCu está disponível, limita consultas repetidas por endereço IP.
+Não coloque esses valores em JavaScript, HTML, arquivos versionados ou parâmetros de URL. Se algum token ou senha já ficou público em testes anteriores, gere uma nova credencial na Brudam antes de publicar.
