@@ -81,9 +81,20 @@
   };
 
   const updateRequiredFields = () => {
-    const requiresTaxpayer = ['nf', 'cte'].includes(selectedDocumentType());
+    const documentType = selectedDocumentType();
+    const requiresTaxpayer = documentType === 'nf';
+    const documentPlaceholders = {
+      nf: 'Número da nota fiscal',
+      cte: 'Chave do CT-e',
+      minuta: 'Número da minuta'
+    };
+
     taxpayerField?.classList.toggle('is-hidden', !requiresTaxpayer);
     taxpayerField?.setAttribute('aria-hidden', String(!requiresTaxpayer));
+
+    if (documentInput) {
+      documentInput.placeholder = documentPlaceholders[documentType] ?? 'Número do documento';
+    }
 
     if (taxpayerInput) {
       taxpayerInput.required = requiresTaxpayer;
@@ -178,18 +189,10 @@
     const deliveryDate = firstAvailableValue(metadataSources, [
       'previsao_entrega', 'previsaoEntrega', 'data_previsao_entrega', 'previsao'
     ]);
-    const deliveryTime = firstAvailableValue(metadataSources, [
-      'hora_previsao_entrega', 'previsao_entrega_hora', 'horaPrevisaoEntrega',
-      'hora_previsao', 'previsao_hora', 'hora_entrega_prevista'
-    ]);
-    const deliveryForecast = deliveryDate && deliveryTime && !/\b\d{1,2}:\d{2}\b/.test(deliveryDate)
-      ? `${deliveryDate} ${deliveryTime}`
-      : deliveryDate;
-
     return {
       type,
       document: number,
-      deliveryForecast,
+      deliveryForecast: deliveryDate,
       minuteStatus: firstAvailableValue(metadataSources, [
         'status_minuta', 'statusMinuta', 'situacao_minuta', 'situacaoMinuta'
       ]),
@@ -219,6 +222,24 @@
     }
 
     return normalizedValue;
+  };
+
+  const formatDateOnly = (value) => {
+    if (!value) return 'Data não informada';
+    const normalizedValue = String(value).trim();
+    const isoMatch = normalizedValue.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (isoMatch) {
+      const [, year, month, day] = isoMatch;
+      return `${day}/${month}/${year}`;
+    }
+
+    const brazilianMatch = normalizedValue.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
+    if (brazilianMatch) {
+      const [, day, month, year] = brazilianMatch;
+      return `${day}/${month}/${year}`;
+    }
+
+    return normalizedValue.replace(/\s+(?:às\s+)?\d{1,2}:\d{2}(?::\d{2})?.*$/i, '');
   };
 
   const formatMinuteStatus = (status) => {
@@ -253,13 +274,16 @@
     if (lastUpdate) {
       const relevantDate = isFinalized ? tracking.completedDeliveryAt : tracking.deliveryForecast;
       lastUpdate.textContent = relevantDate
-        ? formatDateTime(relevantDate)
+        ? isFinalized ? formatDateTime(relevantDate) : formatDateOnly(relevantDate)
         : 'Não informada';
     }
     if (documentSummary) {
       const documentLine = `${TYPE_LABELS[tracking.type] ?? 'Documento'}: ${tracking.document}`;
-      const volumesLine = `№ Volumes: ${tracking.volumeCount || 'Não informado'}`;
-      documentSummary.replaceChildren(documentLine, document.createElement('br'), volumesLine);
+      const summaryContent = [documentLine];
+      if (tracking.volumeCount) {
+        summaryContent.push(document.createElement('br'), `№ Volumes: ${tracking.volumeCount}`);
+      }
+      documentSummary.replaceChildren(...summaryContent);
     }
     if (currentStatus) {
       currentStatus.textContent = formatMinuteStatus(tracking.minuteStatus) || 'Não informado';
