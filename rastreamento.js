@@ -82,10 +82,10 @@
 
   const updateRequiredFields = () => {
     const documentType = selectedDocumentType();
-    const requiresTaxpayer = documentType === 'nf';
+    const requiresTaxpayer = ['nf', 'cte'].includes(documentType);
     const documentPlaceholders = {
       nf: 'Número da nota fiscal',
-      cte: 'Chave do CT-e',
+      cte: 'Número do CT-e',
       minuta: 'Número da minuta'
     };
 

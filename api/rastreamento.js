@@ -80,7 +80,7 @@ const validateInput = (payload) => {
     throw error;
   }
 
-  if (type === 'nf' && ![11, 14].includes(taxpayer.length)) {
+  if ((type === 'nf' || type === 'cte') && ![11, 14].includes(taxpayer.length)) {
     const error = new Error('Informe um CPF ou CNPJ válido.');
     error.statusCode = 422;
     throw error;
@@ -158,7 +158,7 @@ const getAccessToken = async (forceRefresh = false) => {
 const trackingPath = ({ type, taxpayer, number }) => {
   const routes = {
     nf: ['/tracking/ocorrencias/cnpj/nf', { documento: taxpayer, numero: number }],
-    cte: ['/tracking/ocorrencias/cte', { documento: number }],
+    cte: ['/tracking/ocorrencias/cnpj/cte', { documento: taxpayer, numero: number }],
     minuta: ['/tracking/ocorrencias/minuta', { codigo: number }]
   };
   const [path, query] = routes[type];
