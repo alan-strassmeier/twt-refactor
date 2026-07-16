@@ -344,6 +344,7 @@ header .contact-social p {
   right: 20px;
   display: flex;
   flex-direction: column;
+  align-items: center;
   cursor: pointer;
   z-index: 1;
 }
@@ -353,6 +354,9 @@ header .contact-social p {
 }
 
 .whatsapp-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   background: #328ae5;
   color: white;
   outline: none;
@@ -360,9 +364,12 @@ header .contact-social p {
   border-radius: 32px;
   height: 32px;
   font-size: 16px;
+  line-height: 1;
   padding: 8px 15px;
   box-sizing: border-box;
   margin-top: 15px;
+  text-align: center;
+  white-space: nowrap;
 }
 
 .banners {
@@ -1249,7 +1256,6 @@ footer .contact-social {
   .whatsapp-button {
     font-size: 12px;
     height: 24px;
-    line-height: 12px;
     width: 80px;
     padding: 1px;
     margin-top: 5px;
@@ -1800,6 +1806,18 @@ footer .contact-social {
   .tracking-modal .tracking-summary {
     grid-template-columns: 1fr;
     gap: 8px;
+  }
+
+  .tracking-modal .tracking-summary .cell {
+    align-items: center;
+    width: 100%;
+    max-width: none;
+    text-align: center;
+  }
+
+  .tracking-modal .tracking-summary h3 {
+    width: 100%;
+    text-align: center;
   }
 
   .tracking-modal .tracking-summary img {
