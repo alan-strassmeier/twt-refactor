@@ -337,11 +337,6 @@ header .logo img {
   padding-left: 10px;
 }
 
-#your-cnpj::placeholder,
-#your-document::placeholder {
-  font-size: 16px;
-}
-
 header .contact-social {
   margin-top: 12px;
 }
@@ -486,7 +481,7 @@ header .contact-social p {
   background: none;
   border: none;
   color: #1b87f7;
-  font-size: 18px;
+  font-size: 1.4em;
   margin-top: 10px;
 }
 
@@ -496,7 +491,6 @@ header .contact-social p {
   flex-direction: column;
   align-items: center;
   background-color: var(--color-background);
-  padding-bottom: 180px;
 }
 
 .services h2 {
