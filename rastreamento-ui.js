@@ -1,3 +1,5 @@
+import { APP_EVENTS, createElement } from './dom-utils.js';
+
 (() => {
   'use strict';
 
@@ -42,16 +44,6 @@
   const selectedDocumentType = () => form
     ?.querySelector('input[name="document-type"]:checked')
     ?.value ?? 'nf';
-
-  const createElement = (tagName, options = {}) => {
-    const element = document.createElement(tagName);
-    if (options.className) element.className = options.className;
-    if (options.text) element.textContent = options.text;
-    Object.entries(options.attributes ?? {}).forEach(([name, value]) => {
-      element.setAttribute(name, value);
-    });
-    return element;
-  };
 
   const setLoading = (loading) => {
     preloader?.classList.toggle('is-visible', loading);
@@ -292,7 +284,9 @@
     const fragment = document.createDocumentFragment();
     tracking.events.forEach((eventData) => fragment.appendChild(createEventRow(eventData)));
     eventsContainer?.replaceChildren(fragment);
-    window.showPrice_rastreamento?.(submitButton);
+    window.dispatchEvent(new CustomEvent(APP_EVENTS.openTrackingResults, {
+      detail: { trigger: submitButton }
+    }));
   };
 
   const searchTracking = async (event) => {

@@ -1,3 +1,5 @@
+import { APP_EVENTS, createElement } from './dom-utils.js';
+
 (() => {
   'use strict';
 
@@ -43,20 +45,6 @@
 
   const FORM_ENDPOINT = 'https://formmail.kinghost.net/formmail.cgi';
   const COOKIE_NAME = 'twtAcceptCookies';
-
-  const createElement = (tagName, options = {}) => {
-    const element = document.createElement(tagName);
-
-    if (options.className) element.className = options.className;
-    if (options.text) element.textContent = options.text;
-    if (options.attributes) {
-      Object.entries(options.attributes).forEach(([name, value]) => {
-        element.setAttribute(name, value);
-      });
-    }
-
-    return element;
-  };
 
   class StateDropdown {
     constructor(root, states) {
@@ -238,7 +226,7 @@
       this.enableSmoothScroll();
       const distance = this.itemStep();
       this.container.scrollBy({
-        left: direction === 1 ? -distance : distance,
+        left: direction === 'previous' ? -distance : distance,
         behavior: 'smooth'
       });
     }
@@ -599,7 +587,9 @@
       menuFocusOrigin = null;
     };
 
-    window.showPrice_rastreamento = (trigger) => setOverlayOpen(trackingOverlay, true, trigger);
+    window.addEventListener(APP_EVENTS.openTrackingResults, (event) => {
+      setOverlayOpen(trackingOverlay, true, event.detail?.trigger);
+    });
 
     document.querySelectorAll('.js-show-price').forEach((element) => {
       element.addEventListener('click', openPrice);
@@ -617,7 +607,7 @@
       element.addEventListener('click', () => setOverlayOpen(trackingOverlay, false));
     });
     document.querySelectorAll('.js-carousel').forEach((element) => {
-      element.addEventListener('click', () => carousel?.move(Number(element.dataset.direction)));
+      element.addEventListener('click', () => carousel?.move(element.dataset.direction));
     });
     document.querySelectorAll('.js-email').forEach((input) => {
       input.addEventListener('blur', () => validateInteractiveField(input));

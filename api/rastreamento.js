@@ -3,10 +3,14 @@ const REQUEST_TIMEOUT_MS = 15000;
 const MAX_REQUEST_SIZE = 2048;
 const RATE_LIMIT_WINDOW_MS = 60000;
 const RATE_LIMIT_MAX_REQUESTS = 30;
+const ALLOWED_DOCUMENT_TYPES = new Set(['nf', 'cte', 'minuta']);
+const TAXPAYER_DOCUMENT_TYPES = new Set(['nf', 'cte']);
 
 let cachedToken = '';
 let cachedTokenExpiresAt = 0;
 const rateLimitStore = new Map();
+
+const createHttpError = (message, statusCode) => Object.assign(new Error(message), { statusCode });
 
 const sendJson = (res, statusCode, payload) => {
   res.statusCode = statusCode;
@@ -27,9 +31,7 @@ const parseJsonBody = async (req) => {
   for await (const chunk of req) {
     size += chunk.length;
     if (size > MAX_REQUEST_SIZE) {
-      const error = new Error('Requisição muito grande.');
-      error.statusCode = 413;
-      throw error;
+      throw createHttpError('Requisição muito grande.', 413);
     }
     chunks.push(chunk);
   }
@@ -66,24 +68,16 @@ const validateInput = (payload) => {
   const type = String(payload.type || '').trim().toLowerCase();
   const number = String(payload.number || '').trim();
   const taxpayer = String(payload.taxpayer || '').replace(/\D/g, '');
-  const allowedTypes = new Set(['nf', 'cte', 'minuta']);
-
-  if (!allowedTypes.has(type)) {
-    const error = new Error('Tipo de documento inválido.');
-    error.statusCode = 422;
-    throw error;
+  if (!ALLOWED_DOCUMENT_TYPES.has(type)) {
+    throw createHttpError('Tipo de documento inválido.', 422);
   }
 
   if (!number || number.length > 60 || !/^[\p{L}\p{N}.\-/]+$/u.test(number)) {
-    const error = new Error('Número do documento inválido.');
-    error.statusCode = 422;
-    throw error;
+    throw createHttpError('Número do documento inválido.', 422);
   }
 
-  if ((type === 'nf' || type === 'cte') && ![11, 14].includes(taxpayer.length)) {
-    const error = new Error('Informe um CPF ou CNPJ válido.');
-    error.statusCode = 422;
-    throw error;
+  if (TAXPAYER_DOCUMENT_TYPES.has(type) && ![11, 14].includes(taxpayer.length)) {
+    throw createHttpError('Informe um CPF ou CNPJ válido.', 422);
   }
 
   return { type, number, taxpayer };
@@ -129,9 +123,7 @@ const getAccessToken = async (forceRefresh = false) => {
   const senha = process.env.BRUDAM_API_PASSWORD || '';
 
   if (!/^[A-Fa-f0-9]{32}$/.test(usuario) || !/^[A-Fa-f0-9]{64}$/.test(senha)) {
-    const error = new Error('Integração de rastreamento não configurada.');
-    error.statusCode = 503;
-    throw error;
+    throw createHttpError('Integração de rastreamento não configurada.', 503);
   }
 
   const { response, payload } = await brudamRequest('/acesso/auth/login', {
@@ -145,9 +137,7 @@ const getAccessToken = async (forceRefresh = false) => {
   const token = payload?.data?.access_key;
 
   if (!response.ok || typeof token !== 'string' || token === '') {
-    const error = new Error(payload?.message || 'Não foi possível autenticar na Brudam.');
-    error.statusCode = 502;
-    throw error;
+    throw createHttpError(payload?.message || 'Não foi possível autenticar na Brudam.', 502);
   }
 
   cachedToken = token;
@@ -165,6 +155,27 @@ const trackingPath = ({ type, taxpayer, number }) => {
   return `${path}?${new URLSearchParams(query)}`;
 };
 
+const requestTracking = (path, token) => brudamRequest(path, {
+  method: 'GET',
+  headers: {
+    Accept: 'application/json',
+    Authorization: `Bearer ${token}`
+  }
+});
+
+const fetchTracking = async (input) => {
+  const path = trackingPath(input);
+  let token = await getAccessToken();
+  let result = await requestTracking(path, token);
+
+  if (result.response.status !== 401) return result;
+
+  cachedToken = '';
+  cachedTokenExpiresAt = 0;
+  token = await getAccessToken(true);
+  return requestTracking(path, token);
+};
+
 module.exports = async (req, res) => {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
@@ -177,27 +188,7 @@ module.exports = async (req, res) => {
   try {
     const payload = await parseJsonBody(req);
     const input = validateInput(payload);
-    let token = await getAccessToken();
-    let { response, payload: brudamPayload } = await brudamRequest(trackingPath(input), {
-      method: 'GET',
-      headers: {
-        Accept: 'application/json',
-        Authorization: `Bearer ${token}`
-      }
-    });
-
-    if (response.status === 401) {
-      cachedToken = '';
-      cachedTokenExpiresAt = 0;
-      token = await getAccessToken(true);
-      ({ response, payload: brudamPayload } = await brudamRequest(trackingPath(input), {
-        method: 'GET',
-        headers: {
-          Accept: 'application/json',
-          Authorization: `Bearer ${token}`
-        }
-      }));
-    }
+    const { response, payload: brudamPayload } = await fetchTracking(input);
 
     const statusCode = response.ok ? 200 : response.status;
     sendJson(res, statusCode, brudamPayload);
@@ -212,7 +203,7 @@ module.exports = async (req, res) => {
       ? 'Rastreamento temporariamente indisponível.'
       : error.message;
 
-    console.error('[tracking]', error);
+    if (statusCode >= 500) console.error('[tracking]', error);
     sendJson(res, statusCode, { status: 0, message: publicMessage });
   }
 };
