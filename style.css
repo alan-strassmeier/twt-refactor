@@ -354,9 +354,8 @@ header .contact-social p {
 }
 
 .whatsapp-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+  display: grid;
+  place-items: center;
   background: #328ae5;
   color: white;
   outline: none;
@@ -1254,10 +1253,14 @@ footer .contact-social {
   }
 
   .whatsapp-button {
+    display: grid;
+    place-items: center;
     font-size: 12px;
-    height: 24px;
+    height: 28px;
+    min-height: 28px;
     width: 80px;
-    padding: 1px;
+    padding: 0 8px;
+    line-height: 1;
     margin-top: 5px;
   }
 
