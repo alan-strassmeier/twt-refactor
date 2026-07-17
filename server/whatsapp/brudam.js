@@ -113,6 +113,17 @@ const extensionFor = (mimeType) => {
   return 'jpg';
 };
 
+const isDuplicateOccurrence = (payload) => {
+  if (!Array.isArray(payload?.data) || payload.data.length === 0) return false;
+  const rejected = payload.data.filter((item) => Number(item?.status) !== 1);
+  return rejected.length > 0 && rejected.every((item) =>
+    Array.isArray(item?.messages) && item.messages.length > 0 &&
+    item.messages.every((message) =>
+      Number(message?.codigo) === 1 &&
+      /ocorrência já foi inserida nesta minuta/i.test(String(message?.message || ''))
+    ));
+};
+
 const createDeliveryOccurrence = async (input) => {
   const event = {
     codigo: 1,
@@ -153,10 +164,18 @@ const createDeliveryOccurrence = async (input) => {
   });
   const documentsAccepted = !Array.isArray(payload?.data) ||
     payload.data.every((item) => Number(item?.status) === 1);
+  if (response.ok && Number(payload?.status) === 1 && isDuplicateOccurrence(payload)) {
+    return { payload, alreadyRegistered: true };
+  }
   if (!response.ok || Number(payload?.status) !== 1 || !documentsAccepted) {
     throw new Error(`Ocorrência recusada pela Brudam: ${JSON.stringify(payload)}`);
   }
-  return payload;
+  return { payload, alreadyRegistered: false };
 };
 
-module.exports = { buildCostsQuery, resolveMinutaAndClient, createDeliveryOccurrence };
+module.exports = {
+  buildCostsQuery,
+  isDuplicateOccurrence,
+  resolveMinutaAndClient,
+  createDeliveryOccurrence
+};

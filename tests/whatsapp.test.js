@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const { createHmac } = require('node:crypto');
 const test = require('node:test');
 const { normalizeCteKey, selectCteBarcode } = require('../server/whatsapp/barcode');
-const { buildCostsQuery } = require('../server/whatsapp/brudam');
+const { buildCostsQuery, isDuplicateOccurrence } = require('../server/whatsapp/brudam');
 const { formatTimestamp, parseWebhook, parseReceiverReply } = require('../server/whatsapp/processor');
 const { verifySignature } = require('../server/whatsapp/signature');
 
@@ -60,6 +60,24 @@ test('converte horário do WhatsApp para São Paulo', () => {
 
 test('consulta custos pelo parâmetro simples do número do CT-e', () => {
   assert.equal(buildCostsQuery('51057251'), 'numero=51057251&limit=2');
+});
+
+test('identifica ocorrência código 1 já inserida na minuta', () => {
+  assert.equal(isDuplicateOccurrence({
+    status: 1,
+    data: [{
+      status: null,
+      messages: [{
+        status: 0,
+        codigo: 1,
+        message: 'Ocorrência já foi inserida nesta minuta!'
+      }]
+    }]
+  }), true);
+  assert.equal(isDuplicateOccurrence({
+    status: 1,
+    data: [{ status: 1, messages: [] }]
+  }), false);
 });
 
 test('aceita somente uma chave CT-e numérica de 44 dígitos', () => {

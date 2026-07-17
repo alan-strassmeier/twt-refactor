@@ -150,6 +150,14 @@ import { APP_EVENTS, createElement } from './dom-utils.js';
     return '';
   };
 
+  const publicTrackingNote = (value) => {
+    const note = String(value ?? '').trim();
+    if (!/^Baixa via WhatsApp por\s+/i.test(note)) return note;
+    const privateDetailsStart = note.indexOf('(');
+    if (privateDetailsStart < 0) return note;
+    return `${note.slice(0, privateDetailsStart).trim().replace(/\.$/, '')}.`;
+  };
+
   const normalizeTracking = (payload, type, number) => {
     const documents = Array.isArray(payload.data) ? payload.data : [];
     const rawEvents = documents
@@ -168,7 +176,7 @@ import { APP_EVENTS, createElement } from './dom-utils.js';
         code: String(eventData.status ?? ''),
         date: String(eventData.data ?? ''),
         description: String(eventData.descricao ?? eventData.message ?? 'Atualização de rastreamento'),
-        note: String(eventData.obs ?? '')
+        note: publicTrackingNote(eventData.obs)
       }));
 
     const completedDeliveryEvent = events.find((eventData) => eventData.description
