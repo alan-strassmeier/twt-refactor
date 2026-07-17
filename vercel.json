@@ -2,7 +2,8 @@
   "functions": {
     "api/whatsapp.mjs": {
       "maxDuration": 60,
-      "memory": 1024
+      "memory": 1024,
+      "includeFiles": "node_modules/zxing-wasm/dist/reader/zxing_reader.wasm"
     }
   }
 }
