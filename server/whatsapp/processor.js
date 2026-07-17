@@ -153,7 +153,7 @@ const processText = async (text) => {
   try {
     const media = await downloadMedia(pending.mediaId);
     const latestLocation = await store.takeLocation(text.senderPhone);
-    await createDeliveryOccurrence({
+    const occurrence = await createDeliveryOccurrence({
       minuta: pending.resolved.minuta,
       clientCnpj: pending.resolved.clientCnpj,
       timestamp: formatTimestamp(pending.timestamp),
@@ -172,8 +172,9 @@ const processText = async (text) => {
       pending.imageMessageId,
       text.messageId
     );
-    await safeReply(text.senderPhone,
-      `Entrega registrada com sucesso. Minuta ${pending.resolved.minuta}.`);
+    await safeReply(text.senderPhone, occurrence.alreadyRegistered
+      ? `A entrega da minuta ${pending.resolved.minuta} já estava baixada na Brudam. O comprovante não foi anexado porque a ocorrência código 1 não pode ser repetida.`
+      : `Entrega registrada com sucesso. Minuta ${pending.resolved.minuta}.`);
   } catch (error) {
     console.error('[whatsapp:receiver]', { messageId: text.messageId, error });
     if (!occurrenceCreated) await store.releaseMessage(text.messageId).catch(() => {});
