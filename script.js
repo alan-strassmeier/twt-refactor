@@ -101,6 +101,10 @@ import { APP_EVENTS, createElement } from './dom-utils.js';
       this.root.replaceChildren(dropdown);
 
       this.trigger.addEventListener('click', () => this.toggle());
+      this.arrow.addEventListener('click', () => {
+        this.toggle();
+        this.trigger.focus();
+      });
       this.trigger.addEventListener('keydown', (event) => this.handleKeydown(event));
       document.addEventListener('click', (event) => {
         if (!this.root.contains(event.target)) this.close();
