@@ -1,5 +1,4 @@
 const { readBarcode } = require('./barcode');
-const { readReceiver } = require('./openai-reader');
 const { resolveMinutaAndClient, createDeliveryOccurrence } = require('./brudam');
 const { downloadMedia, sendText } = require('./meta');
 const store = require('./redis-store');
@@ -17,6 +16,7 @@ const formatTimestamp = (epochSeconds) => {
 const parseWebhook = (payload) => {
   const images = [];
   const locations = [];
+  const texts = [];
   for (const entry of payload?.entry || []) {
     for (const change of entry?.changes || []) {
       const value = change?.value || {};
@@ -43,11 +43,44 @@ const parseWebhook = (payload) => {
             timestamp: Number(message.timestamp)
           });
         }
+        if (message.type === 'text' && message.text?.body && message.id) {
+          texts.push({
+            messageId: String(message.id),
+            senderPhone,
+            body: String(message.text.body).trim()
+          });
+        }
       }
     }
   }
-  return { images, locations };
+  return { images, locations, texts };
 };
+
+const emptyProof = () => ({
+  receiverName: null,
+  receiverDocument: null,
+  receiverRelationship: null
+});
+
+const parseReceiverReply = (body) => {
+  const value = String(body || '').trim();
+  if (/^pular$/i.test(value)) return emptyProof();
+  const parts = value.split('|').map((part) => part.trim());
+  if (parts.length !== 3 || parts.some((part) => !part)) return null;
+  return {
+    receiverName: parts[0],
+    receiverDocument: parts[1],
+    receiverRelationship: parts[2]
+  };
+};
+
+const receiverInstructions = (cte) => [
+  `Código do CT-e ${cte} identificado.`,
+  'Responda em uma única mensagem no formato:',
+  'NOME | DOCUMENTO | GRAU/RELAÇÃO',
+  'Exemplo: João da Silva | 12345678900 | Porteiro',
+  'Se o comprovante não tiver esses dados, responda PULAR.'
+].join('\n');
 
 const safeReply = async (to, text) => {
   try {
@@ -59,13 +92,17 @@ const safeReply = async (to, text) => {
 
 const processImage = async (image) => {
   if (!await store.claimMessage(image.messageId)) return;
-  let occurrenceCreated = false;
   try {
+    const existing = await store.getPendingDelivery(image.senderPhone);
+    if (existing) {
+      await store.markMessageDone(image.messageId);
+      await safeReply(image.senderPhone,
+        'Existe outro comprovante aguardando os dados do recebedor. Responda os dados solicitados ou PULAR antes de enviar outra foto.');
+      return;
+    }
+
     const media = await downloadMedia(image.mediaId);
-    const [barcode, proof] = await Promise.all([
-      readBarcode(media.bytes),
-      readReceiver(media.bytes, media.mimeType, image.caption)
-    ]);
+    const barcode = await readBarcode(media.bytes);
     if (!barcode) {
       await store.markMessageDone(image.messageId);
       await safeReply(image.senderPhone,
@@ -83,34 +120,73 @@ const processImage = async (image) => {
     }
 
     const location = await store.takeLocation(image.senderPhone);
-    await createDeliveryOccurrence({
-      minuta: resolved.minuta,
-      clientCnpj: resolved.clientCnpj,
-      timestamp: formatTimestamp(image.timestamp),
+    await store.savePendingDelivery(image.senderPhone, {
+      imageMessageId: image.messageId,
+      mediaId: image.mediaId,
+      timestamp: image.timestamp,
       driverName: image.driverName,
-      senderPhone: image.senderPhone,
-      messageId: image.messageId,
-      image: media.bytes,
-      mimeType: media.mimeType,
-      proof,
       barcode,
+      resolved,
       location
     });
-    occurrenceCreated = true;
-    await store.markMessageDone(image.messageId);
-    await safeReply(image.senderPhone, `Entrega registrada com sucesso. Minuta ${resolved.minuta}.`);
+    await safeReply(image.senderPhone, receiverInstructions(barcode.text));
   } catch (error) {
     console.error('[whatsapp:proof]', { messageId: image.messageId, error });
-    if (!occurrenceCreated) await store.releaseMessage(image.messageId).catch(() => {});
+    await store.releaseMessage(image.messageId).catch(() => {});
     await safeReply(image.senderPhone,
       'Não foi possível registrar este comprovante. A baixa não foi confirmada; confira a foto e tente novamente.');
   }
 };
 
-const processWebhook = async (payload) => {
-  const { images, locations } = parseWebhook(payload);
-  await Promise.all(locations.map((item) => store.saveLocation(item.senderPhone, item.location)));
-  await Promise.all(images.map(processImage));
+const processText = async (text) => {
+  const pending = await store.getPendingDelivery(text.senderPhone);
+  if (!pending || !await store.claimMessage(text.messageId)) return;
+
+  const proof = parseReceiverReply(text.body);
+  if (!proof) {
+    await store.markMessageDone(text.messageId);
+    await safeReply(text.senderPhone, receiverInstructions(pending.barcode.text));
+    return;
+  }
+
+  let occurrenceCreated = false;
+  try {
+    const media = await downloadMedia(pending.mediaId);
+    const latestLocation = await store.takeLocation(text.senderPhone);
+    await createDeliveryOccurrence({
+      minuta: pending.resolved.minuta,
+      clientCnpj: pending.resolved.clientCnpj,
+      timestamp: formatTimestamp(pending.timestamp),
+      driverName: pending.driverName,
+      senderPhone: text.senderPhone,
+      messageId: pending.imageMessageId,
+      image: media.bytes,
+      mimeType: media.mimeType,
+      proof,
+      barcode: pending.barcode,
+      location: latestLocation || pending.location
+    });
+    occurrenceCreated = true;
+    await store.completePendingDelivery(
+      text.senderPhone,
+      pending.imageMessageId,
+      text.messageId
+    );
+    await safeReply(text.senderPhone,
+      `Entrega registrada com sucesso. Minuta ${pending.resolved.minuta}.`);
+  } catch (error) {
+    console.error('[whatsapp:receiver]', { messageId: text.messageId, error });
+    if (!occurrenceCreated) await store.releaseMessage(text.messageId).catch(() => {});
+    await safeReply(text.senderPhone,
+      'Não foi possível registrar este comprovante. A baixa não foi confirmada; tente enviar os dados novamente.');
+  }
 };
 
-module.exports = { formatTimestamp, parseWebhook, processWebhook };
+const processWebhook = async (payload) => {
+  const { images, locations, texts } = parseWebhook(payload);
+  await Promise.all(locations.map((item) => store.saveLocation(item.senderPhone, item.location)));
+  await Promise.all(images.map(processImage));
+  await Promise.all(texts.map(processText));
+};
+
+module.exports = { formatTimestamp, parseWebhook, parseReceiverReply, processWebhook };

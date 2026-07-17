@@ -3,7 +3,7 @@ const { createHmac } = require('node:crypto');
 const test = require('node:test');
 const sharp = require('sharp');
 const { readBarcode } = require('../server/whatsapp/barcode');
-const { formatTimestamp, parseWebhook } = require('../server/whatsapp/processor');
+const { formatTimestamp, parseWebhook, parseReceiverReply } = require('../server/whatsapp/processor');
 const { verifySignature } = require('../server/whatsapp/signature');
 
 test('valida assinatura oficial do webhook', () => {
@@ -28,13 +28,29 @@ test('extrai nome, imagem e localização do payload', () => {
     contacts: [{ wa_id: '5551999999999', profile: { name: 'Motorista' } }],
     messages: [
       { from: '5551999999999', id: 'loc-1', timestamp: '1', type: 'location', location: { latitude: -29, longitude: -51 } },
-      { from: '5551999999999', id: 'img-1', timestamp: '1784233954', type: 'image', image: { id: 'media-1', caption: 'entrega' } }
+      { from: '5551999999999', id: 'img-1', timestamp: '1784233954', type: 'image', image: { id: 'media-1', caption: 'entrega' } },
+      { from: '5551999999999', id: 'text-1', timestamp: '1784233955', type: 'text', text: { body: 'João | 123 | Porteiro' } }
     ]
   } }] }] };
   const parsed = parseWebhook(payload);
   assert.equal(parsed.images[0].driverName, 'Motorista');
   assert.equal(parsed.images[0].mediaId, 'media-1');
   assert.deepEqual(parsed.locations[0].location, { latitude: -29, longitude: -51 });
+  assert.equal(parsed.texts[0].body, 'João | 123 | Porteiro');
+});
+
+test('interpreta dados digitados do recebedor e permite pular', () => {
+  assert.deepEqual(parseReceiverReply('João da Silva | 12345678900 | Porteiro'), {
+    receiverName: 'João da Silva',
+    receiverDocument: '12345678900',
+    receiverRelationship: 'Porteiro'
+  });
+  assert.deepEqual(parseReceiverReply('pular'), {
+    receiverName: null,
+    receiverDocument: null,
+    receiverRelationship: null
+  });
+  assert.equal(parseReceiverReply('formato inválido'), null);
 });
 
 test('converte horário do WhatsApp para São Paulo', () => {
