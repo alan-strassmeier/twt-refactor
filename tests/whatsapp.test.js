@@ -4,14 +4,23 @@ const test = require('node:test');
 const sharp = require('sharp');
 const { readBarcode } = require('../server/whatsapp/barcode');
 const { formatTimestamp, parseWebhook } = require('../server/whatsapp/processor');
-const webhook = require('../api/whatsapp');
+const { verifySignature } = require('../server/whatsapp/signature');
 
 test('valida assinatura oficial do webhook', () => {
   const body = Buffer.from('{"object":"whatsapp_business_account"}');
   const secret = 'segredo-de-teste';
   const signature = `sha256=${createHmac('sha256', secret).update(body).digest('hex')}`;
-  assert.equal(webhook.verifySignature(body, signature, secret), true);
-  assert.equal(webhook.verifySignature(Buffer.from('alterado'), signature, secret), false);
+  assert.equal(verifySignature(body, signature, secret), true);
+  assert.equal(verifySignature(Buffer.from('alterado'), signature, secret), false);
+});
+
+test('valida os bytes originais sem reconstruir JSON de mídia', () => {
+  const body = Buffer.from('{"image":{"sha256":"abc\\/def="}}');
+  const secret = 'segredo-de-teste';
+  const signature = `sha256=${createHmac('sha256', secret).update(body).digest('hex')}`;
+  const reconstructed = Buffer.from(JSON.stringify(JSON.parse(body.toString('utf8'))));
+  assert.equal(verifySignature(body, signature, secret), true);
+  assert.equal(verifySignature(reconstructed, signature, secret), false);
 });
 
 test('extrai nome, imagem e localização do payload', () => {

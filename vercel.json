@@ -1,6 +1,6 @@
 {
   "functions": {
-    "api/whatsapp.js": {
+    "api/whatsapp.mjs": {
       "maxDuration": 60,
       "memory": 1024
     }
