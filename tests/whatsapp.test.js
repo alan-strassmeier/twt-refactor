@@ -1,8 +1,7 @@
 const assert = require('node:assert/strict');
 const { createHmac } = require('node:crypto');
 const test = require('node:test');
-const sharp = require('sharp');
-const { normalizeCteKey, readBarcode } = require('../server/whatsapp/barcode');
+const { normalizeCteKey, selectCteBarcode } = require('../server/whatsapp/barcode');
 const { buildCostsQuery } = require('../server/whatsapp/brudam');
 const { formatTimestamp, parseWebhook, parseReceiverReply } = require('../server/whatsapp/processor');
 const { verifySignature } = require('../server/whatsapp/signature');
@@ -64,24 +63,20 @@ test('consulta custos pelo parâmetro simples do número do CT-e', () => {
 });
 
 test('aceita somente uma chave CT-e numérica de 44 dígitos', () => {
-  const key = '43260735000185570010000150951000015095123456';
+  const key = '43260797434690000129570000000150951192365101';
   assert.equal(normalizeCteKey(key), key);
   assert.equal(normalizeCteKey('51057251'), null);
   assert.equal(normalizeCteKey(`${key}7`), null);
   assert.equal(normalizeCteKey(` ${key} `), key);
 });
 
-test('descarta falso positivo EAN-8 do comprovante', async () => {
-  const value = '51057251';
-  const left = ['0001101','0011001','0010011','0111101','0100011','0110001','0101111','0111011','0110111','0001011'];
-  const invert = (text) => [...text].map((bit) => bit === '1' ? '0' : '1').join('');
-  const bits = `101${[...value.slice(0, 4)].map((digit) => left[Number(digit)]).join('')}01010` +
-    `${[...value.slice(4)].map((digit) => invert(left[Number(digit)])).join('')}101`;
-  const moduleWidth = 4;
-  const bars = [...bits].map((bit, index) => bit === '1'
-    ? `<rect x="${(10 + index) * moduleWidth}" y="10" width="${moduleWidth}" height="110"/>`
-    : '').join('');
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${(bits.length + 20) * moduleWidth}" height="140"><rect width="100%" height="100%" fill="white"/><g fill="black">${bars}</g></svg>`;
-  const image = await sharp(Buffer.from(svg)).jpeg({ quality: 85 }).toBuffer();
-  assert.equal(await readBarcode(image), null);
+test('seleciona somente uma chave CT-e válida retornada pelo leitor', () => {
+  const key = '43260797434690000129570000000150951192365101';
+  assert.deepEqual(selectCteBarcode([
+    { isValid: true, text: '51057251', format: 'EAN8' },
+    { isValid: true, text: key, format: 'Code128' }
+  ]), { text: key, format: 'Code128' });
+  assert.equal(selectCteBarcode([
+    { isValid: false, text: key, format: 'Code128' }
+  ]), null);
 });
