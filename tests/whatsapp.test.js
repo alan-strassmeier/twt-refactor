@@ -1,0 +1,49 @@
+const assert = require('node:assert/strict');
+const { createHmac } = require('node:crypto');
+const test = require('node:test');
+const sharp = require('sharp');
+const { readBarcode } = require('../server/whatsapp/barcode');
+const { formatTimestamp, parseWebhook } = require('../server/whatsapp/processor');
+const webhook = require('../api/whatsapp');
+
+test('valida assinatura oficial do webhook', () => {
+  const body = Buffer.from('{"object":"whatsapp_business_account"}');
+  const secret = 'segredo-de-teste';
+  const signature = `sha256=${createHmac('sha256', secret).update(body).digest('hex')}`;
+  assert.equal(webhook.verifySignature(body, signature, secret), true);
+  assert.equal(webhook.verifySignature(Buffer.from('alterado'), signature, secret), false);
+});
+
+test('extrai nome, imagem e localização do payload', () => {
+  const payload = { entry: [{ changes: [{ value: {
+    contacts: [{ wa_id: '5551999999999', profile: { name: 'Motorista' } }],
+    messages: [
+      { from: '5551999999999', id: 'loc-1', timestamp: '1', type: 'location', location: { latitude: -29, longitude: -51 } },
+      { from: '5551999999999', id: 'img-1', timestamp: '1784233954', type: 'image', image: { id: 'media-1', caption: 'entrega' } }
+    ]
+  } }] }] };
+  const parsed = parseWebhook(payload);
+  assert.equal(parsed.images[0].driverName, 'Motorista');
+  assert.equal(parsed.images[0].mediaId, 'media-1');
+  assert.deepEqual(parsed.locations[0].location, { latitude: -29, longitude: -51 });
+});
+
+test('converte horário do WhatsApp para São Paulo', () => {
+  process.env.APP_TIMEZONE = 'America/Sao_Paulo';
+  assert.equal(formatTimestamp(Date.parse('2026-07-14T16:31:11Z') / 1000), '2026-07-14 13:31:11');
+});
+
+test('lê EAN-8 do comprovante', async () => {
+  const value = '51057251';
+  const left = ['0001101','0011001','0010011','0111101','0100011','0110001','0101111','0111011','0110111','0001011'];
+  const invert = (text) => [...text].map((bit) => bit === '1' ? '0' : '1').join('');
+  const bits = `101${[...value.slice(0, 4)].map((digit) => left[Number(digit)]).join('')}01010` +
+    `${[...value.slice(4)].map((digit) => invert(left[Number(digit)])).join('')}101`;
+  const moduleWidth = 4;
+  const bars = [...bits].map((bit, index) => bit === '1'
+    ? `<rect x="${(10 + index) * moduleWidth}" y="10" width="${moduleWidth}" height="110"/>`
+    : '').join('');
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${(bits.length + 20) * moduleWidth}" height="140"><rect width="100%" height="100%" fill="white"/><g fill="black">${bars}</g></svg>`;
+  const image = await sharp(Buffer.from(svg)).jpeg({ quality: 85 }).toBuffer();
+  assert.deepEqual(await readBarcode(image), { text: value, format: 'EAN_8' });
+});
