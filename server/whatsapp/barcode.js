@@ -12,10 +12,7 @@ const formats = [
   BarcodeFormat.CODE_128,
   BarcodeFormat.CODE_39,
   BarcodeFormat.CODE_93,
-  BarcodeFormat.ITF,
-  BarcodeFormat.CODABAR,
-  BarcodeFormat.EAN_13,
-  BarcodeFormat.EAN_8
+  BarcodeFormat.ITF
 ];
 
 const hints = new Map([
@@ -27,6 +24,11 @@ const MAX_SIDE = 1800;
 const MAX_CROP_WIDTH = 2800;
 const MAX_READING_MS = 25000;
 
+const normalizeCteKey = (value) => {
+  const text = String(value || '').trim();
+  return /^\d{44}$/.test(text) ? text : null;
+};
+
 const decodePipeline = async (pipeline) => {
   const { data, info } = await pipeline.raw().toBuffer({ resolveWithObject: true });
   const luminances = new Uint8ClampedArray(data.buffer, data.byteOffset, data.byteLength);
@@ -35,7 +37,7 @@ const decodePipeline = async (pipeline) => {
 
   try {
     const result = new MultiFormatReader().decode(bitmap, hints);
-    const text = result.getText().trim();
+    const text = normalizeCteKey(result.getText());
     return text ? { text, format: BarcodeFormat[result.getBarcodeFormat()] } : null;
   } catch {
     return null;
@@ -102,4 +104,4 @@ const readBarcode = async (image) => {
   return null;
 };
 
-module.exports = { readBarcode };
+module.exports = { normalizeCteKey, readBarcode };
