@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const { createHmac } = require('node:crypto');
 const test = require('node:test');
 const sharp = require('sharp');
-const { readBarcode } = require('../server/whatsapp/barcode');
+const { normalizeCteKey, readBarcode } = require('../server/whatsapp/barcode');
 const { buildCostsQuery } = require('../server/whatsapp/brudam');
 const { formatTimestamp, parseWebhook, parseReceiverReply } = require('../server/whatsapp/processor');
 const { verifySignature } = require('../server/whatsapp/signature');
@@ -63,7 +63,15 @@ test('consulta custos pelo parâmetro simples do número do CT-e', () => {
   assert.equal(buildCostsQuery('51057251'), 'numero=51057251&limit=2');
 });
 
-test('lê EAN-8 do comprovante', async () => {
+test('aceita somente uma chave CT-e numérica de 44 dígitos', () => {
+  const key = '43260735000185570010000150951000015095123456';
+  assert.equal(normalizeCteKey(key), key);
+  assert.equal(normalizeCteKey('51057251'), null);
+  assert.equal(normalizeCteKey(`${key}7`), null);
+  assert.equal(normalizeCteKey(` ${key} `), key);
+});
+
+test('descarta falso positivo EAN-8 do comprovante', async () => {
   const value = '51057251';
   const left = ['0001101','0011001','0010011','0111101','0100011','0110001','0101111','0111011','0110111','0001011'];
   const invert = (text) => [...text].map((bit) => bit === '1' ? '0' : '1').join('');
@@ -75,5 +83,5 @@ test('lê EAN-8 do comprovante', async () => {
     : '').join('');
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${(bits.length + 20) * moduleWidth}" height="140"><rect width="100%" height="100%" fill="white"/><g fill="black">${bars}</g></svg>`;
   const image = await sharp(Buffer.from(svg)).jpeg({ quality: 85 }).toBuffer();
-  assert.deepEqual(await readBarcode(image), { text: value, format: 'EAN_8' });
+  assert.equal(await readBarcode(image), null);
 });
