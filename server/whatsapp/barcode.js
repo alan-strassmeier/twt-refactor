@@ -18,15 +18,20 @@ const formats = [
   BarcodeFormat.EAN_8
 ];
 
+const hints = new Map([
+  [DecodeHintType.POSSIBLE_FORMATS, formats],
+  [DecodeHintType.TRY_HARDER, true]
+]);
+
+const MAX_SIDE = 1800;
+const MAX_CROP_WIDTH = 2800;
+const MAX_READING_MS = 25000;
+
 const decodePipeline = async (pipeline) => {
   const { data, info } = await pipeline.raw().toBuffer({ resolveWithObject: true });
   const luminances = new Uint8ClampedArray(data.buffer, data.byteOffset, data.byteLength);
   const source = new RGBLuminanceSource(luminances, info.width, info.height);
   const bitmap = new BinaryBitmap(new HybridBinarizer(source));
-  const hints = new Map([
-    [DecodeHintType.POSSIBLE_FORMATS, formats],
-    [DecodeHintType.TRY_HARDER, true]
-  ]);
 
   try {
     const result = new MultiFormatReader().decode(bitmap, hints);
@@ -38,35 +43,56 @@ const decodePipeline = async (pipeline) => {
 };
 
 const readBarcode = async (image) => {
-  const metadata = await sharp(image).metadata();
+  const deadline = Date.now() + MAX_READING_MS;
+  // Corrige EXIF uma única vez e limita imagens grandes antes das tentativas.
+  const normalized = await sharp(image)
+    .rotate()
+    .resize({ width: MAX_SIDE, height: MAX_SIDE, fit: 'inside', withoutEnlargement: true })
+    .jpeg({ quality: 90 })
+    .toBuffer();
+  const metadata = await sharp(normalized).metadata();
   if (!metadata.width || !metadata.height) return null;
 
-  for (const angle of [0, 90, 180, 270]) {
-    const swap = angle === 90 || angle === 270;
+  // Leitores 1D já testam a linha nos dois sentidos; 0° e 90° cobrem as
+  // orientações relevantes sem repetir 180° e 270°.
+  for (const angle of [90, 0]) {
+    const swap = angle === 90;
     const width = swap ? metadata.height : metadata.width;
     const height = swap ? metadata.width : metadata.height;
-    const regions = [null];
-
-    for (const topRatio of [0, 0.08, 0.2, 0.35, 0.5, 0.65]) {
-      for (const margin of [0.05, 0.15]) {
-        regions.push({
-          left: Math.floor(width * margin),
-          top: Math.floor(height * topRatio),
-          width: Math.floor(width * (1 - margin * 2)),
-          height: Math.min(Math.floor(height * 0.32), height - Math.floor(height * topRatio))
-        });
-      }
-    }
+    const regions = [
+      null,
+      // Comprovantes rodoviários normalmente trazem o código na faixa inferior.
+      { top: 0.62, height: 0.36, margin: 0.05, upscale: true },
+      { top: 0.58, height: 0.42 },
+      { top: 0.32, height: 0.40 },
+      { top: 0.08, height: 0.40 },
+      { top: 0, height: 0.28 }
+    ].map((region) => region && ({
+      left: Math.floor(width * (region.margin ?? 0.03)),
+      top: Math.floor(height * region.top),
+      width: Math.floor(width * (1 - (region.margin ?? 0.03) * 2)),
+      height: Math.min(Math.floor(height * region.height), height - Math.floor(height * region.top)),
+      upscale: Boolean(region.upscale)
+    }));
 
     for (const region of regions) {
-      for (const threshold of [undefined, 120, 155, 190]) {
-        let pipeline = sharp(image).rotate(angle);
+      const thresholds = !region || region.upscale
+        ? [undefined, 120, 155, 190]
+        : [undefined, 165];
+      for (const threshold of thresholds) {
+        if (Date.now() >= deadline) return null;
+        let pipeline = sharp(normalized).rotate(angle);
         if (region) pipeline = pipeline.extract(region);
         pipeline = pipeline
           .grayscale()
           .normalize()
           .sharpen({ sigma: 0.8 })
-          .resize({ width: region ? region.width * 2 : width, withoutEnlargement: !region });
+          .resize({
+            width: region?.upscale
+              ? Math.min(MAX_CROP_WIDTH, region.width * 2)
+              : Math.min(MAX_SIDE, region ? Math.max(region.width, 1200) : width),
+            withoutEnlargement: !region
+          });
         if (threshold !== undefined) pipeline = pipeline.threshold(threshold);
         const decoded = await decodePipeline(pipeline);
         if (decoded) return decoded;
