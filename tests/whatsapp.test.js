@@ -3,6 +3,7 @@ const { createHmac } = require('node:crypto');
 const test = require('node:test');
 const sharp = require('sharp');
 const { readBarcode } = require('../server/whatsapp/barcode');
+const { buildCostsQuery } = require('../server/whatsapp/brudam');
 const { formatTimestamp, parseWebhook, parseReceiverReply } = require('../server/whatsapp/processor');
 const { verifySignature } = require('../server/whatsapp/signature');
 
@@ -56,6 +57,10 @@ test('interpreta dados digitados do recebedor e permite pular', () => {
 test('converte horário do WhatsApp para São Paulo', () => {
   process.env.APP_TIMEZONE = 'America/Sao_Paulo';
   assert.equal(formatTimestamp(Date.parse('2026-07-14T16:31:11Z') / 1000), '2026-07-14 13:31:11');
+});
+
+test('consulta custos pelo parâmetro simples do número do CT-e', () => {
+  assert.equal(buildCostsQuery('51057251'), 'numero=51057251&limit=2');
 });
 
 test('lê EAN-8 do comprovante', async () => {

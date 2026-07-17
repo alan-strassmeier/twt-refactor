@@ -64,12 +64,15 @@ const authorizedRequest = async (path, options = {}) => {
   });
 };
 
+const buildCostsQuery = (cteIdentifier) =>
+  new URLSearchParams({ numero: cteIdentifier, limit: '2' }).toString();
+
 const resolveMinutaAndClient = async (cteIdentifier) => {
   if (!/^\d+$/.test(cteIdentifier)) return null;
   let minutaIdentifier = cteIdentifier;
 
   if (cteIdentifier.length !== 44) {
-    const query = new URLSearchParams({ 'numero[eq]': cteIdentifier, limit: '2' });
+    const query = buildCostsQuery(cteIdentifier);
     const { response, payload } = await authorizedRequest(`/operacional/custos?${query}`, {
       headers: { Accept: 'application/json' }
     });
@@ -156,4 +159,4 @@ const createDeliveryOccurrence = async (input) => {
   return payload;
 };
 
-module.exports = { resolveMinutaAndClient, createDeliveryOccurrence };
+module.exports = { buildCostsQuery, resolveMinutaAndClient, createDeliveryOccurrence };
