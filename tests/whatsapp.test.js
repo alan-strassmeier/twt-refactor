@@ -3,7 +3,15 @@ const { createHmac } = require('node:crypto');
 const test = require('node:test');
 const { normalizeCteKey, selectCteBarcode } = require('../server/whatsapp/barcode');
 const { buildCostsQuery, isDuplicateOccurrence } = require('../server/whatsapp/brudam');
-const { formatTimestamp, parseWebhook, parseReceiverReply } = require('../server/whatsapp/processor');
+const { sendButtons, sendImage } = require('../server/whatsapp/meta');
+const {
+  formatTimestamp,
+  greetingFor,
+  greetingMessage,
+  parseWebhook,
+  parseReceiverReply,
+  receiverInstructions
+} = require('../server/whatsapp/processor');
 const { verifySignature } = require('../server/whatsapp/signature');
 
 test('valida assinatura oficial do webhook', () => {
@@ -23,34 +31,73 @@ test('valida os bytes originais sem reconstruir JSON de mídia', () => {
   assert.equal(verifySignature(reconstructed, signature, secret), false);
 });
 
-test('extrai nome, imagem e localização do payload', () => {
+test('extrai nome, imagem, localização e botão do payload', () => {
   const payload = { entry: [{ changes: [{ value: {
     contacts: [{ wa_id: '5551999999999', profile: { name: 'Motorista' } }],
     messages: [
       { from: '5551999999999', id: 'loc-1', timestamp: '1', type: 'location', location: { latitude: -29, longitude: -51 } },
       { from: '5551999999999', id: 'img-1', timestamp: '1784233954', type: 'image', image: { id: 'media-1', caption: 'entrega' } },
-      { from: '5551999999999', id: 'text-1', timestamp: '1784233955', type: 'text', text: { body: 'João | 123 | Porteiro' } }
+      { from: '5551999999999', id: 'text-1', timestamp: '1784233955', type: 'text', text: { body: 'Olá' } },
+      { from: '5551999999999', id: 'button-1', timestamp: '1784233956', type: 'interactive', interactive: {
+        type: 'button_reply', button_reply: { id: 'start_delivery', title: 'Dar baixa na entrega' }
+      } }
     ]
   } }] }] };
   const parsed = parseWebhook(payload);
   assert.equal(parsed.images[0].driverName, 'Motorista');
   assert.equal(parsed.images[0].mediaId, 'media-1');
   assert.deepEqual(parsed.locations[0].location, { latitude: -29, longitude: -51 });
-  assert.equal(parsed.texts[0].body, 'João | 123 | Porteiro');
+  assert.equal(parsed.texts[0].body, 'Olá');
+  assert.equal(parsed.texts[0].driverName, 'Motorista');
+  assert.equal(parsed.actions[0].actionId, 'start_delivery');
 });
 
-test('interpreta dados digitados do recebedor e permite pular', () => {
-  assert.deepEqual(parseReceiverReply('João da Silva | 12345678900 | Porteiro'), {
+test('interpreta os três dados obrigatórios em linhas separadas', () => {
+  assert.deepEqual(parseReceiverReply([
+    'Nome: João da Silva',
+    'Documento: 12345678900',
+    'Grau/relação: Porteiro'
+  ].join('\n')), {
     receiverName: 'João da Silva',
     receiverDocument: '12345678900',
     receiverRelationship: 'Porteiro'
   });
-  assert.deepEqual(parseReceiverReply('pular'), {
-    receiverName: null,
-    receiverDocument: null,
-    receiverRelationship: null
-  });
-  assert.equal(parseReceiverReply('formato inválido'), null);
+  assert.equal(parseReceiverReply('PULAR'), null);
+  assert.equal(parseReceiverReply('Nome: João\nDocumento: 123'), null);
+  assert.match(receiverInstructions('123'), /Todos os três campos são obrigatórios/);
+});
+
+test('saudação usa o período do dia e o nome do WhatsApp', () => {
+  process.env.APP_TIMEZONE = 'America/Sao_Paulo';
+  assert.equal(greetingFor(Date.parse('2026-07-23T12:00:00Z') / 1000), 'Bom dia');
+  assert.equal(greetingFor(Date.parse('2026-07-23T18:00:00Z') / 1000), 'Boa tarde');
+  assert.equal(greetingFor(Date.parse('2026-07-24T01:00:00Z') / 1000), 'Boa noite');
+  assert.match(greetingMessage('Alan', Date.parse('2026-07-23T18:00:00Z') / 1000), /^Boa tarde, Alan!/);
+});
+
+test('monta mensagens de botões e imagem no formato da Meta', async () => {
+  const originalFetch = global.fetch;
+  const requests = [];
+  process.env.WHATSAPP_ACCESS_TOKEN = 'token-de-teste';
+  process.env.WHATSAPP_PHONE_NUMBER_ID = 'phone-id';
+  process.env.WHATSAPP_SEND_REPLIES = 'true';
+  global.fetch = async (url, options) => {
+    requests.push({ url, body: JSON.parse(options.body) });
+    return new Response('{}', { status: 200 });
+  };
+  try {
+    await sendButtons('5551999999999', 'Como podemos ajudar?', [
+      { id: 'start_delivery', title: 'Dar baixa na entrega' },
+      { id: 'human_contact', title: 'Entre em contato' }
+    ]);
+    await sendImage('5551999999999', 'https://www.twt.com.br/exemplo.jpeg', 'Tire uma foto.');
+  } finally {
+    global.fetch = originalFetch;
+  }
+  assert.equal(requests[0].body.type, 'interactive');
+  assert.equal(requests[0].body.interactive.action.buttons.length, 2);
+  assert.equal(requests[1].body.type, 'image');
+  assert.equal(requests[1].body.image.link, 'https://www.twt.com.br/exemplo.jpeg');
 });
 
 test('converte horário do WhatsApp para São Paulo', () => {

@@ -19,6 +19,7 @@ WHATSAPP_ACCESS_TOKEN
 WHATSAPP_PHONE_NUMBER_ID
 WHATSAPP_GRAPH_VERSION              # exemplo: v25.0
 WHATSAPP_SEND_REPLIES               # true ou false
+WHATSAPP_EXAMPLE_IMAGE_URL           # opcional; padrão no domínio www.twt.com.br
 BRUDAM_API_USER
 BRUDAM_API_PASSWORD
 BRUDAM_API_URL                      # opcional
@@ -44,9 +45,11 @@ Também são aceitos os nomes antigos `KV_REST_API_URL` e `KV_REST_API_TOKEN`. H
 2. A função responde `200` imediatamente e continua com `waitUntil`.
 3. O `messageId` é reservado atomicamente no Redis.
 4. A foto é baixada e o código de barras é lido localmente.
-5. O motorista responde `NOME | DOCUMENTO | GRAU/RELAÇÃO` ou `PULAR`.
-6. A Brudam resolve dinamicamente minuta e CNPJ do tomador pelo CT-e.
-7. A ocorrência `codigo: 1` é enviada com foto, motorista, horário, localização e os dados digitados quando informados.
-8. Os `messageId` da foto e da resposta ficam marcados como concluídos por 90 dias.
+5. O motorista recebe uma saudação pelo horário e escolhe entre iniciar a baixa ou falar com um atendente.
+6. Ao iniciar a baixa, recebe uma imagem de exemplo e o sistema passa a aguardar a foto do comprovante.
+7. Após identificar o CT-e, o motorista deve informar nome, documento e grau/relação em três linhas. Não é permitido pular dados.
+8. A Brudam resolve dinamicamente minuta e CNPJ do tomador pelo CT-e.
+9. A ocorrência `codigo: 1` é enviada com foto, motorista, horário, localização e os dados obrigatórios do recebedor.
+10. Os `messageId` da foto e da resposta ficam marcados como concluídos por 90 dias.
 
 Nunca coloque segredos em arquivos versionados ou no código do navegador.
