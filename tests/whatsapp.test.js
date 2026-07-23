@@ -8,6 +8,7 @@ const {
   formatTimestamp,
   greetingFor,
   greetingMessage,
+  humanContactUrl,
   parseWebhook,
   parseReceiverReply,
   receiverInstructions
@@ -74,6 +75,13 @@ test('saudação usa o período do dia e o nome do WhatsApp', () => {
   assert.equal(greetingFor(Date.parse('2026-07-23T18:00:00Z') / 1000), 'Boa tarde');
   assert.equal(greetingFor(Date.parse('2026-07-24T01:00:00Z') / 1000), 'Boa noite');
   assert.match(greetingMessage('Alan', Date.parse('2026-07-23T18:00:00Z') / 1000), /^Boa tarde, Alan!/);
+});
+
+test('link do atendimento humano abre com mensagem preenchida', () => {
+  const url = new URL(humanContactUrl());
+  assert.equal(url.hostname, 'wa.me');
+  assert.equal(url.pathname, '/555193162358');
+  assert.equal(url.searchParams.get('text'), 'Olá, gostaria de falar sobre uma entrega');
 });
 
 test('monta mensagens de botões e imagem no formato da Meta', async () => {
