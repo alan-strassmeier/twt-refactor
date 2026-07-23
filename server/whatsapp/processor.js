@@ -9,7 +9,9 @@ const AWAITING_PHOTO = 'awaiting_photo';
 const AWAITING_RECEIVER = 'awaiting_receiver';
 const EXAMPLE_IMAGE_URL = process.env.WHATSAPP_EXAMPLE_IMAGE_URL ||
   'https://www.twt.com.br/assets/whatsapp/comprovante-exemplo.jpeg';
-const HUMAN_WHATSAPP_URL = 'https://wa.me/555193162358';
+const HUMAN_CONTACT_MESSAGE = 'Olá, gostaria de falar sobre uma entrega';
+const humanContactUrl = () =>
+  `https://wa.me/555193162358?text=${encodeURIComponent(HUMAN_CONTACT_MESSAGE)}`;
 
 const formatTimestamp = (epochSeconds) => {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -159,7 +161,7 @@ const processAction = async (action) => {
     } else if (action.actionId === HUMAN_CONTACT) {
       await store.clearConversationState(action.senderPhone);
       await sendText(action.senderPhone,
-        `Para falar com nossa equipe de atendimento, toque no link:\n${HUMAN_WHATSAPP_URL}`);
+        `Para falar com nossa equipe de atendimento, toque no link:\n${humanContactUrl()}`);
     } else {
       await sendMenu(action);
     }
@@ -289,7 +291,7 @@ const processText = async (text) => {
     } else if (choice === 'entre em contato' || choice === 'entre em contato conosco') {
       await store.clearConversationState(text.senderPhone);
       await sendText(text.senderPhone,
-        `Para falar com nossa equipe de atendimento, toque no link:\n${HUMAN_WHATSAPP_URL}`);
+        `Para falar com nossa equipe de atendimento, toque no link:\n${humanContactUrl()}`);
     } else if (state === AWAITING_PHOTO) {
       await sendExample(text.senderPhone);
     } else {
@@ -314,6 +316,7 @@ module.exports = {
   formatTimestamp,
   greetingFor,
   greetingMessage,
+  humanContactUrl,
   parseWebhook,
   parseReceiverReply,
   receiverInstructions,
