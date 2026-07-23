@@ -28,7 +28,7 @@ const downloadMedia = async (mediaId) => {
   };
 };
 
-const sendText = async (to, body) => {
+const sendMessage = async (to, message) => {
   if (String(process.env.WHATSAPP_SEND_REPLIES || 'true').toLowerCase() !== 'true') return;
   const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || '';
   if (!phoneNumberId) throw new Error('WHATSAPP_PHONE_NUMBER_ID não configurado.');
@@ -38,10 +38,32 @@ const sendText = async (to, body) => {
       Authorization: `Bearer ${accessToken()}`,
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify({ messaging_product: 'whatsapp', to, type: 'text', text: { body } }),
+    body: JSON.stringify({ messaging_product: 'whatsapp', to, ...message }),
     signal: AbortSignal.timeout(15000)
   });
   if (!response.ok) throw new Error(`Falha ao responder no WhatsApp (${response.status}): ${await response.text()}`);
 };
 
-module.exports = { downloadMedia, sendText };
+const sendText = (to, body) =>
+  sendMessage(to, { type: 'text', text: { body } });
+
+const sendButtons = (to, body, buttons) => sendMessage(to, {
+  type: 'interactive',
+  interactive: {
+    type: 'button',
+    body: { text: body },
+    action: {
+      buttons: buttons.map((button) => ({
+        type: 'reply',
+        reply: { id: button.id, title: button.title }
+      }))
+    }
+  }
+});
+
+const sendImage = (to, link, caption) => sendMessage(to, {
+  type: 'image',
+  image: { link, caption }
+});
+
+module.exports = { downloadMedia, sendText, sendButtons, sendImage };
