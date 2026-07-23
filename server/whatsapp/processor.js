@@ -105,37 +105,21 @@ const parseWebhook = (payload) => {
 };
 
 const parseReceiverReply = (body) => {
-  const fields = {};
-  const aliases = {
-    nome: 'receiverName',
-    documento: 'receiverDocument',
-    'grau/relação': 'receiverRelationship',
-    'grau/relacao': 'receiverRelationship',
-    relação: 'receiverRelationship',
-    relacao: 'receiverRelationship'
-  };
   const lines = String(body || '').replace(/\r/g, '').split('\n').filter((line) => line.trim());
-  for (const line of lines) {
-    const match = line.match(/^([^:]+):\s*(.+)$/);
-    if (!match) return null;
-    const key = aliases[match[1].trim().toLocaleLowerCase('pt-BR')];
-    const value = match[2].trim();
-    if (!key || !value || fields[key]) return null;
-    fields[key] = value;
-  }
-  if (!fields.receiverName || !fields.receiverDocument || !fields.receiverRelationship) return null;
-  if (fields.receiverName.length > 120 || fields.receiverDocument.length > 40 ||
-      fields.receiverRelationship.length > 80) return null;
-  return fields;
+  if (lines.length !== 3) return null;
+  const [receiverName, receiverDocument, receiverRelationship] = lines.map((line) => line.trim());
+  if (!receiverName || !receiverDocument || !receiverRelationship) return null;
+  if (receiverName.length > 120 || receiverDocument.length > 40 || receiverRelationship.length > 80) return null;
+  return { receiverName, receiverDocument, receiverRelationship };
 };
 
 const receiverInstructions = (cte) => [
   `Código do CT-e ${cte} identificado.`,
-  'Envie os dados do recebedor em uma única mensagem, usando uma linha para cada informação:',
+  'Envie os dados do recebedor em uma única mensagem, usando três linhas nesta ordem: nome, documento e grau/relação.',
   '',
-  'Nome: João da Silva',
-  'Documento: 12345678900',
-  'Grau/relação: Porteiro',
+  'João da Silva',
+  '12345678900',
+  'Porteiro',
   '',
   'Todos os três campos são obrigatórios.'
 ].join('\n');

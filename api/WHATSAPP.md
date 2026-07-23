@@ -47,7 +47,7 @@ Também são aceitos os nomes antigos `KV_REST_API_URL` e `KV_REST_API_TOKEN`. H
 4. A foto é baixada e o código de barras é lido localmente.
 5. O motorista recebe uma saudação pelo horário e escolhe entre iniciar a baixa ou falar com um atendente.
 6. Ao iniciar a baixa, recebe uma imagem de exemplo e o sistema passa a aguardar a foto do comprovante.
-7. Após identificar o CT-e, o motorista deve informar nome, documento e grau/relação em três linhas. Não é permitido pular dados.
+7. Após identificar o CT-e, o motorista deve informar somente os valores de nome, documento e grau/relação, nessa ordem e em três linhas. Não é permitido pular dados.
 8. A Brudam resolve dinamicamente minuta e CNPJ do tomador pelo CT-e.
 9. A ocorrência `codigo: 1` é enviada com foto, motorista, horário, localização e os dados obrigatórios do recebedor.
 10. Os `messageId` da foto e da resposta ficam marcados como concluídos por 90 dias.

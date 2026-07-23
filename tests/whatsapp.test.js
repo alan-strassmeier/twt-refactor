@@ -54,16 +54,17 @@ test('extrai nome, imagem, localização e botão do payload', () => {
 
 test('interpreta os três dados obrigatórios em linhas separadas', () => {
   assert.deepEqual(parseReceiverReply([
-    'Nome: João da Silva',
-    'Documento: 12345678900',
-    'Grau/relação: Porteiro'
+    'João da Silva',
+    '12345678900',
+    'Porteiro'
   ].join('\n')), {
     receiverName: 'João da Silva',
     receiverDocument: '12345678900',
     receiverRelationship: 'Porteiro'
   });
   assert.equal(parseReceiverReply('PULAR'), null);
-  assert.equal(parseReceiverReply('Nome: João\nDocumento: 123'), null);
+  assert.equal(parseReceiverReply('João\n123'), null);
+  assert.equal(parseReceiverReply('João\n123\nPorteiro\nInformação extra'), null);
   assert.match(receiverInstructions('123'), /Todos os três campos são obrigatórios/);
 });
 
