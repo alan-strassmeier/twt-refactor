@@ -3,7 +3,7 @@ const { createHmac } = require('node:crypto');
 const test = require('node:test');
 const { normalizeCteKey, selectCteBarcode } = require('../server/whatsapp/barcode');
 const { buildCostsQuery, isDuplicateOccurrence } = require('../server/whatsapp/brudam');
-const { sendButtons, sendImage } = require('../server/whatsapp/meta');
+const { sendButtons, sendImage, sendFlow } = require('../server/whatsapp/meta');
 const {
   formatTimestamp,
   greetingFor,
@@ -11,6 +11,8 @@ const {
   humanContactUrl,
   parseWebhook,
   parseReceiverReply,
+  parseReceiverFlowReply,
+  flowTokenFor,
   receiverInstructions
 } = require('../server/whatsapp/processor');
 const { verifySignature } = require('../server/whatsapp/signature');
@@ -41,6 +43,11 @@ test('extrai nome, imagem, localização e botão do payload', () => {
       { from: '5551999999999', id: 'text-1', timestamp: '1784233955', type: 'text', text: { body: 'Olá' } },
       { from: '5551999999999', id: 'button-1', timestamp: '1784233956', type: 'interactive', interactive: {
         type: 'button_reply', button_reply: { id: 'start_delivery', title: 'Dar baixa na entrega' }
+      } },
+      { from: '5551999999999', id: 'flow-1', timestamp: '1784233957', type: 'interactive', interactive: {
+        type: 'nfm_reply', nfm_reply: {
+          response_json: '{"nome_recebedor":"Ana","documento_recebedor":"123","grau_relacao":"Porteira","flow_token":"delivery:img-1"}'
+        }
       } }
     ]
   } }] }] };
@@ -51,6 +58,7 @@ test('extrai nome, imagem, localização e botão do payload', () => {
   assert.equal(parsed.texts[0].body, 'Olá');
   assert.equal(parsed.texts[0].driverName, 'Motorista');
   assert.equal(parsed.actions[0].actionId, 'start_delivery');
+  assert.match(parsed.flowReplies[0].responseJson, /nome_recebedor/);
 });
 
 test('interpreta os três dados obrigatórios em linhas separadas', () => {
@@ -67,6 +75,24 @@ test('interpreta os três dados obrigatórios em linhas separadas', () => {
   assert.equal(parseReceiverReply('João\n123'), null);
   assert.equal(parseReceiverReply('João\n123\nPorteiro\nInformação extra'), null);
   assert.match(receiverInstructions('123'), /Todos os três campos são obrigatórios/);
+});
+
+test('interpreta os campos obrigatórios devolvidos pelo Flow', () => {
+  assert.deepEqual(parseReceiverFlowReply(JSON.stringify({
+    nome_recebedor: 'Ana Silva',
+    documento_recebedor: '12345678900',
+    grau_relacao: 'Porteira',
+    flow_token: 'delivery:img-1'
+  })), {
+    proof: {
+      receiverName: 'Ana Silva',
+      receiverDocument: '12345678900',
+      receiverRelationship: 'Porteira'
+    },
+    flowToken: 'delivery:img-1'
+  });
+  assert.equal(parseReceiverFlowReply('{"nome_recebedor":"Ana"}'), null);
+  assert.equal(flowTokenFor('wamid.123'), 'delivery:wamid.123');
 });
 
 test('saudação usa o período do dia e o nome do WhatsApp', () => {
@@ -100,6 +126,13 @@ test('monta mensagens de botões e imagem no formato da Meta', async () => {
       { id: 'human_contact', title: 'Entre em contato' }
     ]);
     await sendImage('5551999999999', 'https://www.twt.com.br/exemplo.jpeg', 'Tire uma foto.');
+    await sendFlow('5551999999999', {
+      flowId: '28036008142734184',
+      flowToken: 'delivery:wamid.123',
+      screen: 'DADOS_RECEBEDOR',
+      body: 'Preencha os dados.',
+      cta: 'Informar recebedor'
+    });
   } finally {
     global.fetch = originalFetch;
   }
@@ -107,6 +140,10 @@ test('monta mensagens de botões e imagem no formato da Meta', async () => {
   assert.equal(requests[0].body.interactive.action.buttons.length, 2);
   assert.equal(requests[1].body.type, 'image');
   assert.equal(requests[1].body.image.link, 'https://www.twt.com.br/exemplo.jpeg');
+  assert.equal(requests[2].body.interactive.type, 'flow');
+  assert.equal(requests[2].body.interactive.action.parameters.flow_id, '28036008142734184');
+  assert.equal(requests[2].body.interactive.action.parameters.flow_action_payload.screen, 'DADOS_RECEBEDOR');
+  assert.equal(requests[2].body.interactive.action.parameters.flow_token, 'delivery:wamid.123');
 });
 
 test('converte horário do WhatsApp para São Paulo', () => {

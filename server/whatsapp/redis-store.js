@@ -73,6 +73,9 @@ const getPendingDelivery = async (phone) => {
   }
 };
 
+const clearPendingDelivery = (phone) =>
+  command('DEL', pendingKey(phone), stateKey(phone));
+
 const completePendingDelivery = (phone, imageMessageId, textMessageId) => command(
   'EVAL',
   "redis.call('DEL', KEYS[1]); redis.call('DEL', KEYS[2]); redis.call('SET', KEYS[3], 'done', 'EX', 7776000); redis.call('SET', KEYS[4], 'done', 'EX', 7776000); return 1",
@@ -94,5 +97,6 @@ module.exports = {
   saveConversationState,
   getConversationState,
   clearConversationState,
+  clearPendingDelivery,
   completePendingDelivery
 };
