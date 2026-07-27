@@ -124,6 +124,33 @@ const isDuplicateOccurrence = (payload) => {
     ));
 };
 
+const hasDeliveryOccurrence = (payload) => {
+  if (Number(payload?.status) !== 1 || !Array.isArray(payload?.data)) return false;
+  return payload.data
+    .flatMap((document) => Array.isArray(document?.dados) ? document.dados : [])
+    .some((event) => {
+      const code = Number(event?.codigo ?? event?.status);
+      const description = String(event?.descricao ?? event?.message ?? '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toUpperCase();
+      return code === 1 || description.includes('ENTREGA REALIZADA');
+    });
+};
+
+const isDeliveryAlreadyRegistered = async (minuta) => {
+  try {
+    const path = `/tracking/ocorrencias/minuta?${new URLSearchParams({ codigo: String(minuta) })}`;
+    const { response, payload } = await authorizedRequest(path, {
+      headers: { Accept: 'application/json' }
+    });
+    return response.ok && hasDeliveryOccurrence(payload);
+  } catch (error) {
+    console.warn('[whatsapp:delivery-check]', { minuta, error: error.message });
+    return false;
+  }
+};
+
 const createDeliveryOccurrence = async (input) => {
   const event = {
     codigo: 1,
@@ -176,6 +203,8 @@ const createDeliveryOccurrence = async (input) => {
 module.exports = {
   buildCostsQuery,
   isDuplicateOccurrence,
+  hasDeliveryOccurrence,
+  isDeliveryAlreadyRegistered,
   resolveMinutaAndClient,
   createDeliveryOccurrence
 };

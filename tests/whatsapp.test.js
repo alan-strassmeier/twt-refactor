@@ -2,7 +2,11 @@ const assert = require('node:assert/strict');
 const { createHmac } = require('node:crypto');
 const test = require('node:test');
 const { normalizeCteKey, selectCteBarcode } = require('../server/whatsapp/barcode');
-const { buildCostsQuery, isDuplicateOccurrence } = require('../server/whatsapp/brudam');
+const {
+  buildCostsQuery,
+  isDuplicateOccurrence,
+  hasDeliveryOccurrence
+} = require('../server/whatsapp/brudam');
 const { sendButtons, sendImage, sendFlow } = require('../server/whatsapp/meta');
 const {
   formatTimestamp,
@@ -13,6 +17,7 @@ const {
   parseReceiverReply,
   parseReceiverFlowReply,
   flowTokenFor,
+  exampleImageUrl,
   receiverInstructions
 } = require('../server/whatsapp/processor');
 const { verifySignature } = require('../server/whatsapp/signature');
@@ -170,6 +175,48 @@ test('identifica ocorrência código 1 já inserida na minuta', () => {
   assert.equal(isDuplicateOccurrence({
     status: 1,
     data: [{ status: 1, messages: [] }]
+  }), false);
+});
+
+test('troca automaticamente a URL antiga da imagem pela versão sem cache', () => {
+  assert.equal(
+    exampleImageUrl('https://www.twt.com.br/assets/whatsapp/comprovante-exemplo.jpeg'),
+    'https://www.twt.com.br/assets/whatsapp/comprovante-exemplo-5b4e9145.jpeg'
+  );
+  assert.equal(
+    exampleImageUrl('https://cdn.example.com/comprovante.jpeg'),
+    'https://cdn.example.com/comprovante.jpeg'
+  );
+});
+
+test('identifica baixa existente no retorno de rastreamento', () => {
+  assert.equal(hasDeliveryOccurrence({
+    status: 1,
+    data: [{
+      status: 1,
+      dados: [{
+        status: 1,
+        descricao: 'ENTREGA REALIZADA NORMALMENTE'
+      }]
+    }]
+  }), true);
+  assert.equal(hasDeliveryOccurrence({
+    status: 1,
+    data: [{
+      status: 1,
+      dados: [{
+        status: 2,
+        descricao: 'EM TRÂNSITO'
+      }]
+    }]
+  }), false);
+  assert.equal(hasDeliveryOccurrence({
+    status: 1,
+    data: [{
+      status: 0,
+      message: 'Erro na consulta do documento.',
+      dados: null
+    }]
   }), false);
 });
 

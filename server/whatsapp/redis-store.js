@@ -49,6 +49,7 @@ const takeLocation = async (phone) => {
 const pendingKey = (phone) => `whatsapp:pending:${phone}`;
 const stateKey = (phone) => `whatsapp:state:${phone}`;
 const messageKey = (messageId) => `whatsapp:message:${messageId}`;
+const deliveredMinutaKey = (minuta) => `whatsapp:delivered:minuta:${minuta}`;
 
 const saveConversationState = (phone, state) =>
   command('SET', stateKey(phone), state, 'EX', 86400);
@@ -76,6 +77,12 @@ const getPendingDelivery = async (phone) => {
 const clearPendingDelivery = (phone) =>
   command('DEL', pendingKey(phone), stateKey(phone));
 
+const hasDeliveredMinuta = async (minuta) =>
+  Boolean(await command('EXISTS', deliveredMinutaKey(minuta)));
+
+const markDeliveredMinuta = (minuta) =>
+  command('SET', deliveredMinutaKey(minuta), 'done', 'EX', 31536000);
+
 const completePendingDelivery = (phone, imageMessageId, textMessageId) => command(
   'EVAL',
   "redis.call('DEL', KEYS[1]); redis.call('DEL', KEYS[2]); redis.call('SET', KEYS[3], 'done', 'EX', 7776000); redis.call('SET', KEYS[4], 'done', 'EX', 7776000); return 1",
@@ -98,5 +105,7 @@ module.exports = {
   getConversationState,
   clearConversationState,
   clearPendingDelivery,
+  hasDeliveredMinuta,
+  markDeliveredMinuta,
   completePendingDelivery
 };
