@@ -1,5 +1,9 @@
 const { readBarcode } = require('./barcode');
-const { resolveMinutaAndClient, createDeliveryOccurrence } = require('./brudam');
+const {
+  resolveMinutaAndClient,
+  createDeliveryOccurrence,
+  isDeliveryAlreadyRegistered
+} = require('./brudam');
 const { downloadMedia, sendText, sendButtons, sendImage, sendFlow } = require('./meta');
 const store = require('./redis-store');
 
@@ -8,8 +12,17 @@ const HUMAN_CONTACT = 'human_contact';
 const AWAITING_PHOTO = 'awaiting_photo';
 const AWAITING_RECEIVER = 'awaiting_receiver';
 const RECEIVER_FLOW_SCREEN = 'DADOS_RECEBEDOR';
-const EXAMPLE_IMAGE_URL = process.env.WHATSAPP_EXAMPLE_IMAGE_URL ||
+const LEGACY_EXAMPLE_IMAGE_URL =
   'https://www.twt.com.br/assets/whatsapp/comprovante-exemplo.jpeg';
+const VERSIONED_EXAMPLE_IMAGE_URL =
+  'https://www.twt.com.br/assets/whatsapp/comprovante-exemplo-5b4e9145.jpeg';
+const exampleImageUrl = (configuredUrl) => {
+  const value = String(configuredUrl || '').trim();
+  return value && value !== LEGACY_EXAMPLE_IMAGE_URL
+    ? value
+    : VERSIONED_EXAMPLE_IMAGE_URL;
+};
+const EXAMPLE_IMAGE_URL = exampleImageUrl(process.env.WHATSAPP_EXAMPLE_IMAGE_URL);
 const HUMAN_CONTACT_MESSAGE = 'Olá, gostaria de falar sobre uma entrega';
 const humanContactUrl = () =>
   `https://wa.me/555193162358?text=${encodeURIComponent(HUMAN_CONTACT_MESSAGE)}`;
@@ -257,6 +270,17 @@ const processImage = async (image) => {
       return;
     }
 
+    const alreadyRegistered = await store.hasDeliveredMinuta(resolved.minuta) ||
+      await isDeliveryAlreadyRegistered(resolved.minuta);
+    if (alreadyRegistered) {
+      await store.markDeliveredMinuta(resolved.minuta);
+      await store.markMessageDone(image.messageId);
+      await store.clearConversationState(image.senderPhone);
+      await safeReply(image.senderPhone,
+        `A entrega da minuta ${resolved.minuta} já foi baixada anteriormente. Não é necessário informar os dados do recebedor.`);
+      return;
+    }
+
     const location = await store.takeLocation(image.senderPhone);
     await store.savePendingDelivery(image.senderPhone, {
       imageMessageId: image.messageId,
@@ -306,6 +330,7 @@ const processReceiverText = async (text, pending) => {
       location: latestLocation || pending.location
     });
     occurrenceCreated = true;
+    await store.markDeliveredMinuta(pending.resolved.minuta);
     await store.completePendingDelivery(
       text.senderPhone,
       pending.imageMessageId,
@@ -420,6 +445,7 @@ module.exports = {
   parseReceiverReply,
   parseReceiverFlowReply,
   receiverInstructions,
+  exampleImageUrl,
   flowTokenFor,
   processWebhook
 };
