@@ -1,12 +1,13 @@
 const { readBarcode } = require('./barcode');
 const { resolveMinutaAndClient, createDeliveryOccurrence } = require('./brudam');
-const { downloadMedia, sendText, sendButtons, sendImage } = require('./meta');
+const { downloadMedia, sendText, sendButtons, sendImage, sendFlow } = require('./meta');
 const store = require('./redis-store');
 
 const START_DELIVERY = 'start_delivery';
 const HUMAN_CONTACT = 'human_contact';
 const AWAITING_PHOTO = 'awaiting_photo';
 const AWAITING_RECEIVER = 'awaiting_receiver';
+const RECEIVER_FLOW_SCREEN = 'DADOS_RECEBEDOR';
 const EXAMPLE_IMAGE_URL = process.env.WHATSAPP_EXAMPLE_IMAGE_URL ||
   'https://www.twt.com.br/assets/whatsapp/comprovante-exemplo.jpeg';
 const HUMAN_CONTACT_MESSAGE = 'Olá, gostaria de falar sobre uma entrega';
@@ -61,6 +62,7 @@ const parseWebhook = (payload) => {
   const locations = [];
   const texts = [];
   const actions = [];
+  const flowReplies = [];
   for (const entry of payload?.entry || []) {
     for (const change of entry?.changes || []) {
       const value = change?.value || {};
@@ -100,10 +102,17 @@ const parseWebhook = (payload) => {
             title: String(message.button.text || '')
           });
         }
+        const flowReply = message.interactive?.nfm_reply;
+        if (message.type === 'interactive' && flowReply?.response_json) {
+          flowReplies.push({
+            ...common,
+            responseJson: flowReply.response_json
+          });
+        }
       }
     }
   }
-  return { images, locations, texts, actions };
+  return { images, locations, texts, actions, flowReplies };
 };
 
 const parseReceiverReply = (body) => {
@@ -114,6 +123,35 @@ const parseReceiverReply = (body) => {
   if (receiverName.length > 120 || receiverDocument.length > 40 || receiverRelationship.length > 80) return null;
   return { receiverName, receiverDocument, receiverRelationship };
 };
+
+const parseReceiverFlowReply = (responseJson) => {
+  let payload = responseJson;
+  if (typeof payload === 'string') {
+    try {
+      payload = JSON.parse(payload);
+    } catch {
+      return null;
+    }
+  }
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
+  const receiverName = String(payload.nome_recebedor || '').trim();
+  const receiverDocument = String(payload.documento_recebedor || '').trim();
+  const receiverRelationship = String(payload.grau_relacao || '').trim();
+  if (!receiverName || !receiverDocument || !receiverRelationship) return null;
+  if (receiverName.length > 120 || receiverDocument.length > 40 || receiverRelationship.length > 80) return null;
+  return {
+    proof: { receiverName, receiverDocument, receiverRelationship },
+    flowToken: String(payload.flow_token || '').trim()
+  };
+};
+
+const receiverFlowId = () => {
+  const flowId = String(process.env.WHATSAPP_RECEIVER_FLOW_ID || '').trim();
+  if (!flowId) throw new Error('WHATSAPP_RECEIVER_FLOW_ID não configurado.');
+  return flowId;
+};
+
+const flowTokenFor = (imageMessageId) => `delivery:${imageMessageId}`;
 
 const receiverInstructions = (cte) => [
   `Código do CT-e ${cte} identificado.`,
@@ -143,6 +181,17 @@ const sendExample = (to) => sendImage(
   EXAMPLE_IMAGE_URL,
   'Por favor, tire uma foto igual ao exemplo acima.'
 );
+
+const sendReceiverFlow = (to, cte, imageMessageId) => sendFlow(to, {
+  flowId: receiverFlowId(),
+  flowToken: flowTokenFor(imageMessageId),
+  screen: RECEIVER_FLOW_SCREEN,
+  cta: 'Informar recebedor',
+  body: [
+    `Código do CT-e ${cte} identificado.`,
+    'Preencha os três dados obrigatórios do recebedor no formulário.'
+  ].join('\n')
+});
 
 const safeReply = async (to, text) => {
   try {
@@ -219,12 +268,14 @@ const processImage = async (image) => {
       location
     });
     await store.saveConversationState(image.senderPhone, AWAITING_RECEIVER);
-    await safeReply(image.senderPhone, receiverInstructions(barcode.text));
+    await sendReceiverFlow(image.senderPhone, barcode.text, image.messageId);
   } catch (error) {
     console.error('[whatsapp:proof]', { messageId: image.messageId, error });
+    await store.clearPendingDelivery(image.senderPhone).catch(() => {});
+    await store.saveConversationState(image.senderPhone, AWAITING_PHOTO).catch(() => {});
     await store.releaseMessage(image.messageId).catch(() => {});
     await safeReply(image.senderPhone,
-      'Não foi possível analisar este comprovante. A baixa não foi confirmada; envie a foto novamente.');
+      'Não foi possível analisar este comprovante ou abrir o formulário. A baixa não foi confirmada; envie a foto novamente.');
   }
 };
 
@@ -271,13 +322,60 @@ const processReceiverText = async (text, pending) => {
   }
 };
 
+const processReceiverFlowReply = async (reply) => {
+  const pending = await store.getPendingDelivery(reply.senderPhone);
+  if (!pending) {
+    if (!await store.claimMessage(reply.messageId)) return;
+    await store.markMessageDone(reply.messageId);
+    await safeReply(reply.senderPhone,
+      'Este formulário não está mais vinculado a um comprovante. Inicie uma nova baixa e envie a foto novamente.');
+    return;
+  }
+
+  if (!await store.claimMessage(reply.messageId)) return;
+  const parsed = parseReceiverFlowReply(reply.responseJson);
+  if (!parsed) {
+    await store.markMessageDone(reply.messageId);
+    await safeReply(reply.senderPhone,
+      'Não recebi todos os dados obrigatórios. Abra o formulário novamente e preencha os três campos.');
+    await sendReceiverFlow(reply.senderPhone, pending.barcode.text, pending.imageMessageId).catch(() => {});
+    return;
+  }
+
+  if (parsed.flowToken && parsed.flowToken !== flowTokenFor(pending.imageMessageId)) {
+    await store.markMessageDone(reply.messageId);
+    await safeReply(reply.senderPhone,
+      'Este formulário pertence a outro comprovante. Use o formulário mais recente enviado nesta conversa.');
+    return;
+  }
+
+  await processReceiverText({
+    ...reply,
+    body: [
+      parsed.proof.receiverName,
+      parsed.proof.receiverDocument,
+      parsed.proof.receiverRelationship
+    ].join('\n')
+  }, pending);
+};
+
 const normalizedChoice = (body) => String(body || '').trim().toLocaleLowerCase('pt-BR');
 
 const processText = async (text) => {
   const pending = await store.getPendingDelivery(text.senderPhone);
   if (pending) {
     if (!await store.claimMessage(text.messageId)) return;
-    await processReceiverText(text, pending);
+    try {
+      await sendReceiverFlow(text.senderPhone, pending.barcode.text, pending.imageMessageId);
+      await store.markMessageDone(text.messageId);
+      await safeReply(text.senderPhone,
+        'Para continuar, preencha o formulário enviado acima. Os três campos são obrigatórios.');
+    } catch (error) {
+      console.error('[whatsapp:flow]', { messageId: text.messageId, error });
+      await store.releaseMessage(text.messageId).catch(() => {});
+      await safeReply(text.senderPhone,
+        'Não consegui abrir o formulário agora. Tente enviar uma mensagem novamente.');
+    }
     return;
   }
 
@@ -305,10 +403,11 @@ const processText = async (text) => {
 };
 
 const processWebhook = async (payload) => {
-  const { images, locations, texts, actions } = parseWebhook(payload);
+  const { images, locations, texts, actions, flowReplies } = parseWebhook(payload);
   await Promise.all(locations.map((item) => store.saveLocation(item.senderPhone, item.location)));
   await Promise.all(actions.map(processAction));
   await Promise.all(images.map(processImage));
+  await Promise.all(flowReplies.map(processReceiverFlowReply));
   await Promise.all(texts.map(processText));
 };
 
@@ -319,6 +418,8 @@ module.exports = {
   humanContactUrl,
   parseWebhook,
   parseReceiverReply,
+  parseReceiverFlowReply,
   receiverInstructions,
+  flowTokenFor,
   processWebhook
 };

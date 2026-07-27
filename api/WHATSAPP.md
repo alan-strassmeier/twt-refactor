@@ -20,6 +20,7 @@ WHATSAPP_PHONE_NUMBER_ID
 WHATSAPP_GRAPH_VERSION              # exemplo: v25.0
 WHATSAPP_SEND_REPLIES               # true ou false
 WHATSAPP_EXAMPLE_IMAGE_URL           # opcional; padrão no domínio www.twt.com.br
+WHATSAPP_RECEIVER_FLOW_ID            # ID do Flow publicado para os dados do recebedor
 BRUDAM_API_USER
 BRUDAM_API_PASSWORD
 BRUDAM_API_URL                      # opcional
@@ -47,7 +48,7 @@ Também são aceitos os nomes antigos `KV_REST_API_URL` e `KV_REST_API_TOKEN`. H
 4. A foto é baixada e o código de barras é lido localmente.
 5. O motorista recebe uma saudação pelo horário e escolhe entre iniciar a baixa ou falar com um atendente.
 6. Ao iniciar a baixa, recebe uma imagem de exemplo e o sistema passa a aguardar a foto do comprovante.
-7. Após identificar o CT-e, o motorista deve informar somente os valores de nome, documento e grau/relação, nessa ordem e em três linhas. Não é permitido pular dados.
+7. Após identificar o CT-e, o motorista recebe um WhatsApp Flow e preenche nome, documento e grau/relação. Os três campos são obrigatórios.
 8. A Brudam resolve dinamicamente minuta e CNPJ do tomador pelo CT-e.
 9. A ocorrência `codigo: 1` é enviada com foto, motorista, horário, localização e os dados obrigatórios do recebedor.
 10. Os `messageId` da foto e da resposta ficam marcados como concluídos por 90 dias.

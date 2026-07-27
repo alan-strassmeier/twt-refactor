@@ -66,4 +66,23 @@ const sendImage = (to, link, caption) => sendMessage(to, {
   image: { link, caption }
 });
 
-module.exports = { downloadMedia, sendText, sendButtons, sendImage };
+const sendFlow = (to, { flowId, flowToken, screen, body, cta }) => sendMessage(to, {
+  type: 'interactive',
+  interactive: {
+    type: 'flow',
+    body: { text: body },
+    action: {
+      name: 'flow',
+      parameters: {
+        flow_message_version: '3',
+        flow_action: 'navigate',
+        flow_token: flowToken,
+        flow_id: flowId,
+        flow_cta: cta,
+        flow_action_payload: { screen }
+      }
+    }
+  }
+});
+
+module.exports = { downloadMedia, sendText, sendButtons, sendImage, sendFlow };
