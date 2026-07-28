@@ -166,13 +166,13 @@ import { APP_EVENTS, createElement } from './dom-utils.js';
 
   const eventCode = (eventData) => Number(eventData?.codigo ?? eventData?.status);
 
-  const eventOperator = (eventData) => firstAvailableValue([eventData], [
-    'operador', 'nome_operador', 'operador_nome', 'nomeOperador'
+  const eventUser = (eventData) => firstAvailableValue([eventData], [
+    'usuario', 'nome_usuario', 'usuario_nome', 'nomeUsuario'
   ]);
 
   const isCiaIntegrationDelivery = (eventData) =>
     eventCode(eventData) === 1 &&
-    normalizedText(eventOperator(eventData)) === 'INTEGRACAO CIA';
+    normalizedText(eventUser(eventData)) === 'INTEGRACAO CIA';
 
   const isFinalizedMinuteStatus = (status) =>
     ['6', 'FINALIZADA'].includes(normalizedText(status));
@@ -198,7 +198,7 @@ import { APP_EVENTS, createElement } from './dom-utils.js';
       return {
         code: String(eventData.codigo ?? eventData.status ?? ''),
         date: String(eventData.data ?? ''),
-        description: ciaIntegrationDelivery ? 'AWB Retirado na CIA' : originalDescription,
+        description: ciaIntegrationDelivery ? 'AWB Retirado na Cia' : originalDescription,
         note: publicTrackingNote(eventData.obs),
         ciaIntegrationDelivery,
         completesDelivery: !ciaIntegrationDelivery &&

@@ -221,10 +221,10 @@ test('identifica baixa existente no retorno de rastreamento', () => {
   }), false);
 });
 
-test('ignora código 1 emitido pelo operador INTEGRACAO CIA', () => {
+test('ignora código 1 emitido pelo usuário INTEGRACAO CIA', () => {
   const ciaEvent = {
     status: 1,
-    operador: 'INTEGRACAO CIA',
+    usuario: 'INTEGRACAO CIA',
     descricao: 'ENTREGA REALIZADA NORMALMENTE'
   };
   assert.equal(isCiaIntegrationDelivery(ciaEvent), true);
@@ -242,12 +242,12 @@ test('aceita código 1 posterior emitido por outro operador', () => {
       dados: [
         {
           status: 1,
-          operador: 'INTEGRACAO CIA',
+          usuario: 'INTEGRACAO CIA',
           descricao: 'ENTREGA REALIZADA NORMALMENTE'
         },
         {
           status: 1,
-          operador: 'ALAN',
+          usuario: 'ALAN',
           descricao: 'ENTREGA REALIZADA NORMALMENTE'
         }
       ]
