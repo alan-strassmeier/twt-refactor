@@ -5,6 +5,7 @@ const { normalizeCteKey, selectCteBarcode } = require('../server/whatsapp/barcod
 const {
   buildCostsQuery,
   isDuplicateOccurrence,
+  isCiaIntegrationDelivery,
   hasDeliveryOccurrence
 } = require('../server/whatsapp/brudam');
 const { sendButtons, sendImage, sendFlow } = require('../server/whatsapp/meta');
@@ -218,6 +219,40 @@ test('identifica baixa existente no retorno de rastreamento', () => {
       dados: null
     }]
   }), false);
+});
+
+test('ignora código 1 emitido pelo operador INTEGRACAO CIA', () => {
+  const ciaEvent = {
+    status: 1,
+    operador: 'INTEGRACAO CIA',
+    descricao: 'ENTREGA REALIZADA NORMALMENTE'
+  };
+  assert.equal(isCiaIntegrationDelivery(ciaEvent), true);
+  assert.equal(hasDeliveryOccurrence({
+    status: 1,
+    data: [{ status: 1, dados: [ciaEvent] }]
+  }), false);
+});
+
+test('aceita código 1 posterior emitido por outro operador', () => {
+  assert.equal(hasDeliveryOccurrence({
+    status: 1,
+    data: [{
+      status: 1,
+      dados: [
+        {
+          status: 1,
+          operador: 'INTEGRACAO CIA',
+          descricao: 'ENTREGA REALIZADA NORMALMENTE'
+        },
+        {
+          status: 1,
+          operador: 'ALAN',
+          descricao: 'ENTREGA REALIZADA NORMALMENTE'
+        }
+      ]
+    }]
+  }), true);
 });
 
 test('aceita somente uma chave CT-e numérica de 44 dígitos', () => {
