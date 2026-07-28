@@ -132,11 +132,11 @@ const normalizedEventText = (value) => String(value ?? '')
 
 const isCiaIntegrationDelivery = (event) => {
   const code = Number(event?.codigo ?? event?.status);
-  const operator = event?.operador ??
-    event?.nome_operador ??
-    event?.operador_nome ??
-    event?.nomeOperador;
-  return code === 1 && normalizedEventText(operator) === 'INTEGRACAO CIA';
+  const user = event?.usuario ??
+    event?.nome_usuario ??
+    event?.usuario_nome ??
+    event?.nomeUsuario;
+  return code === 1 && normalizedEventText(user) === 'INTEGRACAO CIA';
 };
 
 const hasDeliveryOccurrence = (payload) => {
