@@ -198,7 +198,7 @@ import { APP_EVENTS, createElement } from './dom-utils.js';
       return {
         code: String(eventData.codigo ?? eventData.status ?? ''),
         date: String(eventData.data ?? ''),
-        description: ciaIntegrationDelivery ? 'AWB Retirado na Cia' : originalDescription,
+        description: ciaIntegrationDelivery ? 'AWB RETIRADO NA CIA' : originalDescription,
         note: publicTrackingNote(eventData.obs),
         ciaIntegrationDelivery,
         completesDelivery: !ciaIntegrationDelivery &&
