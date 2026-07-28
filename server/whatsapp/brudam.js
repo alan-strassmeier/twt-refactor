@@ -124,16 +124,29 @@ const isDuplicateOccurrence = (payload) => {
     ));
 };
 
+const normalizedEventText = (value) => String(value ?? '')
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .trim()
+  .toUpperCase();
+
+const isCiaIntegrationDelivery = (event) => {
+  const code = Number(event?.codigo ?? event?.status);
+  const operator = event?.operador ??
+    event?.nome_operador ??
+    event?.operador_nome ??
+    event?.nomeOperador;
+  return code === 1 && normalizedEventText(operator) === 'INTEGRACAO CIA';
+};
+
 const hasDeliveryOccurrence = (payload) => {
   if (Number(payload?.status) !== 1 || !Array.isArray(payload?.data)) return false;
   return payload.data
     .flatMap((document) => Array.isArray(document?.dados) ? document.dados : [])
     .some((event) => {
       const code = Number(event?.codigo ?? event?.status);
-      const description = String(event?.descricao ?? event?.message ?? '')
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '')
-        .toUpperCase();
+      if (isCiaIntegrationDelivery(event)) return false;
+      const description = normalizedEventText(event?.descricao ?? event?.message);
       return code === 1 || description.includes('ENTREGA REALIZADA');
     });
 };
@@ -203,6 +216,7 @@ const createDeliveryOccurrence = async (input) => {
 module.exports = {
   buildCostsQuery,
   isDuplicateOccurrence,
+  isCiaIntegrationDelivery,
   hasDeliveryOccurrence,
   isDeliveryAlreadyRegistered,
   resolveMinutaAndClient,

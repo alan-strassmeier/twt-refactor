@@ -49,7 +49,7 @@ const takeLocation = async (phone) => {
 const pendingKey = (phone) => `whatsapp:pending:${phone}`;
 const stateKey = (phone) => `whatsapp:state:${phone}`;
 const messageKey = (messageId) => `whatsapp:message:${messageId}`;
-const deliveredMinutaKey = (minuta) => `whatsapp:delivered:minuta:${minuta}`;
+const deliveredMinutaKey = (minuta) => `whatsapp:v2:delivered:minuta:${minuta}`;
 
 const saveConversationState = (phone, state) =>
   command('SET', stateKey(phone), state, 'EX', 86400);
