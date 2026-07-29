@@ -27,6 +27,10 @@
     }
   ],
   "functions": {
+    "api/faturamento/fatura-pdf.js": {
+      "maxDuration": 60,
+      "includeFiles": "assets/twtlogo.png"
+    },
     "api/faturamento/faturas.js": {
       "maxDuration": 60
     },

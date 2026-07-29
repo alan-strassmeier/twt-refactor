@@ -505,6 +505,67 @@ th.numeric {
   color: var(--muted);
 }
 
+.visualize-header,
+.visualize-cell {
+  text-align: center;
+}
+
+.pdf-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px;
+  border-radius: 7px;
+  color: #cf3138;
+  text-decoration: none;
+  transition: color .16s ease, background .16s ease, transform .16s ease;
+}
+
+.pdf-link:hover {
+  color: #a51f25;
+  background: #fff0f1;
+  transform: translateY(-1px);
+}
+
+.pdf-link:focus-visible {
+  outline: 3px solid rgb(207 49 56 / 25%);
+  outline-offset: 3px;
+}
+
+.pdf-icon {
+  position: relative;
+  width: 31px;
+  height: 37px;
+  display: grid;
+  place-items: end center;
+  padding-bottom: 5px;
+  border: 2px solid currentColor;
+  border-radius: 4px;
+  background: #fff;
+  font-size: .54rem;
+  font-weight: 900;
+  letter-spacing: .03em;
+  line-height: 1;
+}
+
+.pdf-icon::after {
+  content: "";
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  width: 9px;
+  height: 9px;
+  border-bottom: 2px solid currentColor;
+  border-left: 2px solid currentColor;
+  border-radius: 0 2px 0 2px;
+  background: #fff;
+}
+
+.pdf-unavailable {
+  color: var(--muted);
+  font-size: .72rem;
+}
+
 .status-badge {
   display: inline-block;
   padding: 6px 9px;

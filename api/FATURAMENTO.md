@@ -46,3 +46,16 @@ Nas consultas por CNPJ sem número de fatura, o servidor percorre todas as
 páginas retornadas pela Brudam, mantém apenas o CNPJ solicitado e ordena o
 resultado completo pela emissão mais recente. A consulta consolidada usa cache
 temporário de cinco minutos.
+
+## PDF da fatura
+
+A coluna `Visualizar` abre `GET /api/faturamento/fatura-pdf?id=...` em uma nova
+guia. O endpoint exige a mesma sessão autenticada da área de faturamento e nunca
+expõe o token da Brudam no navegador.
+
+Como a API pública da Brudam não documenta um endpoint de PDF, o servidor gera
+um documento A4 seguindo o modelo da fatura. Ele consulta a fatura, o cadastro
+do cliente e os documentos vinculados. Quando a resposta da Brudam contém os
+vínculos, cada minuta é consultada para preencher remessas e resumos. Dados que
+não forem fornecidos pela API são sinalizados como indisponíveis e nunca são
+inventados.

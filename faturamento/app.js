@@ -118,12 +118,40 @@
     2: 'status-cancelled'
   }[status] || 'status-unknown');
 
+  const createPdfCell = (invoice) => {
+    const cell = document.createElement('td');
+    cell.className = 'visualize-cell';
+    const invoiceId = String(invoice.id ?? '').trim();
+    if (!invoiceId) {
+      const unavailable = document.createElement('span');
+      unavailable.className = 'pdf-unavailable';
+      unavailable.textContent = 'Indisponível';
+      cell.appendChild(unavailable);
+      return cell;
+    }
+
+    const link = document.createElement('a');
+    link.className = 'pdf-link';
+    link.href = `/api/faturamento/fatura-pdf?id=${encodeURIComponent(invoiceId)}`;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.setAttribute('aria-label', `Visualizar PDF da fatura ${invoiceId} em nova guia`);
+    link.title = `Visualizar fatura ${invoiceId}`;
+    const icon = document.createElement('span');
+    icon.className = 'pdf-icon';
+    icon.setAttribute('aria-hidden', 'true');
+    icon.textContent = 'PDF';
+    link.appendChild(icon);
+    cell.appendChild(link);
+    return cell;
+  };
+
   const createInvoiceRow = (invoice) => {
     const row = document.createElement('tr');
     appendCell(row, String(invoice.id ?? '—'), 'invoice-id');
     appendCell(row, formatDate(invoice.issuedAt));
     appendCell(row, formatDate(invoice.dueAt));
-    appendCell(row, formatDate(invoice.paidAt));
+    row.appendChild(createPdfCell(invoice));
 
     const clientCell = document.createElement('td');
     clientCell.className = 'client-cell';

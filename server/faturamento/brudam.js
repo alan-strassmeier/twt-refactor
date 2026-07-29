@@ -65,8 +65,7 @@ const getAccessToken = async (forceRefresh = false) => {
   return token;
 };
 
-const requestInvoices = async (query) => {
-  const path = `/financeiro/faturas?${query}`;
+const authenticatedGet = async (path) => {
   let token = await getAccessToken();
   let result = await brudamRequest(path, {
     headers: { Accept: 'application/json', Authorization: `Bearer ${token}` }
@@ -80,6 +79,9 @@ const requestInvoices = async (query) => {
     headers: { Accept: 'application/json', Authorization: `Bearer ${token}` }
   });
 };
+
+const requestInvoices = async (query) =>
+  authenticatedGet(`/financeiro/faturas?${query}`);
 
 const validDate = (value) => {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
@@ -209,18 +211,7 @@ const fetchCompanyTradeName = async (cnpj) => {
   if (cached) companyNameCache.delete(normalizedCnpj);
 
   const path = `/cadastro/empresas?${new URLSearchParams({ cnpj: normalizedCnpj })}`;
-  let token = await getAccessToken();
-  let result = await brudamRequest(path, {
-    headers: { Accept: 'application/json', Authorization: `Bearer ${token}` }
-  });
-  if (result.response.status === 401) {
-    cachedToken = '';
-    cachedTokenExpiresAt = 0;
-    token = await getAccessToken(true);
-    result = await brudamRequest(path, {
-      headers: { Accept: 'application/json', Authorization: `Bearer ${token}` }
-    });
-  }
+  const result = await authenticatedGet(path);
 
   const name = result.response.ok
     ? companyTradeNameFromPayload(result.payload, normalizedCnpj)
@@ -508,6 +499,7 @@ const fetchInvoices = async (input) => {
 
 module.exports = {
   STATUS_LABELS,
+  authenticatedGet,
   buildInvoiceQuery,
   normalizeInvoice,
   companyTradeNameFromPayload,

@@ -117,6 +117,16 @@ test('coleta os filtros do formulário antes de desabilitar os campos', () => {
   assert.match(loadInvoices, /faturas\?\$\{params\}/);
 });
 
+test('coluna Visualizar abre o PDF em nova guia e não oferece ordenação', () => {
+  const html = readFileSync(require.resolve('../faturamento/index.html'), 'utf8');
+  const source = readFileSync(require.resolve('../faturamento/app.js'), 'utf8');
+  assert.match(html, /class="visualize-header">Visualizar<\/th>/);
+  assert.doesNotMatch(html, /data-sort-key="paidAt"/);
+  assert.match(source, /\/api\/faturamento\/fatura-pdf\?id=/);
+  assert.match(source, /link\.target = '_blank'/);
+  assert.match(source, /noopener noreferrer/);
+});
+
 test('rejeita data, status e CNPJ inválidos', () => {
   assert.throws(() => buildInvoiceQuery({ 'emissao[gte]': '2026-02-30' }), /Data inválida/);
   assert.throws(() => buildInvoiceQuery({ status: '9' }), /Status inválido/);
