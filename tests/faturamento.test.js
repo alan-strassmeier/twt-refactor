@@ -10,6 +10,8 @@ const {
 const {
   buildInvoiceQuery,
   normalizeInvoice,
+  companyTradeNameFromPayload,
+  enrichInvoicesWithCompanies,
   invoiceListFromPayload,
   filterInvoicesById,
   plainInvoiceIdQuery
@@ -180,6 +182,38 @@ test('normaliza o número público da fatura no retorno real da Brudam', () => {
     status: 1,
     statusLabel: 'LIQUIDADO'
   }]);
+});
+
+test('obtém o nome fantasia pelo CNPJ no retorno de empresas', () => {
+  assert.equal(companyTradeNameFromPayload({
+    message: 'OK',
+    status: 1,
+    data: [{
+      cnpj: '35820448008110',
+      fantasia: 'EMPRESA DE TESTE',
+      razao: 'EMPRESA DE TESTE LTDA'
+    }]
+  }, '35.820.448/0081-10'), 'EMPRESA DE TESTE');
+  assert.equal(companyTradeNameFromPayload({
+    status: 1,
+    data: [{ cnpj: '04004335000139', fantasia: 'OUTRA EMPRESA' }]
+  }, '35820448008110'), '');
+});
+
+test('enriquece faturas por CNPJ sem repetir consultas', async () => {
+  const calls = [];
+  const invoices = await enrichInvoicesWithCompanies([
+    { id: 1, client: '', clientDocument: '35820448008110' },
+    { id: 2, client: '', clientDocument: '35.820.448/0081-10' },
+    { id: 3, client: 'JÁ INFORMADO', clientDocument: '04004335000139' }
+  ], async (cnpj) => {
+    calls.push(cnpj);
+    return 'NOME FANTASIA';
+  });
+  assert.deepEqual(calls, ['35820448008110']);
+  assert.equal(invoices[0].client, 'NOME FANTASIA');
+  assert.equal(invoices[1].client, 'NOME FANTASIA');
+  assert.equal(invoices[2].client, 'JÁ INFORMADO');
 });
 
 test('aceita fatura única ou lista no retorno da Brudam', () => {

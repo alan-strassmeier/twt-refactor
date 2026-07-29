@@ -37,3 +37,7 @@ valor pago ou saldo. Quando esses campos adicionais estiverem presentes no
 retorno, a aplicação os utiliza. Caso não estejam, uma fatura liquidada é
 considerada integralmente paga; nas demais situações, o valor pago começa em
 zero e o saldo é calculado pelo valor total.
+
+Quando o retorno de faturas contém apenas `cnpj_cliente`, o servidor consulta
+`GET /cadastro/empresas?cnpj=...` e usa o campo `fantasia` para preencher o
+nome do cliente. Os CNPJs são deduplicados e os nomes usam cache temporário.

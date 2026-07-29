@@ -1,5 +1,8 @@
 const BASE_URL = String(process.env.BRUDAM_API_URL || 'https://twt.brudam.com.br/api/v1').replace(/\/$/, '');
 const REQUEST_TIMEOUT_MS = 20000;
+const COMPANY_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const COMPANY_NEGATIVE_CACHE_TTL_MS = 5 * 60 * 1000;
+const COMPANY_LOOKUP_CONCURRENCY = 6;
 const STATUS_LABELS = {
   0: 'Em aberto',
   1: 'Liquidada',
@@ -8,6 +11,7 @@ const STATUS_LABELS = {
 
 let cachedToken = '';
 let cachedTokenExpiresAt = 0;
+const companyNameCache = new Map();
 
 const brudamRequest = async (path, options = {}) => {
   const controller = new AbortController();
@@ -182,6 +186,80 @@ const normalizeInvoice = (invoice) => {
   };
 };
 
+const companyTradeNameFromPayload = (payload, cnpj) => {
+  if (!payload || Number(payload.status) !== 1 || !Array.isArray(payload.data)) return '';
+  const expectedCnpj = String(cnpj || '').replace(/\D/g, '');
+  const company = payload.data.find((item) =>
+    String(item?.cnpj || '').replace(/\D/g, '') === expectedCnpj
+  );
+  return String(firstValue(company, ['fantasia', 'razao']) || '').trim();
+};
+
+const fetchCompanyTradeName = async (cnpj) => {
+  const normalizedCnpj = String(cnpj || '').replace(/\D/g, '');
+  if (normalizedCnpj.length !== 14) return '';
+
+  const cached = companyNameCache.get(normalizedCnpj);
+  if (cached && cached.expiresAt > Date.now()) return cached.name;
+  if (cached) companyNameCache.delete(normalizedCnpj);
+
+  const path = `/cadastro/empresas?${new URLSearchParams({ cnpj: normalizedCnpj })}`;
+  let token = await getAccessToken();
+  let result = await brudamRequest(path, {
+    headers: { Accept: 'application/json', Authorization: `Bearer ${token}` }
+  });
+  if (result.response.status === 401) {
+    cachedToken = '';
+    cachedTokenExpiresAt = 0;
+    token = await getAccessToken(true);
+    result = await brudamRequest(path, {
+      headers: { Accept: 'application/json', Authorization: `Bearer ${token}` }
+    });
+  }
+
+  const name = result.response.ok
+    ? companyTradeNameFromPayload(result.payload, normalizedCnpj)
+    : '';
+  companyNameCache.set(normalizedCnpj, {
+    name,
+    expiresAt: Date.now() + (name ? COMPANY_CACHE_TTL_MS : COMPANY_NEGATIVE_CACHE_TTL_MS)
+  });
+  return name;
+};
+
+const enrichInvoicesWithCompanies = async (invoices, lookup = fetchCompanyTradeName) => {
+  const namesByCnpj = new Map();
+  const cnpjs = [...new Set(invoices
+    .filter((invoice) => !invoice.client)
+    .map((invoice) => String(invoice.clientDocument || '').replace(/\D/g, ''))
+    .filter((cnpj) => cnpj.length === 14))];
+  let nextIndex = 0;
+  const workers = Array.from(
+    { length: Math.min(COMPANY_LOOKUP_CONCURRENCY, cnpjs.length) },
+    async () => {
+      while (nextIndex < cnpjs.length) {
+        const cnpj = cnpjs[nextIndex];
+        nextIndex += 1;
+        let name = '';
+        try {
+          name = await lookup(cnpj);
+        } catch {
+          // A fatura continua disponível mesmo se o cadastro da empresa falhar.
+        }
+        namesByCnpj.set(cnpj, name);
+      }
+    }
+  );
+  await Promise.all(workers);
+
+  return invoices.map((invoice) => {
+    if (invoice.client) return invoice;
+    const cnpj = String(invoice.clientDocument || '').replace(/\D/g, '');
+    const client = namesByCnpj.get(cnpj) || '';
+    return client ? { ...invoice, client } : invoice;
+  });
+};
+
 const isInvoiceObject = (value) =>
   value &&
   typeof value === 'object' &&
@@ -295,6 +373,8 @@ const fetchInvoices = async (input) => {
     }
   }
 
+  invoices = await enrichInvoicesWithCompanies(invoices);
+
   return {
     invoices,
     pagination: {
@@ -314,6 +394,8 @@ module.exports = {
   STATUS_LABELS,
   buildInvoiceQuery,
   normalizeInvoice,
+  companyTradeNameFromPayload,
+  enrichInvoicesWithCompanies,
   invoiceListFromPayload,
   filterInvoicesById,
   plainInvoiceIdQuery,
