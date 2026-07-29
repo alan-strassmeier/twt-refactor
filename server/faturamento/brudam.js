@@ -178,19 +178,47 @@ const isInvoiceObject = (value) =>
   ['id', 'fatura', 'numero', 'valor', 'valor_total', 'emissao', 'vencimento', 'cliente']
     .some((key) => value[key] !== undefined);
 
-const invoiceListFromPayload = (payload) => {
-  const data = payload?.data;
-  if (Array.isArray(data)) return data;
-  if (!data || typeof data !== 'object') return null;
-  if (isInvoiceObject(data)) return [data];
-
-  for (const key of ['faturas', 'items', 'registros', 'resultados', 'data']) {
-    const value = data[key];
-    if (Array.isArray(value)) return value;
-    if (isInvoiceObject(value)) return [value];
+const findInvoiceList = (value, depth = 0, visited = new Set()) => {
+  if (depth > 5 || value === null || value === undefined) return null;
+  if (Array.isArray(value)) {
+    if (value.length === 0) return [];
+    const invoices = value.filter(isInvoiceObject);
+    if (invoices.length > 0) return invoices;
+    let foundEmptyList = false;
+    for (const item of value) {
+      const nested = findInvoiceList(item, depth + 1, visited);
+      if (Array.isArray(nested) && nested.length > 0) return nested;
+      if (Array.isArray(nested)) foundEmptyList = true;
+    }
+    return foundEmptyList ? [] : null;
   }
+  if (typeof value !== 'object' || visited.has(value)) return null;
+  if (isInvoiceObject(value)) return [value];
+  visited.add(value);
 
-  return Object.keys(data).length === 0 ? [] : null;
+  const keys = Object.keys(value);
+  if (keys.length === 0) return [];
+  const preferredKeys = [
+    'faturas', 'items', 'registros', 'resultados', 'dados', 'rows', 'records', 'data'
+  ];
+  let foundEmptyList = false;
+  for (const key of preferredKeys) {
+    if (!(key in value)) continue;
+    const nested = findInvoiceList(value[key], depth + 1, visited);
+    if (Array.isArray(nested) && nested.length > 0) return nested;
+    if (Array.isArray(nested)) foundEmptyList = true;
+  }
+  for (const nestedValue of Object.values(value)) {
+    const nested = findInvoiceList(nestedValue, depth + 1, visited);
+    if (Array.isArray(nested) && nested.length > 0) return nested;
+    if (Array.isArray(nested)) foundEmptyList = true;
+  }
+  return foundEmptyList ? [] : null;
+};
+
+const invoiceListFromPayload = (payload) => {
+  if (!payload || typeof payload !== 'object') return null;
+  return findInvoiceList(payload.data);
 };
 
 const fetchInvoices = async (input) => {
@@ -198,7 +226,20 @@ const fetchInvoices = async (input) => {
   const { response, payload } = await requestInvoices(query);
   const rawInvoices = invoiceListFromPayload(payload);
   if (!response.ok || Number(payload?.status) !== 1 || rawInvoices === null) {
-    const error = new Error(payload?.message || 'Não foi possível consultar as faturas.');
+    console.error('[faturamento:brudam-response]', {
+      httpStatus: response.status,
+      apiStatus: payload?.status,
+      dataType: Array.isArray(payload?.data) ? 'array' : typeof payload?.data,
+      dataKeys: payload?.data && typeof payload.data === 'object'
+        ? Object.keys(payload.data).slice(0, 20)
+        : []
+    });
+    const upstreamMessage = String(payload?.message || '').trim();
+    const error = new Error(
+      upstreamMessage && upstreamMessage.toUpperCase() !== 'OK'
+        ? upstreamMessage
+        : 'Formato inesperado no retorno de faturas da Brudam.'
+    );
     error.statusCode = response.status >= 400 ? response.status : 502;
     throw error;
   }

@@ -152,6 +152,25 @@
     elements.nextPage.disabled = !state.hasMore;
   };
 
+  const resetResults = () => {
+    state.skip = 0;
+    state.hasMore = false;
+    elements.invoiceRows.replaceChildren();
+    elements.emptyState.hidden = false;
+    elements.emptyState.querySelector('strong').textContent = 'Faça sua primeira consulta';
+    elements.emptyState.querySelector('p').textContent =
+      'Informe os filtros desejados e clique em “Buscar faturas”.';
+    elements.invoiceCount.textContent = '0';
+    elements.totalAmount.textContent = currency.format(0);
+    elements.paidAmount.textContent = currency.format(0);
+    elements.balanceAmount.textContent = currency.format(0);
+    elements.pageIndicator.textContent = 'Página 1';
+    elements.resultRange.textContent = 'Aguardando consulta';
+    elements.previousPage.disabled = true;
+    elements.nextPage.disabled = true;
+    elements.dashboardMessage.textContent = '';
+  };
+
   const filterParams = () => {
     const params = new URLSearchParams();
     const data = new FormData(elements.filterForm);
@@ -213,9 +232,8 @@
         })
       });
       elements.loginForm.reset();
-      state.skip = 0;
       showPanel('dashboard');
-      await loadInvoices();
+      resetResults();
     } catch (error) {
       elements.loginMessage.textContent = error.message;
     } finally {
@@ -245,8 +263,7 @@
 
   elements.clearFilters.addEventListener('click', () => {
     elements.filterForm.reset();
-    state.skip = 0;
-    loadInvoices();
+    resetResults();
   });
 
   elements.previousPage.addEventListener('click', () => {
@@ -266,7 +283,7 @@
       const session = await requestJson('/api/faturamento/session');
       if (session.authenticated) {
         showPanel('dashboard');
-        await loadInvoices();
+        resetResults();
       } else {
         showPanel('login');
       }

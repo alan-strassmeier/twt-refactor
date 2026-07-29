@@ -127,4 +127,13 @@ test('aceita fatura única ou lista no retorno da Brudam', () => {
     status: 1,
     data: []
   }), []);
+  assert.deepEqual(invoiceListFromPayload({
+    status: 1,
+    data: {
+      dados: {
+        resultados: [invoice],
+        total: 1
+      }
+    }
+  }), [invoice]);
 });
