@@ -10,6 +10,7 @@ const {
 const {
   buildInvoiceQuery,
   normalizeInvoice,
+  normalizeVisibleInvoices,
   companyTradeNameFromPayload,
   enrichInvoicesWithCompanies,
   invoiceListFromPayload,
@@ -198,6 +199,36 @@ test('normaliza o número público da fatura no retorno real da Brudam', () => {
   }]);
 });
 
+test('remove lançamentos bancários sem número público de fatura', () => {
+  const invoices = normalizeVisibleInvoices([
+    {
+      id: 31001,
+      fatura: 0,
+      cnpj_cliente: '60746948000112',
+      valor: '0.02'
+    },
+    {
+      id: 31002,
+      fatura: null,
+      cnpj_cliente: '60701190000104',
+      valor: '0.47'
+    },
+    {
+      id: 20822,
+      fatura: 11490,
+      cnpj_cliente: '04004335000139',
+      valor: '677.10'
+    },
+    {
+      id: 133,
+      cliente: { cnpj: '99999999999999', fantasia: 'TESTE' },
+      valor: '583.62'
+    }
+  ]);
+
+  assert.deepEqual(invoices.map((invoice) => invoice.id), [11490, 133]);
+});
+
 test('obtém o nome fantasia pelo CNPJ no retorno de empresas', () => {
   assert.equal(companyTradeNameFromPayload({
     message: 'OK',
@@ -212,13 +243,23 @@ test('obtém o nome fantasia pelo CNPJ no retorno de empresas', () => {
     status: 1,
     data: [{ cnpj: '04004335000139', fantasia: 'OUTRA EMPRESA' }]
   }, '35820448008110'), '');
+  assert.equal(companyTradeNameFromPayload({
+    status: 1,
+    data: {
+      empresas: [{
+        cnpj: '35820448006339',
+        fantasia: 'Não informado',
+        razao: 'WHITE MARTINS GASES INDUSTRIAIS LTDA'
+      }]
+    }
+  }, '35.820.448/0063-39'), 'WHITE MARTINS GASES INDUSTRIAIS LTDA');
 });
 
 test('enriquece faturas por CNPJ sem repetir consultas', async () => {
   const calls = [];
   const invoices = await enrichInvoicesWithCompanies([
     { id: 1, client: '', clientDocument: '35820448008110' },
-    { id: 2, client: '', clientDocument: '35.820.448/0081-10' },
+    { id: 2, client: 'Não informado', clientDocument: '35.820.448/0081-10' },
     { id: 3, client: 'JÁ INFORMADO', clientDocument: '04004335000139' }
   ], async (cnpj) => {
     calls.push(cnpj);

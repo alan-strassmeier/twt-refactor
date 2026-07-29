@@ -136,15 +136,16 @@ const minuteDataFromPayload = (payload) => {
 };
 
 const detailIdentifiers = (document) => {
-  const type = String(document?.tipo || document?.tpDoc || '').toLowerCase();
   const values = [
     document?.chave,
-    type.includes('minuta') ? document?.numero : null,
-    document?.id,
-    document?.numero
+    document?.chave_cte,
+    document?.id_minuta,
+    document?.minuta_id,
+    typeof document?.minuta === 'object' ? null : document?.minuta
   ];
   return [...new Set(values
     .map((value) => String(value ?? '').trim())
+    // `id` e `numero` genéricos não são documentados como identificadores de minuta.
     .filter((value) => value && value.length <= 64))];
 };
 
@@ -758,6 +759,7 @@ module.exports = {
   normalizedCompany,
   linkedDocumentsFromInvoice,
   minuteDataFromPayload,
+  detailIdentifiers,
   shipmentFromDetail,
   requestExactInvoice,
   fetchInvoicePdfData,

@@ -5,6 +5,7 @@ const {
   companyFromPayload,
   normalizedCompany,
   linkedDocumentsFromInvoice,
+  detailIdentifiers,
   shipmentFromDetail,
   buildInvoicePdf
 } = require('../server/faturamento/invoice-pdf');
@@ -61,6 +62,22 @@ test('usa somente os documentos realmente vinculados à fatura', () => {
   assert.equal(documents.length, 1);
   assert.equal(documents[0].id, 24847);
   assert.deepEqual(linkedDocumentsFromInvoice({}), []);
+});
+
+test('não trata o ID interno ou o número do CT-e como ID da minuta', () => {
+  assert.deepEqual(detailIdentifiers({
+    id: '66262',
+    numero: '6135-2',
+    tipo: 'CTE'
+  }), []);
+
+  assert.deepEqual(detailIdentifiers({
+    id: '66262',
+    numero: '6135-2',
+    tipo: 'CTE',
+    chave: '43260797434690000129570000000151131927245991',
+    id_minuta: '24437'
+  }), ['43260797434690000129570000000151131927245991', '24437']);
 });
 
 test('normaliza uma minuta detalhada para a linha da fatura', () => {

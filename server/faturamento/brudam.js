@@ -1,7 +1,6 @@
 const BASE_URL = String(process.env.BRUDAM_API_URL || 'https://twt.brudam.com.br/api/v1').replace(/\/$/, '');
 const REQUEST_TIMEOUT_MS = 20000;
 const COMPANY_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
-const COMPANY_NEGATIVE_CACHE_TTL_MS = 5 * 60 * 1000;
 const COMPANY_LOOKUP_CONCURRENCY = 6;
 const COMPANY_INVOICES_CACHE_TTL_MS = 5 * 60 * 1000;
 const MAX_COMPANY_INVOICE_PAGES = 50;
@@ -193,13 +192,72 @@ const normalizeInvoice = (invoice) => {
   };
 };
 
+const hasPublicInvoiceNumber = (invoice) => {
+  if (!invoice || typeof invoice !== 'object') return false;
+  const value = Object.prototype.hasOwnProperty.call(invoice, 'fatura')
+    ? invoice.fatura
+    : firstValue(invoice, ['numero', 'id']);
+  return integer(value, { min: 1 }) !== null;
+};
+
+const normalizeVisibleInvoices = (invoices) =>
+  invoices.filter(hasPublicInvoiceNumber).map(normalizeInvoice);
+
+const normalizedName = (value) => String(value || '')
+  .trim()
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .toLowerCase();
+
+const isMissingClientName = (value) => [
+  '',
+  '-',
+  'null',
+  'undefined',
+  'nao informado',
+  'nao informada'
+].includes(normalizedName(value));
+
+const isCompanyRecord = (value) =>
+  value &&
+  typeof value === 'object' &&
+  !Array.isArray(value) &&
+  firstValue(value, ['cnpj', 'cpf_cnpj', 'documento']) !== null &&
+  firstValue(value, ['fantasia', 'nome_fantasia', 'razao', 'razao_social', 'nome']) !== null;
+
+const companyRecordsFromPayload = (payload) => {
+  if (!payload || Number(payload.status) !== 1) return [];
+  const records = [];
+  const visited = new Set();
+  const visit = (value, depth = 0) => {
+    if (depth > 5 || value === null || value === undefined) return;
+    if (Array.isArray(value)) {
+      value.forEach((item) => visit(item, depth + 1));
+      return;
+    }
+    if (typeof value !== 'object' || visited.has(value)) return;
+    visited.add(value);
+    if (isCompanyRecord(value)) {
+      records.push(value);
+      return;
+    }
+    Object.values(value).forEach((item) => visit(item, depth + 1));
+  };
+  visit(payload.data);
+  return records;
+};
+
 const companyTradeNameFromPayload = (payload, cnpj) => {
-  if (!payload || Number(payload.status) !== 1 || !Array.isArray(payload.data)) return '';
   const expectedCnpj = String(cnpj || '').replace(/\D/g, '');
-  const company = payload.data.find((item) =>
-    String(item?.cnpj || '').replace(/\D/g, '') === expectedCnpj
+  const company = companyRecordsFromPayload(payload).find((item) =>
+    String(firstValue(item, ['cnpj', 'cpf_cnpj', 'documento']) || '').replace(/\D/g, '') ===
+      expectedCnpj
   );
-  return String(firstValue(company, ['fantasia', 'razao']) || '').trim();
+  const names = [
+    firstValue(company, ['fantasia', 'nome_fantasia']),
+    firstValue(company, ['razao', 'razao_social', 'nome'])
+  ];
+  return String(names.find((name) => !isMissingClientName(name)) || '').trim();
 };
 
 const fetchCompanyTradeName = async (cnpj) => {
@@ -216,17 +274,19 @@ const fetchCompanyTradeName = async (cnpj) => {
   const name = result.response.ok
     ? companyTradeNameFromPayload(result.payload, normalizedCnpj)
     : '';
-  companyNameCache.set(normalizedCnpj, {
-    name,
-    expiresAt: Date.now() + (name ? COMPANY_CACHE_TTL_MS : COMPANY_NEGATIVE_CACHE_TTL_MS)
-  });
+  if (name) {
+    companyNameCache.set(normalizedCnpj, {
+      name,
+      expiresAt: Date.now() + COMPANY_CACHE_TTL_MS
+    });
+  }
   return name;
 };
 
 const enrichInvoicesWithCompanies = async (invoices, lookup = fetchCompanyTradeName) => {
   const namesByCnpj = new Map();
   const cnpjs = [...new Set(invoices
-    .filter((invoice) => !invoice.client)
+    .filter((invoice) => isMissingClientName(invoice.client))
     .map((invoice) => String(invoice.clientDocument || '').replace(/\D/g, ''))
     .filter((cnpj) => cnpj.length === 14))];
   let nextIndex = 0;
@@ -249,7 +309,7 @@ const enrichInvoicesWithCompanies = async (invoices, lookup = fetchCompanyTradeN
   await Promise.all(workers);
 
   return invoices.map((invoice) => {
-    if (invoice.client) return invoice;
+    if (!isMissingClientName(invoice.client)) return invoice;
     const cnpj = String(invoice.clientDocument || '').replace(/\D/g, '');
     const client = namesByCnpj.get(cnpj) || '';
     return client ? { ...invoice, client } : invoice;
@@ -415,7 +475,7 @@ const fetchInvoices = async (input) => {
     error.statusCode = response.status >= 400 ? response.status : 502;
     throw error;
   }
-  let normalizedInvoices = rawInvoices.map(normalizeInvoice);
+  let normalizedInvoices = normalizeVisibleInvoices(rawInvoices);
   let invoices = filterInvoicesById(normalizedInvoices, exactId);
   let upstreamCount = rawInvoices.length;
   let upstreamReportedCount = integer(payload?.data?.qtd_lancamentos, { min: 0 });
@@ -434,7 +494,7 @@ const fetchInvoices = async (input) => {
       Number(fallbackResult.payload?.status) === 1 &&
       fallbackRawInvoices !== null
     ) {
-      const fallbackNormalizedInvoices = fallbackRawInvoices.map(normalizeInvoice);
+      const fallbackNormalizedInvoices = normalizeVisibleInvoices(fallbackRawInvoices);
       const fallbackInvoices = filterInvoicesById(fallbackNormalizedInvoices, exactId);
       if (fallbackInvoices.length > 0 || fallbackRawInvoices.length < rawInvoices.length) {
         response = fallbackResult.response;
@@ -461,7 +521,7 @@ const fetchInvoices = async (input) => {
       if (cached) companyInvoicesCache.delete(cacheKey);
       const collected = await collectAllInvoicePages(query, rawInvoices);
       rawInvoices = collected.invoices;
-      normalizedInvoices = rawInvoices.map(normalizeInvoice);
+      normalizedInvoices = normalizeVisibleInvoices(rawInvoices);
       invoices = filterAndSortCompanyInvoices(normalizedInvoices, exactCnpj);
       upstreamCount = rawInvoices.length;
       upstreamReportedCount = rawInvoices.length;
@@ -487,7 +547,7 @@ const fetchInvoices = async (input) => {
       limit: allCompanyInvoicesLoaded ? invoices.length : limit,
       skip: allCompanyInvoicesLoaded ? 0 : skip,
       hasPrevious: allCompanyInvoicesLoaded ? false : skip > 0,
-      hasMore: allCompanyInvoicesLoaded ? false : exactId === null && invoices.length === limit,
+      hasMore: allCompanyInvoicesLoaded ? false : exactId === null && rawInvoices.length === limit,
       upstreamReportedCount,
       upstreamCount,
       upstreamFilter,
@@ -503,6 +563,7 @@ module.exports = {
   authenticatedGet,
   buildInvoiceQuery,
   normalizeInvoice,
+  normalizeVisibleInvoices,
   companyTradeNameFromPayload,
   enrichInvoicesWithCompanies,
   invoiceListFromPayload,
