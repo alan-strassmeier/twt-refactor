@@ -22,13 +22,17 @@
     invoiceCount: document.getElementById('invoiceCount'),
     totalAmount: document.getElementById('totalAmount'),
     paidAmount: document.getElementById('paidAmount'),
-    balanceAmount: document.getElementById('balanceAmount')
+    balanceAmount: document.getElementById('balanceAmount'),
+    sortHeaders: [...document.querySelectorAll('[data-sort-key]')]
   };
 
   const state = {
     skip: 0,
     hasMore: false,
-    loading: false
+    loading: false,
+    invoices: [],
+    sortKey: 'issuedAt',
+    sortDirection: 'desc'
   };
 
   const currency = new Intl.NumberFormat('pt-BR', {
@@ -131,13 +135,39 @@
     return total + (typeof value === 'number' && Number.isFinite(value) ? value : 0);
   }, 0);
 
+  const updateSortHeaders = () => {
+    elements.sortHeaders.forEach((button) => {
+      const header = button.closest('th');
+      const indicator = button.querySelector('.sort-indicator');
+      const active = button.dataset.sortKey === state.sortKey;
+      header.setAttribute(
+        'aria-sort',
+        active ? (state.sortDirection === 'asc' ? 'ascending' : 'descending') : 'none'
+      );
+      indicator.textContent = active
+        ? (state.sortDirection === 'asc' ? '↑' : '↓')
+        : '↕';
+    });
+  };
+
+  const renderSortedRows = () => {
+    const sorted = window.BillingSort.sortInvoices(
+      state.invoices,
+      state.sortKey,
+      state.sortDirection
+    );
+    elements.invoiceRows.replaceChildren(...sorted.map(createInvoiceRow));
+    updateSortHeaders();
+  };
+
   const renderInvoices = (payload) => {
     const invoices = Array.isArray(payload.invoices) ? payload.invoices : [];
+    state.invoices = invoices;
     const financialInvoices = invoices.filter((invoice) => {
       const statusLabel = String(invoice.statusLabel || '').toLocaleLowerCase('pt-BR');
       return invoice.status !== 2 && !statusLabel.startsWith('cancel');
     });
-    elements.invoiceRows.replaceChildren(...invoices.map(createInvoiceRow));
+    renderSortedRows();
     elements.emptyState.hidden = invoices.length > 0;
     elements.invoiceCount.textContent = String(invoices.length);
     elements.totalAmount.textContent = currency.format(sum(financialInvoices, 'total'));
@@ -159,7 +189,11 @@
   const resetResults = () => {
     state.skip = 0;
     state.hasMore = false;
+    state.invoices = [];
+    state.sortKey = 'issuedAt';
+    state.sortDirection = 'desc';
     elements.invoiceRows.replaceChildren();
+    updateSortHeaders();
     elements.emptyState.hidden = false;
     elements.emptyState.querySelector('strong').textContent = 'Faça sua primeira consulta';
     elements.emptyState.querySelector('p').textContent =
@@ -282,6 +316,19 @@
     if (!state.hasMore) return;
     state.skip += LIMIT;
     loadInvoices();
+  });
+
+  elements.sortHeaders.forEach((button) => {
+    button.addEventListener('click', () => {
+      const key = button.dataset.sortKey;
+      if (state.sortKey === key) {
+        state.sortDirection = state.sortDirection === 'asc' ? 'desc' : 'asc';
+      } else {
+        state.sortKey = key;
+        state.sortDirection = window.BillingSort.defaultDirectionFor(key);
+      }
+      renderSortedRows();
+    });
   });
 
   const start = async () => {

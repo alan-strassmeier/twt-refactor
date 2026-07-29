@@ -7,8 +7,9 @@
   <meta name="theme-color" content="#112a40">
   <title>Faturamento | TWT Airpack</title>
   <link rel="icon" href="/favicon.ico">
-  <link rel="stylesheet" href="/faturamento/styles.css?v=1">
-  <script src="/faturamento/app.js?v=4" defer></script>
+  <link rel="stylesheet" href="/faturamento/styles.css?v=2">
+  <script src="/faturamento/sort.js?v=1" defer></script>
+  <script src="/faturamento/app.js?v=5" defer></script>
 </head>
 <body>
   <div class="page-shell">
@@ -143,15 +144,15 @@
             <table>
               <thead>
                 <tr>
-                  <th>Fatura</th>
-                  <th>Emissão</th>
-                  <th>Vencimento</th>
-                  <th>Data pgto.</th>
-                  <th>Cliente / empresa</th>
-                  <th class="numeric">Valor total</th>
-                  <th class="numeric">Valor pago</th>
-                  <th class="numeric">Saldo</th>
-                  <th>Status</th>
+                  <th scope="col" aria-sort="none"><button class="sort-button" type="button" data-sort-key="id">Fatura <span class="sort-indicator" aria-hidden="true">↕</span></button></th>
+                  <th scope="col" aria-sort="descending"><button class="sort-button" type="button" data-sort-key="issuedAt">Emissão <span class="sort-indicator" aria-hidden="true">↓</span></button></th>
+                  <th scope="col" aria-sort="none"><button class="sort-button" type="button" data-sort-key="dueAt">Vencimento <span class="sort-indicator" aria-hidden="true">↕</span></button></th>
+                  <th scope="col" aria-sort="none"><button class="sort-button" type="button" data-sort-key="paidAt">Data pgto. <span class="sort-indicator" aria-hidden="true">↕</span></button></th>
+                  <th scope="col" aria-sort="none"><button class="sort-button" type="button" data-sort-key="client">Cliente / empresa <span class="sort-indicator" aria-hidden="true">↕</span></button></th>
+                  <th scope="col" class="numeric" aria-sort="none"><button class="sort-button" type="button" data-sort-key="total">Valor total <span class="sort-indicator" aria-hidden="true">↕</span></button></th>
+                  <th scope="col" class="numeric" aria-sort="none"><button class="sort-button" type="button" data-sort-key="paid">Valor pago <span class="sort-indicator" aria-hidden="true">↕</span></button></th>
+                  <th scope="col" class="numeric" aria-sort="none"><button class="sort-button" type="button" data-sort-key="balance">Saldo <span class="sort-indicator" aria-hidden="true">↕</span></button></th>
+                  <th scope="col" aria-sort="none"><button class="sort-button" type="button" data-sort-key="status">Status <span class="sort-indicator" aria-hidden="true">↕</span></button></th>
                 </tr>
               </thead>
               <tbody id="invoiceRows"></tbody>

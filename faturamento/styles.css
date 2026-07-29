@@ -426,6 +426,38 @@ th {
   text-transform: uppercase;
 }
 
+.sort-button {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: inherit;
+  cursor: pointer;
+}
+
+.sort-button:hover {
+  color: var(--blue-600);
+}
+
+.sort-button:focus-visible {
+  border-radius: 4px;
+  outline: 3px solid rgb(50 138 229 / 35%);
+  outline-offset: 3px;
+}
+
+th.numeric .sort-button {
+  width: 100%;
+  justify-content: flex-end;
+}
+
+.sort-indicator {
+  min-width: 12px;
+  color: var(--blue-600);
+  font-size: .86rem;
+  line-height: 1;
+  text-align: center;
+}
+
 tbody tr {
   transition: background .14s;
 }

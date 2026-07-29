@@ -18,6 +18,7 @@ const {
 } = require('../server/faturamento/brudam');
 const { MAX_ATTEMPTS } = require('../server/faturamento/rate-limit');
 const { queryFromRequest } = require('../server/faturamento/http');
+const { defaultDirectionFor, sortInvoices } = require('../faturamento/sort');
 
 const withBillingEnv = (callback) => {
   const previous = {
@@ -258,4 +259,25 @@ test('monta a consulta alternativa com o parâmetro id simples', () => {
     plainInvoiceIdQuery('id%5Beq%5D=11381&limit=100&skip=0', 11381),
     'limit=100&skip=0&id=11381'
   );
+});
+
+test('ordena faturas pela emissão mais recente por padrão', () => {
+  const invoices = [
+    { id: 1, issuedAt: '2026-06-19' },
+    { id: 2, issuedAt: '2026-07-10' },
+    { id: 3, issuedAt: null }
+  ];
+  assert.deepEqual(sortInvoices(invoices).map((invoice) => invoice.id), [2, 1, 3]);
+  assert.equal(defaultDirectionFor('issuedAt'), 'desc');
+});
+
+test('ordena números e textos nos dois sentidos', () => {
+  const invoices = [
+    { id: 1, total: 20, client: 'Zulu' },
+    { id: 2, total: 5, client: 'Ágata' },
+    { id: 3, total: 10, client: 'Brasil' }
+  ];
+  assert.deepEqual(sortInvoices(invoices, 'total', 'asc').map((invoice) => invoice.id), [2, 3, 1]);
+  assert.deepEqual(sortInvoices(invoices, 'total', 'desc').map((invoice) => invoice.id), [1, 3, 2]);
+  assert.deepEqual(sortInvoices(invoices, 'client', 'asc').map((invoice) => invoice.id), [2, 3, 1]);
 });
