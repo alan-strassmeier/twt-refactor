@@ -145,17 +145,27 @@ test('normaliza os dados documentados e calcula saldo', () => {
 });
 
 test('normaliza o número público da fatura no retorno real da Brudam', () => {
-  assert.deepEqual(normalizeInvoice({
-    id: 20822,
-    id_cliente: 454,
-    cnpj_cliente: '04004335000139',
-    status: '1',
-    status_descricao: 'LIQUIDADO',
-    valor: '677.10',
-    emissao: '2026-07-10',
-    data_vencimento: '2026-07-24',
-    fatura: 11490
-  }), {
+  const payload = {
+    message: 'OK',
+    status: 1,
+    data: {
+      status: 1,
+      qtd_lancamentos: 1,
+      documentos: [{
+        id: 20822,
+        id_cliente: 454,
+        cnpj_cliente: '04004335000139',
+        status: '1',
+        status_descricao: 'LIQUIDADO',
+        valor: '677.10',
+        emissao: '2026-07-10',
+        data_vencimento: '2026-07-24',
+        fatura: 11490
+      }]
+    }
+  };
+  const invoices = invoiceListFromPayload(payload).map(normalizeInvoice);
+  assert.deepEqual(filterInvoicesById(invoices, 11490), [{
     id: 11490,
     internalId: 20822,
     issuedAt: '2026-07-10',
@@ -168,7 +178,7 @@ test('normaliza o número público da fatura no retorno real da Brudam', () => {
     balance: 0,
     status: 1,
     statusLabel: 'LIQUIDADO'
-  });
+  }]);
 });
 
 test('aceita fatura única ou lista no retorno da Brudam', () => {

@@ -229,6 +229,7 @@ const findInvoiceList = (value, depth = 0, visited = new Set()) => {
 
 const invoiceListFromPayload = (payload) => {
   if (!payload || typeof payload !== 'object') return null;
+  if (Array.isArray(payload?.data?.documentos)) return payload.data.documentos;
   return findInvoiceList(payload.data);
 };
 
@@ -259,14 +260,17 @@ const fetchInvoices = async (input) => {
     error.statusCode = response.status >= 400 ? response.status : 502;
     throw error;
   }
-  const invoices = filterInvoicesById(rawInvoices.map(normalizeInvoice), exactId);
+  const normalizedInvoices = rawInvoices.map(normalizeInvoice);
+  const invoices = filterInvoicesById(normalizedInvoices, exactId);
   return {
     invoices,
     pagination: {
       limit,
       skip,
       hasPrevious: skip > 0,
-      hasMore: exactId === null && invoices.length === limit
+      hasMore: exactId === null && invoices.length === limit,
+      upstreamReportedCount: integer(payload?.data?.qtd_lancamentos, { min: 0 }),
+      upstreamCount: rawInvoices.length
     }
   };
 };
