@@ -238,10 +238,17 @@ const filterInvoicesById = (invoices, exactId) => {
   return invoices.filter((invoice) => String(invoice?.id ?? '') === String(exactId));
 };
 
+const plainInvoiceIdQuery = (query, exactId) => {
+  const params = new URLSearchParams(query);
+  params.delete('id[eq]');
+  params.set('id', String(exactId));
+  return params.toString();
+};
+
 const fetchInvoices = async (input) => {
   const { query, limit, skip, exactId } = buildInvoiceQuery(input);
-  const { response, payload } = await requestInvoices(query);
-  const rawInvoices = invoiceListFromPayload(payload);
+  let { response, payload } = await requestInvoices(query);
+  let rawInvoices = invoiceListFromPayload(payload);
   if (!response.ok || Number(payload?.status) !== 1 || rawInvoices === null) {
     console.error('[faturamento:brudam-response]', {
       httpStatus: response.status,
@@ -260,8 +267,34 @@ const fetchInvoices = async (input) => {
     error.statusCode = response.status >= 400 ? response.status : 502;
     throw error;
   }
-  const normalizedInvoices = rawInvoices.map(normalizeInvoice);
-  const invoices = filterInvoicesById(normalizedInvoices, exactId);
+  let normalizedInvoices = rawInvoices.map(normalizeInvoice);
+  let invoices = filterInvoicesById(normalizedInvoices, exactId);
+  let upstreamFilter = exactId === null ? 'none' : 'id[eq]';
+  let fallbackAttempted = false;
+
+  if (exactId !== null && invoices.length === 0) {
+    fallbackAttempted = true;
+    const fallbackQuery = plainInvoiceIdQuery(query, exactId);
+    const fallbackResult = await requestInvoices(fallbackQuery);
+    const fallbackRawInvoices = invoiceListFromPayload(fallbackResult.payload);
+    if (
+      fallbackResult.response.ok &&
+      Number(fallbackResult.payload?.status) === 1 &&
+      fallbackRawInvoices !== null
+    ) {
+      const fallbackNormalizedInvoices = fallbackRawInvoices.map(normalizeInvoice);
+      const fallbackInvoices = filterInvoicesById(fallbackNormalizedInvoices, exactId);
+      if (fallbackInvoices.length > 0 || fallbackRawInvoices.length < rawInvoices.length) {
+        response = fallbackResult.response;
+        payload = fallbackResult.payload;
+        rawInvoices = fallbackRawInvoices;
+        normalizedInvoices = fallbackNormalizedInvoices;
+        invoices = fallbackInvoices;
+        upstreamFilter = 'id';
+      }
+    }
+  }
+
   return {
     invoices,
     pagination: {
@@ -270,7 +303,9 @@ const fetchInvoices = async (input) => {
       hasPrevious: skip > 0,
       hasMore: exactId === null && invoices.length === limit,
       upstreamReportedCount: integer(payload?.data?.qtd_lancamentos, { min: 0 }),
-      upstreamCount: rawInvoices.length
+      upstreamCount: rawInvoices.length,
+      upstreamFilter,
+      fallbackAttempted
     }
   };
 };
@@ -281,5 +316,6 @@ module.exports = {
   normalizeInvoice,
   invoiceListFromPayload,
   filterInvoicesById,
+  plainInvoiceIdQuery,
   fetchInvoices
 };

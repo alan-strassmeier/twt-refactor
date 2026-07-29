@@ -11,7 +11,8 @@ const {
   buildInvoiceQuery,
   normalizeInvoice,
   invoiceListFromPayload,
-  filterInvoicesById
+  filterInvoicesById,
+  plainInvoiceIdQuery
 } = require('../server/faturamento/brudam');
 const { MAX_ATTEMPTS } = require('../server/faturamento/rate-limit');
 const { queryFromRequest } = require('../server/faturamento/http');
@@ -216,4 +217,11 @@ test('mantém somente a fatura com o ID solicitado', () => {
     { id: 11490, total: 20 }
   ]);
   assert.equal(filterInvoicesById(invoices, null).length, 3);
+});
+
+test('monta a consulta alternativa com o parâmetro id simples', () => {
+  assert.equal(
+    plainInvoiceIdQuery('id%5Beq%5D=11381&limit=100&skip=0', 11381),
+    'limit=100&skip=0&id=11381'
+  );
 });
