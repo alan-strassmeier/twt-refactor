@@ -9,7 +9,8 @@ const {
 const {
   buildInvoiceQuery,
   normalizeInvoice,
-  invoiceListFromPayload
+  invoiceListFromPayload,
+  filterInvoicesById
 } = require('../server/faturamento/brudam');
 const { MAX_ATTEMPTS } = require('../server/faturamento/rate-limit');
 
@@ -74,10 +75,11 @@ test('monta somente os filtros permitidos pela API de faturas', () => {
   assert.equal(query.get('emissao[gte]'), '2026-07-01');
   assert.equal(query.get('status'), '0');
   assert.equal(query.get('cnpj'), '97434690000129');
-  assert.equal(query.get('id'), '133');
+  assert.equal(query.get('id[eq]'), '133');
+  assert.equal(query.get('id'), null);
   assert.equal(query.get('segredo'), null);
   assert.equal(result.limit, 50);
-  assert.equal(result.skip, 100);
+  assert.equal(result.skip, 0);
 });
 
 test('rejeita data, status e CNPJ inválidos', () => {
@@ -136,4 +138,16 @@ test('aceita fatura única ou lista no retorno da Brudam', () => {
       }
     }
   }), [invoice]);
+});
+
+test('mantém somente a fatura com o ID solicitado', () => {
+  const invoices = [
+    { id: 11489, total: 10 },
+    { id: 11490, total: 20 },
+    { id: 11491, total: 30 }
+  ];
+  assert.deepEqual(filterInvoicesById(invoices, 11490), [
+    { id: 11490, total: 20 }
+  ]);
+  assert.equal(filterInvoicesById(invoices, null).length, 3);
 });

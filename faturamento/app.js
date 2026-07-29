@@ -133,12 +133,16 @@
 
   const renderInvoices = (payload) => {
     const invoices = Array.isArray(payload.invoices) ? payload.invoices : [];
+    const financialInvoices = invoices.filter((invoice) => {
+      const statusLabel = String(invoice.statusLabel || '').toLocaleLowerCase('pt-BR');
+      return invoice.status !== 2 && !statusLabel.startsWith('cancel');
+    });
     elements.invoiceRows.replaceChildren(...invoices.map(createInvoiceRow));
     elements.emptyState.hidden = invoices.length > 0;
     elements.invoiceCount.textContent = String(invoices.length);
-    elements.totalAmount.textContent = currency.format(sum(invoices, 'total'));
-    elements.paidAmount.textContent = currency.format(sum(invoices, 'paid'));
-    elements.balanceAmount.textContent = currency.format(sum(invoices, 'balance'));
+    elements.totalAmount.textContent = currency.format(sum(financialInvoices, 'total'));
+    elements.paidAmount.textContent = currency.format(sum(financialInvoices, 'paid'));
+    elements.balanceAmount.textContent = currency.format(sum(financialInvoices, 'balance'));
 
     state.hasMore = Boolean(payload.pagination?.hasMore);
     const page = Math.floor(state.skip / LIMIT) + 1;
@@ -174,6 +178,8 @@
   const filterParams = () => {
     const params = new URLSearchParams();
     const data = new FormData(elements.filterForm);
+    const exactInvoiceId = String(data.get('id') || '').trim();
+    if (exactInvoiceId) state.skip = 0;
     for (const [key, rawValue] of data.entries()) {
       const value = String(rawValue).trim();
       if (value) params.set(key, key === 'cnpj' ? value.replace(/\D/g, '') : value);

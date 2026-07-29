@@ -116,17 +116,21 @@ const buildInvoiceQuery = (input = {}) => {
   }
 
   const idValue = input.id;
+  let exactId = null;
   if (idValue !== undefined && idValue !== null && String(idValue).trim() !== '') {
     const id = integer(idValue, { min: 1 });
     if (id === null) throw Object.assign(new Error('Número da fatura inválido.'), { statusCode: 422 });
-    params.set('id', String(id));
+    exactId = id;
+    params.set('id[eq]', String(id));
   }
 
   const limit = integer(input.limit, { min: 1, max: 100 }) ?? 100;
-  const skip = integer(input.skip, { min: 0, max: 1000000 }) ?? 0;
+  const skip = exactId === null
+    ? integer(input.skip, { min: 0, max: 1000000 }) ?? 0
+    : 0;
   params.set('limit', String(limit));
   params.set('skip', String(skip));
-  return { query: params.toString(), limit, skip };
+  return { query: params.toString(), limit, skip, exactId };
 };
 
 const numberValue = (value) => {
@@ -221,8 +225,13 @@ const invoiceListFromPayload = (payload) => {
   return findInvoiceList(payload.data);
 };
 
+const filterInvoicesById = (invoices, exactId) => {
+  if (exactId === null || exactId === undefined) return invoices;
+  return invoices.filter((invoice) => String(invoice?.id ?? '') === String(exactId));
+};
+
 const fetchInvoices = async (input) => {
-  const { query, limit, skip } = buildInvoiceQuery(input);
+  const { query, limit, skip, exactId } = buildInvoiceQuery(input);
   const { response, payload } = await requestInvoices(query);
   const rawInvoices = invoiceListFromPayload(payload);
   if (!response.ok || Number(payload?.status) !== 1 || rawInvoices === null) {
@@ -243,14 +252,14 @@ const fetchInvoices = async (input) => {
     error.statusCode = response.status >= 400 ? response.status : 502;
     throw error;
   }
-  const invoices = rawInvoices.map(normalizeInvoice);
+  const invoices = filterInvoicesById(rawInvoices.map(normalizeInvoice), exactId);
   return {
     invoices,
     pagination: {
       limit,
       skip,
       hasPrevious: skip > 0,
-      hasMore: invoices.length === limit
+      hasMore: exactId === null && invoices.length === limit
     }
   };
 };
@@ -260,5 +269,6 @@ module.exports = {
   buildInvoiceQuery,
   normalizeInvoice,
   invoiceListFromPayload,
+  filterInvoicesById,
   fetchInvoices
 };
