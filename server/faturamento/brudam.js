@@ -303,6 +303,7 @@ const findInvoiceList = (value, depth = 0, visited = new Set()) => {
 
 const invoiceListFromPayload = (payload) => {
   if (!payload || typeof payload !== 'object') return null;
+  if (isInvoiceObject(payload.data)) return [payload.data];
   if (Array.isArray(payload?.data?.documentos)) return payload.data.documentos;
   return findInvoiceList(payload.data);
 };

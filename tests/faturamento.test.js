@@ -255,6 +255,46 @@ test('aceita fatura única ou lista no retorno da Brudam', () => {
   }), [invoice]);
 });
 
+test('preserva os CT-es quando documentos pertence à fatura documentada', () => {
+  const linkedCtes = [
+    { id: '66620', numero: '6135-2', tipo: 'CTE', valor: '9.60' },
+    { id: '66658', numero: '0-', tipo: 'CTE', valor: '10.40' }
+  ];
+  const documentedInvoice = {
+    id: '133',
+    valor: '583.62',
+    emissao: '2016-11-11',
+    vencimento: '2016-11-28',
+    qtd_doc: 2,
+    status: '1',
+    cliente: {
+      cnpj: '99999999999999',
+      fantasia: 'TESTE'
+    },
+    documentos: linkedCtes
+  };
+
+  const result = invoiceListFromPayload({
+    message: 'OK',
+    status: 1,
+    data: documentedInvoice
+  });
+
+  assert.equal(result.length, 1);
+  assert.equal(result[0], documentedInvoice);
+  assert.deepEqual(result[0].documentos, linkedCtes);
+});
+
+test('mantém compatibilidade com o envelope real de lançamentos', () => {
+  const invoiceRows = [
+    { id: 20822, fatura: 11490, valor: '677.10' }
+  ];
+  assert.deepEqual(invoiceListFromPayload({
+    status: 1,
+    data: { status: 1, qtd_lancamentos: 1, documentos: invoiceRows }
+  }), invoiceRows);
+});
+
 test('mantém somente a fatura com o ID solicitado', () => {
   const invoices = [
     { id: 11489, total: 10 },
