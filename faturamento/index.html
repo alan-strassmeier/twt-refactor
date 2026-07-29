@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow, noarchive">
+  <meta name="theme-color" content="#112a40">
+  <title>Faturamento | TWT Airpack</title>
+  <link rel="icon" href="/favicon.ico">
+  <link rel="stylesheet" href="/faturamento/styles.css?v=1">
+  <script src="/faturamento/app.js?v=1" defer></script>
+</head>
+<body>
+  <div class="page-shell">
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Voltar ao site da TWT">
+        <img src="/assets/twtlogosince.png" alt="TWT Airpack">
+      </a>
+      <div class="topbar-copy">
+        <span class="eyebrow">Área interna</span>
+        <strong>Controle de faturamento</strong>
+      </div>
+      <button class="button button-quiet" id="logoutButton" type="button" hidden>Sair</button>
+    </header>
+
+    <main>
+      <section class="loading-panel" id="loadingPanel" aria-live="polite">
+        <span class="spinner" aria-hidden="true"></span>
+        <p>Verificando acesso…</p>
+      </section>
+
+      <section class="login-layout" id="loginPanel" hidden>
+        <div class="login-intro">
+          <span class="eyebrow">Financeiro TWT</span>
+          <h1>Faturas organizadas em um só lugar.</h1>
+          <p>Consulte valores, vencimentos, pagamentos e saldos diretamente da operação.</p>
+        </div>
+        <form class="login-card" id="loginForm">
+          <div>
+            <span class="eyebrow">Acesso restrito</span>
+            <h2>Entrar no faturamento</h2>
+            <p>Use as credenciais administrativas da TWT.</p>
+          </div>
+          <label>
+            Usuário
+            <input name="username" type="text" autocomplete="username" required maxlength="80">
+          </label>
+          <label>
+            Senha
+            <input name="password" type="password" autocomplete="current-password" required maxlength="200">
+          </label>
+          <p class="form-message" id="loginMessage" role="alert" aria-live="assertive"></p>
+          <button class="button button-primary" type="submit">Entrar</button>
+        </form>
+      </section>
+
+      <section class="dashboard" id="dashboardPanel" hidden>
+        <div class="dashboard-heading">
+          <div>
+            <span class="eyebrow">Visão financeira</span>
+            <h1>Faturas</h1>
+            <p>Filtre os registros e acompanhe os valores retornados pela Brudam.</p>
+          </div>
+          <span class="connection-status"><span></span> Integração ativa</span>
+        </div>
+
+        <form class="filter-card" id="filterForm">
+          <div class="filter-heading">
+            <div>
+              <h2>Filtros de consulta</h2>
+              <p>Use um ou mais campos para refinar a lista.</p>
+            </div>
+            <button class="button button-quiet" id="clearFilters" type="button">Limpar</button>
+          </div>
+          <div class="filter-grid">
+            <label>
+              Emissão inicial
+              <input type="date" name="emissao[gte]">
+            </label>
+            <label>
+              Emissão final
+              <input type="date" name="emissao[lte]">
+            </label>
+            <label>
+              Vencimento inicial
+              <input type="date" name="vencimento[gte]">
+            </label>
+            <label>
+              Vencimento final
+              <input type="date" name="vencimento[lte]">
+            </label>
+            <label>
+              Status
+              <select name="status">
+                <option value="">Todos</option>
+                <option value="0">Em aberto</option>
+                <option value="1">Liquidada</option>
+                <option value="2">Cancelada</option>
+              </select>
+            </label>
+            <label>
+              CNPJ do cliente
+              <input type="text" name="cnpj" inputmode="numeric" autocomplete="off" maxlength="18" placeholder="00.000.000/0000-00">
+            </label>
+            <label>
+              Número da fatura
+              <input type="text" name="id" inputmode="numeric" autocomplete="off" maxlength="20" placeholder="Ex.: 133">
+            </label>
+            <button class="button button-primary filter-submit" type="submit">Buscar faturas</button>
+          </div>
+        </form>
+
+        <p class="dashboard-message" id="dashboardMessage" role="alert" aria-live="assertive"></p>
+
+        <section class="summary-grid" aria-label="Resumo da página consultada">
+          <article>
+            <span>Faturas na página</span>
+            <strong id="invoiceCount">0</strong>
+          </article>
+          <article>
+            <span>Valor total</span>
+            <strong id="totalAmount">R$ 0,00</strong>
+          </article>
+          <article>
+            <span>Valor pago</span>
+            <strong id="paidAmount">R$ 0,00</strong>
+          </article>
+          <article>
+            <span>Saldo</span>
+            <strong id="balanceAmount">R$ 0,00</strong>
+          </article>
+        </section>
+
+        <section class="table-card" aria-labelledby="invoiceTableTitle">
+          <div class="table-heading">
+            <div>
+              <h2 id="invoiceTableTitle">Lista de faturas</h2>
+              <p id="resultRange">Até 100 resultados por página</p>
+            </div>
+            <span id="tableLoading" class="table-loading" hidden><span class="spinner" aria-hidden="true"></span> Consultando</span>
+          </div>
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Fatura</th>
+                  <th>Emissão</th>
+                  <th>Vencimento</th>
+                  <th>Data pgto.</th>
+                  <th>Cliente / empresa</th>
+                  <th class="numeric">Valor total</th>
+                  <th class="numeric">Valor pago</th>
+                  <th class="numeric">Saldo</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="invoiceRows"></tbody>
+            </table>
+            <div class="empty-state" id="emptyState" hidden>
+              <strong>Nenhuma fatura encontrada</strong>
+              <p>Revise os filtros e faça uma nova consulta.</p>
+            </div>
+          </div>
+          <div class="pagination">
+            <button class="button button-quiet" id="previousPage" type="button" disabled>Anterior</button>
+            <span id="pageIndicator">Página 1</span>
+            <button class="button button-quiet" id="nextPage" type="button" disabled>Próxima</button>
+          </div>
+        </section>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

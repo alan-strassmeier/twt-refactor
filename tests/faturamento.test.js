@@ -1,0 +1,113 @@
+const assert = require('node:assert/strict');
+const test = require('node:test');
+const {
+  validCredentials,
+  createSessionToken,
+  verifySessionToken,
+  sessionCookie
+} = require('../server/faturamento/auth');
+const {
+  buildInvoiceQuery,
+  normalizeInvoice
+} = require('../server/faturamento/brudam');
+const { MAX_ATTEMPTS } = require('../server/faturamento/rate-limit');
+
+const withBillingEnv = (callback) => {
+  const previous = {
+    user: process.env.FATURAMENTO_ADMIN_USER,
+    password: process.env.FATURAMENTO_ADMIN_PASSWORD,
+    secret: process.env.FATURAMENTO_SESSION_SECRET
+  };
+  process.env.FATURAMENTO_ADMIN_USER = 'admin';
+  process.env.FATURAMENTO_ADMIN_PASSWORD = 'senha-segura-de-teste';
+  process.env.FATURAMENTO_SESSION_SECRET = 'segredo-de-sessao-com-mais-de-32-caracteres';
+  try {
+    callback();
+  } finally {
+    if (previous.user === undefined) delete process.env.FATURAMENTO_ADMIN_USER;
+    else process.env.FATURAMENTO_ADMIN_USER = previous.user;
+    if (previous.password === undefined) delete process.env.FATURAMENTO_ADMIN_PASSWORD;
+    else process.env.FATURAMENTO_ADMIN_PASSWORD = previous.password;
+    if (previous.secret === undefined) delete process.env.FATURAMENTO_SESSION_SECRET;
+    else process.env.FATURAMENTO_SESSION_SECRET = previous.secret;
+  }
+};
+
+test('valida credenciais sem expor a senha no cliente', () => {
+  withBillingEnv(() => {
+    assert.equal(validCredentials('admin', 'senha-segura-de-teste'), true);
+    assert.equal(validCredentials('admin', 'senha-incorreta'), false);
+    assert.equal(validCredentials('outro', 'senha-segura-de-teste'), false);
+  });
+});
+
+test('permite até 15 tentativas de login por janela', () => {
+  assert.equal(MAX_ATTEMPTS, 15);
+});
+
+test('cria sessão assinada, expira e configura cookie protegido', () => {
+  withBillingEnv(() => {
+    const now = Date.parse('2026-07-29T12:00:00Z');
+    const token = createSessionToken('admin', now);
+    assert.equal(verifySessionToken(token, now + 1000)?.sub, 'admin');
+    assert.equal(verifySessionToken(`${token}alterado`, now + 1000), null);
+    assert.equal(verifySessionToken(token, now + 9 * 60 * 60 * 1000), null);
+    assert.match(sessionCookie(token, true), /HttpOnly/);
+    assert.match(sessionCookie(token, true), /SameSite=Strict/);
+    assert.match(sessionCookie(token, true), /Secure/);
+  });
+});
+
+test('monta somente os filtros permitidos pela API de faturas', () => {
+  const result = buildInvoiceQuery({
+    'emissao[gte]': '2026-07-01',
+    'emissao[lte]': '2026-07-31',
+    status: '0',
+    cnpj: '97.434.690/0001-29',
+    id: '133',
+    limit: '50',
+    skip: '100',
+    segredo: 'não-deve-passar'
+  });
+  const query = new URLSearchParams(result.query);
+  assert.equal(query.get('emissao[gte]'), '2026-07-01');
+  assert.equal(query.get('status'), '0');
+  assert.equal(query.get('cnpj'), '97434690000129');
+  assert.equal(query.get('id'), '133');
+  assert.equal(query.get('segredo'), null);
+  assert.equal(result.limit, 50);
+  assert.equal(result.skip, 100);
+});
+
+test('rejeita data, status e CNPJ inválidos', () => {
+  assert.throws(() => buildInvoiceQuery({ 'emissao[gte]': '2026-02-30' }), /Data inválida/);
+  assert.throws(() => buildInvoiceQuery({ status: '9' }), /Status inválido/);
+  assert.throws(() => buildInvoiceQuery({ cnpj: '123' }), /CNPJ inválido/);
+});
+
+test('normaliza os dados documentados e calcula saldo', () => {
+  assert.deepEqual(normalizeInvoice({
+    id: '133',
+    valor: '583.62',
+    emissao: '2016-11-11',
+    vencimento: '2016-11-28',
+    status: '1',
+    cliente: {
+      cnpj: '99999999999999',
+      fantasia: 'TESTE'
+    },
+    situacao: 'Liquidado'
+  }), {
+    id: '133',
+    issuedAt: '2016-11-11',
+    dueAt: '2016-11-28',
+    paidAt: null,
+    client: 'TESTE',
+    clientDocument: '99999999999999',
+    total: 583.62,
+    paid: 583.62,
+    balance: 0,
+    status: 1,
+    statusLabel: 'Liquidado'
+  });
+});
