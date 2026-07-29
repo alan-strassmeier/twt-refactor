@@ -13,7 +13,9 @@ const {
   companyTradeNameFromPayload,
   enrichInvoicesWithCompanies,
   invoiceListFromPayload,
+  collectAllInvoicePages,
   filterInvoicesById,
+  filterAndSortCompanyInvoices,
   plainInvoiceIdQuery
 } = require('../server/faturamento/brudam');
 const { MAX_ATTEMPTS } = require('../server/faturamento/rate-limit');
@@ -86,6 +88,7 @@ test('monta somente os filtros permitidos pela API de faturas', () => {
   assert.equal(query.get('segredo'), null);
   assert.equal(result.limit, 50);
   assert.equal(result.skip, 0);
+  assert.equal(result.exactCnpj, '97434690000129');
 });
 
 test('lê os filtros diretamente da URL recebida pela função', () => {
@@ -259,6 +262,41 @@ test('monta a consulta alternativa com o parâmetro id simples', () => {
     plainInvoiceIdQuery('id%5Beq%5D=11381&limit=100&skip=0', 11381),
     'limit=100&skip=0&id=11381'
   );
+});
+
+test('carrega todas as páginas de faturas de um CNPJ', async () => {
+  const firstPage = Array.from({ length: 100 }, (_, index) => ({
+    id: index + 1,
+    fatura: index + 1
+  }));
+  const requestedQueries = [];
+  const result = await collectAllInvoicePages(
+    'cnpj=35820448008110&limit=100&skip=0',
+    firstPage,
+    async (query) => {
+      requestedQueries.push(query);
+      const skip = Number(new URLSearchParams(query).get('skip'));
+      const documentos = skip === 100
+        ? [{ id: 101, fatura: 101 }]
+        : [];
+      return {
+        response: { ok: true },
+        payload: { status: 1, data: { documentos } }
+      };
+    }
+  );
+  assert.equal(result.invoices.length, 101);
+  assert.equal(result.pagesLoaded, 2);
+  assert.equal(new URLSearchParams(requestedQueries[0]).get('skip'), '100');
+});
+
+test('filtra pelo CNPJ e ordena todas as faturas pela emissão decrescente', () => {
+  const invoices = filterAndSortCompanyInvoices([
+    { id: 1, issuedAt: '2023-09-06', clientDocument: '35820448008110' },
+    { id: 3, issuedAt: '2026-06-19', clientDocument: '35820448008110' },
+    { id: 2, issuedAt: '2025-01-10', clientDocument: '04004335000139' }
+  ], '35.820.448/0081-10');
+  assert.deepEqual(invoices.map((invoice) => invoice.id), [3, 1]);
 });
 
 test('ordena faturas pela emissão mais recente por padrão', () => {

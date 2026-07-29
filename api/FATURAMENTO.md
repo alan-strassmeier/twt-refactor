@@ -41,3 +41,8 @@ zero e o saldo é calculado pelo valor total.
 Quando o retorno de faturas contém apenas `cnpj_cliente`, o servidor consulta
 `GET /cadastro/empresas?cnpj=...` e usa o campo `fantasia` para preencher o
 nome do cliente. Os CNPJs são deduplicados e os nomes usam cache temporário.
+
+Nas consultas por CNPJ sem número de fatura, o servidor percorre todas as
+páginas retornadas pela Brudam, mantém apenas o CNPJ solicitado e ordena o
+resultado completo pela emissão mais recente. A consulta consolidada usa cache
+temporário de cinco minutos.

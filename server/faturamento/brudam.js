@@ -3,6 +3,8 @@ const REQUEST_TIMEOUT_MS = 20000;
 const COMPANY_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const COMPANY_NEGATIVE_CACHE_TTL_MS = 5 * 60 * 1000;
 const COMPANY_LOOKUP_CONCURRENCY = 6;
+const COMPANY_INVOICES_CACHE_TTL_MS = 5 * 60 * 1000;
+const MAX_COMPANY_INVOICE_PAGES = 50;
 const STATUS_LABELS = {
   0: 'Em aberto',
   1: 'Liquidada',
@@ -12,6 +14,7 @@ const STATUS_LABELS = {
 let cachedToken = '';
 let cachedTokenExpiresAt = 0;
 const companyNameCache = new Map();
+const companyInvoicesCache = new Map();
 
 const brudamRequest = async (path, options = {}) => {
   const controller = new AbortController();
@@ -114,8 +117,10 @@ const buildInvoiceQuery = (input = {}) => {
   }
 
   const cnpj = String(input.cnpj || '').replace(/\D/g, '');
+  let exactCnpj = null;
   if (cnpj) {
     if (cnpj.length !== 14) throw Object.assign(new Error('CNPJ inválido.'), { statusCode: 422 });
+    exactCnpj = cnpj;
     params.set('cnpj', cnpj);
   }
 
@@ -134,7 +139,7 @@ const buildInvoiceQuery = (input = {}) => {
     : 0;
   params.set('limit', String(limit));
   params.set('skip', String(skip));
-  return { query: params.toString(), limit, skip, exactId };
+  return { query: params.toString(), limit, skip, exactId, exactCnpj };
 };
 
 const numberValue = (value) => {
@@ -311,9 +316,82 @@ const invoiceListFromPayload = (payload) => {
   return findInvoiceList(payload.data);
 };
 
+const invoicePageFingerprint = (invoices) => invoices
+  .map((invoice) => String(firstValue(invoice, ['fatura', 'numero', 'id']) || ''))
+  .join('|');
+
+const collectAllInvoicePages = async (
+  initialQuery,
+  firstInvoices,
+  requestPage = requestInvoices
+) => {
+  const params = new URLSearchParams(initialQuery);
+  const pageSize = integer(params.get('limit'), { min: 1, max: 100 }) ?? 100;
+  const invoices = [...firstInvoices];
+  const fingerprints = new Set();
+  if (firstInvoices.length) fingerprints.add(invoicePageFingerprint(firstInvoices));
+  let pagesLoaded = 1;
+
+  if (firstInvoices.length < pageSize) return { invoices, pagesLoaded };
+
+  for (let page = 1; page < MAX_COMPANY_INVOICE_PAGES; page += 1) {
+    params.set('skip', String(page * pageSize));
+    const result = await requestPage(params.toString());
+    const pageInvoices = invoiceListFromPayload(result.payload);
+    if (
+      !result.response.ok ||
+      Number(result.payload?.status) !== 1 ||
+      pageInvoices === null
+    ) {
+      throw Object.assign(
+        new Error('Não foi possível carregar todas as faturas do cliente.'),
+        { statusCode: 502 }
+      );
+    }
+    pagesLoaded += 1;
+    if (pageInvoices.length === 0) return { invoices, pagesLoaded };
+
+    const fingerprint = invoicePageFingerprint(pageInvoices);
+    if (fingerprints.has(fingerprint)) {
+      throw Object.assign(
+        new Error('A Brudam repetiu uma página durante a consulta por CNPJ.'),
+        { statusCode: 502 }
+      );
+    }
+    fingerprints.add(fingerprint);
+    invoices.push(...pageInvoices);
+    if (pageInvoices.length < pageSize) return { invoices, pagesLoaded };
+  }
+
+  throw Object.assign(
+    new Error('A consulta por CNPJ ultrapassou o limite seguro de páginas.'),
+    { statusCode: 502 }
+  );
+};
+
 const filterInvoicesById = (invoices, exactId) => {
   if (exactId === null || exactId === undefined) return invoices;
   return invoices.filter((invoice) => String(invoice?.id ?? '') === String(exactId));
+};
+
+const filterAndSortCompanyInvoices = (invoices, exactCnpj) => {
+  const normalizedCnpj = String(exactCnpj || '').replace(/\D/g, '');
+  return invoices.filter((invoice) =>
+    String(invoice.clientDocument || '').replace(/\D/g, '') === normalizedCnpj
+  ).sort((left, right) => {
+    const leftDate = Date.parse(String(left.issuedAt || '')) || 0;
+    const rightDate = Date.parse(String(right.issuedAt || '')) || 0;
+    if (leftDate !== rightDate) return rightDate - leftDate;
+    return Number(right.id || 0) - Number(left.id || 0);
+  });
+};
+
+const companyInvoicesCacheKey = (query) => {
+  const params = new URLSearchParams(query);
+  params.delete('limit');
+  params.delete('skip');
+  params.sort();
+  return params.toString();
 };
 
 const plainInvoiceIdQuery = (query, exactId) => {
@@ -324,7 +402,7 @@ const plainInvoiceIdQuery = (query, exactId) => {
 };
 
 const fetchInvoices = async (input) => {
-  const { query, limit, skip, exactId } = buildInvoiceQuery(input);
+  const { query, limit, skip, exactId, exactCnpj } = buildInvoiceQuery(input);
   let { response, payload } = await requestInvoices(query);
   let rawInvoices = invoiceListFromPayload(payload);
   if (!response.ok || Number(payload?.status) !== 1 || rawInvoices === null) {
@@ -347,8 +425,12 @@ const fetchInvoices = async (input) => {
   }
   let normalizedInvoices = rawInvoices.map(normalizeInvoice);
   let invoices = filterInvoicesById(normalizedInvoices, exactId);
-  let upstreamFilter = exactId === null ? 'none' : 'id[eq]';
+  let upstreamCount = rawInvoices.length;
+  let upstreamReportedCount = integer(payload?.data?.qtd_lancamentos, { min: 0 });
+  let upstreamFilter = exactId !== null ? 'id[eq]' : (exactCnpj ? 'cnpj' : 'none');
   let fallbackAttempted = false;
+  let allCompanyInvoicesLoaded = false;
+  let pagesLoaded = 1;
 
   if (exactId !== null && invoices.length === 0) {
     fallbackAttempted = true;
@@ -369,8 +451,40 @@ const fetchInvoices = async (input) => {
         normalizedInvoices = fallbackNormalizedInvoices;
         invoices = fallbackInvoices;
         upstreamFilter = 'id';
+        upstreamCount = rawInvoices.length;
+        upstreamReportedCount = integer(payload?.data?.qtd_lancamentos, { min: 0 });
       }
     }
+  }
+
+  if (exactCnpj && exactId === null) {
+    const cacheKey = companyInvoicesCacheKey(query);
+    const cached = companyInvoicesCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      invoices = cached.invoices;
+      upstreamCount = cached.upstreamCount;
+      upstreamReportedCount = cached.upstreamCount;
+      pagesLoaded = cached.pagesLoaded;
+    } else {
+      if (cached) companyInvoicesCache.delete(cacheKey);
+      const collected = await collectAllInvoicePages(query, rawInvoices);
+      rawInvoices = collected.invoices;
+      normalizedInvoices = rawInvoices.map(normalizeInvoice);
+      invoices = filterAndSortCompanyInvoices(normalizedInvoices, exactCnpj);
+      upstreamCount = rawInvoices.length;
+      upstreamReportedCount = rawInvoices.length;
+      pagesLoaded = collected.pagesLoaded;
+      if (companyInvoicesCache.size >= 20) {
+        companyInvoicesCache.delete(companyInvoicesCache.keys().next().value);
+      }
+      companyInvoicesCache.set(cacheKey, {
+        invoices,
+        upstreamCount,
+        pagesLoaded,
+        expiresAt: Date.now() + COMPANY_INVOICES_CACHE_TTL_MS
+      });
+    }
+    allCompanyInvoicesLoaded = true;
   }
 
   invoices = await enrichInvoicesWithCompanies(invoices);
@@ -378,14 +492,16 @@ const fetchInvoices = async (input) => {
   return {
     invoices,
     pagination: {
-      limit,
-      skip,
-      hasPrevious: skip > 0,
-      hasMore: exactId === null && invoices.length === limit,
-      upstreamReportedCount: integer(payload?.data?.qtd_lancamentos, { min: 0 }),
-      upstreamCount: rawInvoices.length,
+      limit: allCompanyInvoicesLoaded ? invoices.length : limit,
+      skip: allCompanyInvoicesLoaded ? 0 : skip,
+      hasPrevious: allCompanyInvoicesLoaded ? false : skip > 0,
+      hasMore: allCompanyInvoicesLoaded ? false : exactId === null && invoices.length === limit,
+      upstreamReportedCount,
+      upstreamCount,
       upstreamFilter,
-      fallbackAttempted
+      fallbackAttempted,
+      allCompanyInvoicesLoaded,
+      pagesLoaded
     }
   };
 };
@@ -397,7 +513,9 @@ module.exports = {
   companyTradeNameFromPayload,
   enrichInvoicesWithCompanies,
   invoiceListFromPayload,
+  collectAllInvoicePages,
   filterInvoicesById,
+  filterAndSortCompanyInvoices,
   plainInvoiceIdQuery,
   fetchInvoices
 };

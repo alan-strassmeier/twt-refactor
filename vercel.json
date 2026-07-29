@@ -27,6 +27,9 @@
     }
   ],
   "functions": {
+    "api/faturamento/faturas.js": {
+      "maxDuration": 60
+    },
     "api/whatsapp.mjs": {
       "maxDuration": 60,
       "memory": 1024,
