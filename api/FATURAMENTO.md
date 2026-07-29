@@ -29,7 +29,7 @@ Depois de cadastrar ou alterar as variáveis, faça um novo deployment.
 ## Consulta
 
 O servidor aceita os filtros documentados de data de emissão e vencimento,
-status, CNPJ e ID da fatura. `limit` é limitado a 100 registros e `skip` é usado
+status, CNPJ e número da fatura (`id[eq]` na consulta da Brudam). `limit` é limitado a 100 registros e `skip` é usado
 na paginação.
 
 A documentação da Brudam define `valor`, mas não documenta data de pagamento,

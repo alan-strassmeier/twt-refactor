@@ -161,17 +161,24 @@ const normalizeInvoice = (invoice) => {
   const client = invoice?.cliente && typeof invoice.cliente === 'object' ? invoice.cliente : {};
 
   return {
-    id: firstValue(invoice, ['id', 'fatura', 'numero']),
+    id: firstValue(invoice, ['fatura', 'numero', 'id']),
+    internalId: firstValue(invoice, ['id']),
     issuedAt: firstValue(invoice, ['emissao', 'data_emissao']),
     dueAt: firstValue(invoice, ['vencimento', 'data_vencimento']),
     paidAt: firstValue(invoice, ['data_pagamento', 'data_pgto', 'pagamento', 'data_liquidacao']),
-    client: firstValue(client, ['fantasia', 'razao', 'nome']) || firstValue(invoice, ['cliente_nome', 'empresa']) || '',
-    clientDocument: firstValue(client, ['cnpj', 'documento']) || '',
+    client: firstValue(client, ['fantasia', 'razao', 'nome']) ||
+      firstValue(invoice, ['cliente_nome', 'nome_cliente', 'razao_social_cliente', 'empresa']) || '',
+    clientDocument: firstValue(client, ['cnpj', 'documento']) ||
+      firstValue(invoice, ['cnpj_cliente']) || '',
     total,
     paid,
     balance,
     status,
-    statusLabel: String(firstValue(invoice, ['situacao']) || STATUS_LABELS[status] || 'Não informado')
+    statusLabel: String(
+      firstValue(invoice, ['situacao', 'status_descricao']) ||
+      STATUS_LABELS[status] ||
+      'Não informado'
+    )
   };
 };
 

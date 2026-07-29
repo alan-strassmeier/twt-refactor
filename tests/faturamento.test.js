@@ -130,6 +130,7 @@ test('normaliza os dados documentados e calcula saldo', () => {
     situacao: 'Liquidado'
   }), {
     id: '133',
+    internalId: '133',
     issuedAt: '2016-11-11',
     dueAt: '2016-11-28',
     paidAt: null,
@@ -140,6 +141,33 @@ test('normaliza os dados documentados e calcula saldo', () => {
     balance: 0,
     status: 1,
     statusLabel: 'Liquidado'
+  });
+});
+
+test('normaliza o número público da fatura no retorno real da Brudam', () => {
+  assert.deepEqual(normalizeInvoice({
+    id: 20822,
+    id_cliente: 454,
+    cnpj_cliente: '04004335000139',
+    status: '1',
+    status_descricao: 'LIQUIDADO',
+    valor: '677.10',
+    emissao: '2026-07-10',
+    data_vencimento: '2026-07-24',
+    fatura: 11490
+  }), {
+    id: 11490,
+    internalId: 20822,
+    issuedAt: '2026-07-10',
+    dueAt: '2026-07-24',
+    paidAt: null,
+    client: '',
+    clientDocument: '04004335000139',
+    total: 677.1,
+    paid: 677.1,
+    balance: 0,
+    status: 1,
+    statusLabel: 'LIQUIDADO'
   });
 });
 
