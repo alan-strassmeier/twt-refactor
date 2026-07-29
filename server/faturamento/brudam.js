@@ -171,15 +171,38 @@ const normalizeInvoice = (invoice) => {
   };
 };
 
+const isInvoiceObject = (value) =>
+  value &&
+  typeof value === 'object' &&
+  !Array.isArray(value) &&
+  ['id', 'fatura', 'numero', 'valor', 'valor_total', 'emissao', 'vencimento', 'cliente']
+    .some((key) => value[key] !== undefined);
+
+const invoiceListFromPayload = (payload) => {
+  const data = payload?.data;
+  if (Array.isArray(data)) return data;
+  if (!data || typeof data !== 'object') return null;
+  if (isInvoiceObject(data)) return [data];
+
+  for (const key of ['faturas', 'items', 'registros', 'resultados', 'data']) {
+    const value = data[key];
+    if (Array.isArray(value)) return value;
+    if (isInvoiceObject(value)) return [value];
+  }
+
+  return Object.keys(data).length === 0 ? [] : null;
+};
+
 const fetchInvoices = async (input) => {
   const { query, limit, skip } = buildInvoiceQuery(input);
   const { response, payload } = await requestInvoices(query);
-  if (!response.ok || Number(payload?.status) !== 1 || !Array.isArray(payload?.data)) {
+  const rawInvoices = invoiceListFromPayload(payload);
+  if (!response.ok || Number(payload?.status) !== 1 || rawInvoices === null) {
     const error = new Error(payload?.message || 'Não foi possível consultar as faturas.');
     error.statusCode = response.status >= 400 ? response.status : 502;
     throw error;
   }
-  const invoices = payload.data.map(normalizeInvoice);
+  const invoices = rawInvoices.map(normalizeInvoice);
   return {
     invoices,
     pagination: {
@@ -195,5 +218,6 @@ module.exports = {
   STATUS_LABELS,
   buildInvoiceQuery,
   normalizeInvoice,
+  invoiceListFromPayload,
   fetchInvoices
 };

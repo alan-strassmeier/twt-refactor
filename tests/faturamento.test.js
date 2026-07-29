@@ -8,7 +8,8 @@ const {
 } = require('../server/faturamento/auth');
 const {
   buildInvoiceQuery,
-  normalizeInvoice
+  normalizeInvoice,
+  invoiceListFromPayload
 } = require('../server/faturamento/brudam');
 const { MAX_ATTEMPTS } = require('../server/faturamento/rate-limit');
 
@@ -110,4 +111,20 @@ test('normaliza os dados documentados e calcula saldo', () => {
     status: 1,
     statusLabel: 'Liquidado'
   });
+});
+
+test('aceita fatura única ou lista no retorno da Brudam', () => {
+  const invoice = { id: 11490, valor: 100 };
+  assert.deepEqual(invoiceListFromPayload({
+    status: 1,
+    data: invoice
+  }), [invoice]);
+  assert.deepEqual(invoiceListFromPayload({
+    status: 1,
+    data: { faturas: [invoice] }
+  }), [invoice]);
+  assert.deepEqual(invoiceListFromPayload({
+    status: 1,
+    data: []
+  }), []);
 });
