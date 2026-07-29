@@ -15,15 +15,17 @@
     invoiceRows: document.getElementById('invoiceRows'),
     emptyState: document.getElementById('emptyState'),
     tableLoading: document.getElementById('tableLoading'),
-    previousPage: document.getElementById('previousPage'),
-    nextPage: document.getElementById('nextPage'),
-    pageIndicator: document.getElementById('pageIndicator'),
+    previousPageButtons: [...document.querySelectorAll('[data-page-action="previous"]')],
+    nextPageButtons: [...document.querySelectorAll('[data-page-action="next"]')],
+    pageIndicators: [...document.querySelectorAll('[data-page-indicator]')],
     resultRange: document.getElementById('resultRange'),
     invoiceCount: document.getElementById('invoiceCount'),
     totalAmount: document.getElementById('totalAmount'),
     paidAmount: document.getElementById('paidAmount'),
     balanceAmount: document.getElementById('balanceAmount'),
-    sortHeaders: [...document.querySelectorAll('[data-sort-key]')]
+    sortHeaders: [...document.querySelectorAll('[data-sort-key]')],
+    tableHeader: document.querySelector('.table-card thead'),
+    backToTopButton: document.getElementById('backToTopButton')
   };
 
   const state = {
@@ -63,11 +65,28 @@
     return payload;
   };
 
+  let scrollUpdateScheduled = false;
+
+  const updateBackToTopVisibility = () => {
+    const passedTableHeader = !elements.dashboardPanel.hidden &&
+      elements.tableHeader.getBoundingClientRect().bottom <= 0;
+    elements.backToTopButton.hidden = !passedTableHeader;
+    scrollUpdateScheduled = false;
+  };
+
+  const scheduleBackToTopUpdate = () => {
+    if (scrollUpdateScheduled) return;
+    scrollUpdateScheduled = true;
+    window.requestAnimationFrame(updateBackToTopVisibility);
+  };
+
   const showPanel = (panel) => {
     elements.loadingPanel.hidden = panel !== 'loading';
     elements.loginPanel.hidden = panel !== 'login';
     elements.dashboardPanel.hidden = panel !== 'dashboard';
     elements.logoutButton.hidden = panel !== 'dashboard';
+    if (panel !== 'dashboard') elements.backToTopButton.hidden = true;
+    scheduleBackToTopUpdate();
   };
 
   const formatDate = (value) => {
@@ -160,6 +179,21 @@
     updateSortHeaders();
   };
 
+  const updatePaginationControls = () => {
+    const page = Math.floor(state.skip / LIMIT) + 1;
+    const previousDisabled = state.loading || state.skip === 0;
+    const nextDisabled = state.loading || !state.hasMore;
+    elements.pageIndicators.forEach((indicator) => {
+      indicator.textContent = `Página ${page}`;
+    });
+    elements.previousPageButtons.forEach((button) => {
+      button.disabled = previousDisabled;
+    });
+    elements.nextPageButtons.forEach((button) => {
+      button.disabled = nextDisabled;
+    });
+  };
+
   const renderInvoices = (payload) => {
     const invoices = Array.isArray(payload.invoices) ? payload.invoices : [];
     state.invoices = invoices;
@@ -175,15 +209,12 @@
     elements.balanceAmount.textContent = currency.format(sum(financialInvoices, 'balance'));
 
     state.hasMore = Boolean(payload.pagination?.hasMore);
-    const page = Math.floor(state.skip / LIMIT) + 1;
     const start = invoices.length ? state.skip + 1 : 0;
     const end = state.skip + invoices.length;
-    elements.pageIndicator.textContent = `Página ${page}`;
     elements.resultRange.textContent = invoices.length
       ? `Exibindo ${start}–${end}`
       : 'Nenhum resultado nesta página';
-    elements.previousPage.disabled = state.skip === 0;
-    elements.nextPage.disabled = !state.hasMore;
+    updatePaginationControls();
   };
 
   const resetResults = () => {
@@ -202,10 +233,8 @@
     elements.totalAmount.textContent = currency.format(0);
     elements.paidAmount.textContent = currency.format(0);
     elements.balanceAmount.textContent = currency.format(0);
-    elements.pageIndicator.textContent = 'Página 1';
     elements.resultRange.textContent = 'Aguardando consulta';
-    elements.previousPage.disabled = true;
-    elements.nextPage.disabled = true;
+    updatePaginationControls();
     elements.dashboardMessage.textContent = '';
   };
 
@@ -229,13 +258,7 @@
     elements.filterForm.querySelectorAll('button, input, select').forEach((control) => {
       control.disabled = loading;
     });
-    if (!loading) {
-      elements.previousPage.disabled = state.skip === 0;
-      elements.nextPage.disabled = !state.hasMore;
-    } else {
-      elements.previousPage.disabled = true;
-      elements.nextPage.disabled = true;
-    }
+    updatePaginationControls();
   };
 
   const loadInvoices = async () => {
@@ -307,15 +330,19 @@
     resetResults();
   });
 
-  elements.previousPage.addEventListener('click', () => {
-    state.skip = Math.max(0, state.skip - LIMIT);
-    loadInvoices();
+  elements.previousPageButtons.forEach((button) => {
+    button.addEventListener('click', () => {
+      state.skip = Math.max(0, state.skip - LIMIT);
+      loadInvoices();
+    });
   });
 
-  elements.nextPage.addEventListener('click', () => {
-    if (!state.hasMore) return;
-    state.skip += LIMIT;
-    loadInvoices();
+  elements.nextPageButtons.forEach((button) => {
+    button.addEventListener('click', () => {
+      if (!state.hasMore) return;
+      state.skip += LIMIT;
+      loadInvoices();
+    });
   });
 
   elements.sortHeaders.forEach((button) => {
@@ -328,6 +355,17 @@
         state.sortDirection = window.BillingSort.defaultDirectionFor(key);
       }
       renderSortedRows();
+    });
+  });
+
+  window.addEventListener('scroll', scheduleBackToTopUpdate, { passive: true });
+  window.addEventListener('resize', scheduleBackToTopUpdate);
+
+  elements.backToTopButton.addEventListener('click', () => {
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    window.scrollTo({
+      top: 0,
+      behavior: reduceMotion ? 'auto' : 'smooth'
     });
   });
 

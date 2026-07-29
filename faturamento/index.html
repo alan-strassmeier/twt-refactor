@@ -7,9 +7,9 @@
   <meta name="theme-color" content="#112a40">
   <title>Faturamento | TWT Airpack</title>
   <link rel="icon" href="/favicon.ico">
-  <link rel="stylesheet" href="/faturamento/styles.css?v=2">
+  <link rel="stylesheet" href="/faturamento/styles.css?v=4">
   <script src="/faturamento/sort.js?v=1" defer></script>
-  <script src="/faturamento/app.js?v=5" defer></script>
+  <script src="/faturamento/app.js?v=7" defer></script>
 </head>
 <body>
   <div class="page-shell">
@@ -138,7 +138,14 @@
               <h2 id="invoiceTableTitle">Lista de faturas</h2>
               <p id="resultRange">Até 100 resultados por página</p>
             </div>
-            <span id="tableLoading" class="table-loading" hidden><span class="spinner" aria-hidden="true"></span> Consultando</span>
+            <div class="table-heading-actions">
+              <span id="tableLoading" class="table-loading" hidden><span class="spinner" aria-hidden="true"></span> Consultando</span>
+              <nav class="pagination pagination-top" aria-label="Paginação superior das faturas">
+                <button class="button button-quiet" type="button" data-page-action="previous" disabled>Anterior</button>
+                <span data-page-indicator>Página 1</span>
+                <button class="button button-quiet" type="button" data-page-action="next" disabled>Próxima</button>
+              </nav>
+            </div>
           </div>
           <div class="table-scroll">
             <table>
@@ -163,13 +170,19 @@
             </div>
           </div>
           <div class="pagination">
-            <button class="button button-quiet" id="previousPage" type="button" disabled>Anterior</button>
-            <span id="pageIndicator">Página 1</span>
-            <button class="button button-quiet" id="nextPage" type="button" disabled>Próxima</button>
+            <button class="button button-quiet" id="previousPage" type="button" data-page-action="previous" disabled>Anterior</button>
+            <span id="pageIndicator" data-page-indicator>Página 1</span>
+            <button class="button button-quiet" id="nextPage" type="button" data-page-action="next" disabled>Próxima</button>
           </div>
         </section>
       </section>
     </main>
   </div>
+  <button class="back-to-top" id="backToTopButton" type="button"
+    aria-label="Voltar ao topo da página" title="Voltar ao topo" hidden>
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M12 19V5M6.5 10.5 12 5l5.5 5.5"></path>
+    </svg>
+  </button>
 </body>
 </html>
