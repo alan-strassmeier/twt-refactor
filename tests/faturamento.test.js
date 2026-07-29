@@ -13,6 +13,7 @@ const {
   filterInvoicesById
 } = require('../server/faturamento/brudam');
 const { MAX_ATTEMPTS } = require('../server/faturamento/rate-limit');
+const { queryFromRequest } = require('../server/faturamento/http');
 
 const withBillingEnv = (callback) => {
   const previous = {
@@ -80,6 +81,22 @@ test('monta somente os filtros permitidos pela API de faturas', () => {
   assert.equal(query.get('segredo'), null);
   assert.equal(result.limit, 50);
   assert.equal(result.skip, 0);
+});
+
+test('lê os filtros diretamente da URL recebida pela função', () => {
+  assert.deepEqual(queryFromRequest({
+    url: '/api/faturamento/faturas?id=11490&status=0&emissao%5Bgte%5D=2026-07-01&limit=100&skip=0',
+    headers: {
+      host: 'www.twt.com.br',
+      'x-forwarded-proto': 'https'
+    }
+  }), {
+    id: '11490',
+    status: '0',
+    'emissao[gte]': '2026-07-01',
+    limit: '100',
+    skip: '0'
+  });
 });
 
 test('rejeita data, status e CNPJ inválidos', () => {

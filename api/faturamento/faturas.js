@@ -1,6 +1,6 @@
 const { sessionFromRequest } = require('../../server/faturamento/auth');
 const { fetchInvoices } = require('../../server/faturamento/brudam');
-const { sendJson } = require('../../server/faturamento/http');
+const { sendJson, queryFromRequest } = require('../../server/faturamento/http');
 
 module.exports = async (req, res) => {
   if (req.method !== 'GET') {
@@ -14,7 +14,7 @@ module.exports = async (req, res) => {
   }
 
   try {
-    const result = await fetchInvoices(req.query || {});
+    const result = await fetchInvoices(queryFromRequest(req));
     sendJson(res, 200, result);
   } catch (error) {
     const statusCode = Number(error.statusCode) || (error.name === 'AbortError' ? 504 : 502);

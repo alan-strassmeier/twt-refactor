@@ -43,9 +43,21 @@ const clientAddress = (req) => {
   return forwarded || req.socket?.remoteAddress || 'unknown';
 };
 
+const queryFromRequest = (req) => {
+  const requestUrl = String(req.url || '/');
+  if (requestUrl.length > 8192) {
+    throw Object.assign(new Error('URL de consulta muito grande.'), { statusCode: 414 });
+  }
+  const url = new URL(requestUrl, requestOrigin(req) || 'https://internal.invalid');
+  const query = {};
+  for (const [key, value] of url.searchParams) query[key] = value;
+  return query;
+};
+
 module.exports = {
   sendJson,
   parseJsonBody,
   hasSameOrigin,
-  clientAddress
+  clientAddress,
+  queryFromRequest
 };
