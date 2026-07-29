@@ -206,10 +206,11 @@
 
   const loadInvoices = async () => {
     if (state.loading) return;
+    const params = filterParams();
     setLoading(true);
     elements.dashboardMessage.textContent = '';
     try {
-      const payload = await requestJson(`/api/faturamento/faturas?${filterParams()}`);
+      const payload = await requestJson(`/api/faturamento/faturas?${params}`);
       renderInvoices(payload);
     } catch (error) {
       if (error.status === 401) {

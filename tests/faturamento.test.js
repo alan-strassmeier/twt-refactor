@@ -1,4 +1,5 @@
 const assert = require('node:assert/strict');
+const { readFileSync } = require('node:fs');
 const test = require('node:test');
 const {
   validCredentials,
@@ -97,6 +98,16 @@ test('lê os filtros diretamente da URL recebida pela função', () => {
     limit: '100',
     skip: '0'
   });
+});
+
+test('coleta os filtros do formulário antes de desabilitar os campos', () => {
+  const source = readFileSync(require.resolve('../faturamento/app.js'), 'utf8');
+  const loadInvoices = source.slice(
+    source.indexOf('const loadInvoices = async'),
+    source.indexOf("elements.loginForm.addEventListener")
+  );
+  assert.ok(loadInvoices.indexOf('const params = filterParams();') < loadInvoices.indexOf('setLoading(true);'));
+  assert.match(loadInvoices, /faturas\?\$\{params\}/);
 });
 
 test('rejeita data, status e CNPJ inválidos', () => {
