@@ -24,8 +24,13 @@ const exampleImageUrl = (configuredUrl) => {
 };
 const EXAMPLE_IMAGE_URL = exampleImageUrl(process.env.WHATSAPP_EXAMPLE_IMAGE_URL);
 const HUMAN_CONTACT_MESSAGE = 'Olá, gostaria de falar sobre uma entrega';
+const BRUDAM_UNAVAILABLE_MESSAGE =
+  'O sistema da Brudam está com uma instabilidade momentânea. A baixa não foi confirmada; tente novamente em alguns minutos.';
 const humanContactUrl = () =>
   `https://wa.me/555193162358?text=${encodeURIComponent(HUMAN_CONTACT_MESSAGE)}`;
+
+const processingFailureMessage = (error, fallback) =>
+  error?.code === 'BRUDAM_UNAVAILABLE' ? BRUDAM_UNAVAILABLE_MESSAGE : fallback;
 
 const formatTimestamp = (epochSeconds) => {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -298,8 +303,10 @@ const processImage = async (image) => {
     await store.clearPendingDelivery(image.senderPhone).catch(() => {});
     await store.saveConversationState(image.senderPhone, AWAITING_PHOTO).catch(() => {});
     await store.releaseMessage(image.messageId).catch(() => {});
-    await safeReply(image.senderPhone,
-      'Não foi possível analisar este comprovante ou abrir o formulário. A baixa não foi confirmada; envie a foto novamente.');
+    await safeReply(image.senderPhone, processingFailureMessage(
+      error,
+      'Não foi possível analisar este comprovante ou abrir o formulário. A baixa não foi confirmada; envie a foto novamente.'
+    ));
   }
 };
 
@@ -342,8 +349,10 @@ const processReceiverText = async (text, pending) => {
   } catch (error) {
     console.error('[whatsapp:receiver]', { messageId: text.messageId, error });
     if (!occurrenceCreated) await store.releaseMessage(text.messageId).catch(() => {});
-    await safeReply(text.senderPhone,
-      'Não foi possível registrar este comprovante. A baixa não foi confirmada; envie os dados novamente.');
+    await safeReply(text.senderPhone, processingFailureMessage(
+      error,
+      'Não foi possível registrar este comprovante. A baixa não foi confirmada; envie os dados novamente.'
+    ));
   }
 };
 
@@ -446,6 +455,7 @@ module.exports = {
   parseReceiverFlowReply,
   receiverInstructions,
   exampleImageUrl,
+  processingFailureMessage,
   flowTokenFor,
   processWebhook
 };

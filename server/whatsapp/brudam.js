@@ -4,16 +4,29 @@ const TIMEOUT_MS = 20000;
 let cachedToken = '';
 let cachedTokenExpiresAt = 0;
 
+const unavailableError = (message, cause) => {
+  const error = new Error(message, cause ? { cause } : undefined);
+  error.code = 'BRUDAM_UNAVAILABLE';
+  return error;
+};
+
 const request = async (path, options = {}) => {
-  const response = await fetch(`${BASE_URL}${path}`, {
-    ...options,
-    signal: AbortSignal.timeout(TIMEOUT_MS)
-  });
-  const contentType = response.headers.get('content-type') || '';
-  const payload = contentType.includes('application/json')
-    ? await response.json()
-    : { status: 0, message: await response.text() };
-  return { response, payload };
+  try {
+    const response = await fetch(`${BASE_URL}${path}`, {
+      ...options,
+      signal: AbortSignal.timeout(TIMEOUT_MS)
+    });
+    const contentType = response.headers.get('content-type') || '';
+    const payload = contentType.includes('application/json')
+      ? await response.json()
+      : { status: 0, message: await response.text() };
+    return { response, payload };
+  } catch (error) {
+    const reason = error?.name === 'TimeoutError'
+      ? 'tempo limite excedido'
+      : 'falha de comunicação';
+    throw unavailableError(`Brudam temporariamente indisponível: ${reason}.`, error);
+  }
 };
 
 const tokenExpiration = (token) => {
@@ -40,7 +53,7 @@ const authenticate = async (force = false) => {
   });
   const token = payload?.data?.access_key;
   if (!response.ok || typeof token !== 'string' || !token) {
-    throw new Error(`Falha no login Brudam: ${payload?.message || response.status}`);
+    throw unavailableError(`Falha no login Brudam: ${payload?.message || response.status}`);
   }
   cachedToken = token;
   cachedTokenExpiresAt = tokenExpiration(token);

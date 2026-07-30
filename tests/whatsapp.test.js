@@ -18,6 +18,7 @@ const {
   parseReceiverFlowReply,
   flowTokenFor,
   exampleImageUrl,
+  processingFailureMessage,
   receiverInstructions
 } = require('../server/whatsapp/processor');
 const { verifySignature } = require('../server/whatsapp/signature');
@@ -186,6 +187,20 @@ test('troca automaticamente a URL antiga da imagem pela versão sem cache', () =
   assert.equal(
     exampleImageUrl('https://cdn.example.com/comprovante.jpeg'),
     'https://cdn.example.com/comprovante.jpeg'
+  );
+});
+
+test('informa instabilidade quando a Brudam está indisponível', () => {
+  const error = Object.assign(new Error('Falha no login Brudam'), {
+    code: 'BRUDAM_UNAVAILABLE'
+  });
+  assert.equal(
+    processingFailureMessage(error, 'Mensagem genérica'),
+    'O sistema da Brudam está com uma instabilidade momentânea. A baixa não foi confirmada; tente novamente em alguns minutos.'
+  );
+  assert.equal(
+    processingFailureMessage(new Error('Falha na foto'), 'Mensagem genérica'),
+    'Mensagem genérica'
   );
 });
 
