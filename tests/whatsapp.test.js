@@ -1,7 +1,12 @@
 const assert = require('node:assert/strict');
 const { createHmac } = require('node:crypto');
 const test = require('node:test');
-const { normalizeCteKey, selectCteBarcode } = require('../server/whatsapp/barcode');
+const sharp = require('sharp');
+const {
+  normalizeCteKey,
+  selectCteBarcode,
+  enhanceForBarcode
+} = require('../server/whatsapp/barcode');
 const {
   buildCostsQuery,
   isDuplicateOccurrence,
@@ -19,6 +24,7 @@ const {
   parseReceiverFlowReply,
   flowTokenFor,
   exampleImageUrl,
+  processingFailureMessage,
   receiverInstructions
 } = require('../server/whatsapp/processor');
 const { verifySignature } = require('../server/whatsapp/signature');
@@ -190,6 +196,20 @@ test('troca automaticamente a URL antiga da imagem pela versão sem cache', () =
   );
 });
 
+test('informa instabilidade quando a Brudam está indisponível', () => {
+  const error = Object.assign(new Error('Falha no login Brudam'), {
+    code: 'BRUDAM_UNAVAILABLE'
+  });
+  assert.equal(
+    processingFailureMessage(error, 'Mensagem genérica'),
+    'O sistema da Brudam está com uma instabilidade momentânea. A baixa não foi confirmada; tente novamente em alguns minutos.'
+  );
+  assert.equal(
+    processingFailureMessage(new Error('Falha na foto'), 'Mensagem genérica'),
+    'Mensagem genérica'
+  );
+});
+
 test('identifica baixa existente no retorno de rastreamento', () => {
   assert.equal(hasDeliveryOccurrence({
     status: 1,
@@ -272,4 +292,20 @@ test('seleciona somente uma chave CT-e válida retornada pelo leitor', () => {
   assert.equal(selectCteBarcode([
     { isValid: false, text: key, format: 'Code128' }
   ]), null);
+});
+
+test('amplia e normaliza uma foto antes da segunda tentativa', async () => {
+  const input = await sharp({
+    create: {
+      width: 40,
+      height: 20,
+      channels: 3,
+      background: '#d0d0d0'
+    }
+  }).jpeg().toBuffer();
+  const output = await enhanceForBarcode(input);
+  const metadata = await sharp(output).metadata();
+  assert.equal(metadata.format, 'png');
+  assert.equal(metadata.width, 80);
+  assert.equal(metadata.height, 40);
 });
