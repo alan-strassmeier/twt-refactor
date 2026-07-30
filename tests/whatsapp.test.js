@@ -1,7 +1,12 @@
 const assert = require('node:assert/strict');
 const { createHmac } = require('node:crypto');
 const test = require('node:test');
-const { normalizeCteKey, selectCteBarcode } = require('../server/whatsapp/barcode');
+const sharp = require('sharp');
+const {
+  normalizeCteKey,
+  selectCteBarcode,
+  enhanceForBarcode
+} = require('../server/whatsapp/barcode');
 const {
   buildCostsQuery,
   isDuplicateOccurrence,
@@ -252,4 +257,20 @@ test('seleciona somente uma chave CT-e válida retornada pelo leitor', () => {
   assert.equal(selectCteBarcode([
     { isValid: false, text: key, format: 'Code128' }
   ]), null);
+});
+
+test('amplia e normaliza uma foto antes da segunda tentativa', async () => {
+  const input = await sharp({
+    create: {
+      width: 40,
+      height: 20,
+      channels: 3,
+      background: '#d0d0d0'
+    }
+  }).jpeg().toBuffer();
+  const output = await enhanceForBarcode(input);
+  const metadata = await sharp(output).metadata();
+  assert.equal(metadata.format, 'png');
+  assert.equal(metadata.width, 80);
+  assert.equal(metadata.height, 40);
 });

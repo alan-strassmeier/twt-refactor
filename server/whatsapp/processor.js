@@ -197,7 +197,7 @@ const sendMenu = async (message) => {
 const sendExample = (to) => sendImage(
   to,
   EXAMPLE_IMAGE_URL,
-  'Por favor, tire uma foto igual ao exemplo acima.'
+  'Por favor, envie uma foto igual ao exemplo acima.'
 );
 
 const sendReceiverFlow = (to, cte, imageMessageId) => sendFlow(to, {
