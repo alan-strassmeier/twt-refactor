@@ -288,6 +288,20 @@ const companyTradeNameFromPayload = (payload, cnpj, clientId = null) => {
   return String(names.find((name) => !isMissingClientName(name)) || '').trim();
 };
 
+const companyLookupPath = (filter = {}) => {
+  const params = new URLSearchParams();
+  if (filter.cnpj !== undefined && filter.cnpj !== null) {
+    const cnpj = String(filter.cnpj).replace(/\D/g, '');
+    if (cnpj.length !== 14) return '';
+    params.set('cnpj', cnpj);
+  } else {
+    const id = integer(filter.id, { min: 1 });
+    if (id === null) return '';
+    params.set('id', String(id));
+  }
+  return `/cadastro/empresas?${params}`;
+};
+
 const fetchCompanyTradeName = async (cnpj, clientId = null) => {
   const normalizedCnpj = String(cnpj || '').replace(/\D/g, '');
   const normalizedClientId = integer(clientId, { min: 1 });
@@ -302,16 +316,14 @@ const fetchCompanyTradeName = async (cnpj, clientId = null) => {
   }
 
   const filters = [];
-  if (validCnpj(normalizedCnpj)) filters.push({ cnpj: normalizedCnpj });
+  if (normalizedCnpj.length === 14) filters.push({ cnpj: normalizedCnpj });
   if (normalizedClientId !== null) filters.push({ id: String(normalizedClientId) });
   if (!filters.length) return '';
 
   const attempts = [];
   for (const filter of filters) {
     try {
-      const result = await authenticatedGet(
-        `/cadastro/empresas?${new URLSearchParams(filter)}`
-      );
+      const result = await authenticatedGet(companyLookupPath(filter));
       const name = result.response.ok
         ? companyTradeNameFromPayload(result.payload, normalizedCnpj, normalizedClientId)
         : '';
@@ -351,7 +363,7 @@ const enrichInvoicesWithCompanies = async (invoices, lookup = fetchCompanyTradeN
     const cnpj = String(invoice.clientDocument || '').replace(/\D/g, '');
     const clientId = integer(invoice.clientId, { min: 1 });
     if (cnpj.length !== 14 && clientId === null) return;
-    const key = clientId !== null ? `id:${clientId}` : `cnpj:${cnpj}`;
+    const key = cnpj.length === 14 ? `cnpj:${cnpj}` : `id:${clientId}`;
     if (!targets.has(key)) targets.set(key, { cnpj, clientId });
   });
   const lookups = [...targets.entries()];
@@ -379,7 +391,7 @@ const enrichInvoicesWithCompanies = async (invoices, lookup = fetchCompanyTradeN
     if (!isMissingClientName(invoice.client)) return invoice;
     const cnpj = String(invoice.clientDocument || '').replace(/\D/g, '');
     const clientId = integer(invoice.clientId, { min: 1 });
-    const key = clientId !== null ? `id:${clientId}` : `cnpj:${cnpj}`;
+    const key = cnpj.length === 14 ? `cnpj:${cnpj}` : `id:${clientId}`;
     const client = namesByTarget.get(key) || '';
     return client ? { ...invoice, client } : invoice;
   });
@@ -800,6 +812,7 @@ module.exports = {
   normalizeVisibleInvoices,
   validCnpj,
   companyTradeNameFromPayload,
+  companyLookupPath,
   enrichInvoicesWithCompanies,
   invoiceListFromPayload,
   collectAllInvoicePages,

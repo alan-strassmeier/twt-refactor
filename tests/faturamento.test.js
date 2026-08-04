@@ -13,6 +13,7 @@ const {
   normalizeVisibleInvoices,
   validCnpj,
   companyTradeNameFromPayload,
+  companyLookupPath,
   enrichInvoicesWithCompanies,
   invoiceListFromPayload,
   collectAllInvoicePages,
@@ -246,6 +247,16 @@ test('obtém o nome fantasia pelo CNPJ no retorno de empresas', () => {
     message: 'OK',
     status: 1,
     data: [{
+      cnpj: '11280282000144',
+      fantasia: 'BHZ - TARGET CARGO',
+      razao: 'TARGET TRANSPORTE DE CARGAS E ENCOMENDAS EXPRESSAS EIRELI',
+      id: '306043'
+    }]
+  }, '11.280.282/0001-44'), 'BHZ - TARGET CARGO');
+  assert.equal(companyTradeNameFromPayload({
+    message: 'OK',
+    status: 1,
+    data: [{
       cnpj: '35820448008110',
       fantasia: 'EMPRESA DE TESTE',
       razao: 'EMPRESA DE TESTE LTDA'
@@ -274,6 +285,17 @@ test('obtém o nome fantasia pelo CNPJ no retorno de empresas', () => {
   }, '06404676000195', 712), 'CLIENTE COM CNPJ INVÁLIDO');
 });
 
+test('monta a consulta de empresa com o CNPJ sem máscara', () => {
+  assert.equal(
+    companyLookupPath({ cnpj: '11.280.282/0001-44' }),
+    '/cadastro/empresas?cnpj=11280282000144'
+  );
+  assert.equal(
+    companyLookupPath({ cnpj: '30.455.661/0019-00' }),
+    '/cadastro/empresas?cnpj=30455661001900'
+  );
+});
+
 test('enriquece faturas por CNPJ sem repetir consultas', async () => {
   const calls = [];
   const invoices = await enrichInvoicesWithCompanies([
@@ -288,6 +310,22 @@ test('enriquece faturas por CNPJ sem repetir consultas', async () => {
   assert.equal(invoices[0].client, 'NOME FANTASIA');
   assert.equal(invoices[1].client, 'NOME FANTASIA');
   assert.equal(invoices[2].client, 'JÁ INFORMADO');
+});
+
+test('usa o CNPJ como chave principal mesmo quando o id_cliente se repete', async () => {
+  const calls = [];
+  const invoices = await enrichInvoicesWithCompanies([
+    { id: 1, client: '', clientDocument: '11280282000144', clientId: 306043 },
+    { id: 2, client: '', clientDocument: '30455661001900', clientId: 306043 }
+  ], async (cnpj) => {
+    calls.push(cnpj);
+    return cnpj === '11280282000144' ? 'BHZ - TARGET CARGO' : 'OUTRA EMPRESA';
+  });
+  assert.deepEqual(calls.sort(), ['11280282000144', '30455661001900']);
+  assert.deepEqual(invoices.map((invoice) => invoice.client), [
+    'BHZ - TARGET CARGO',
+    'OUTRA EMPRESA'
+  ]);
 });
 
 test('aceita fatura única ou lista no retorno da Brudam', () => {
