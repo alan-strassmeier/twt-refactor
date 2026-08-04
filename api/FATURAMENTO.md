@@ -55,6 +55,11 @@ O servidor percorre as páginas da consulta, mantém somente faturas com saldo
 positivo que não estejam liquidadas ou canceladas, enriquece os nomes pelo
 cadastro de empresas e agrupa os valores por CNPJ.
 
+Como o gráfico representa somente valores em aberto, a consulta consolidada
+solicita `status=0` à Brudam quando o filtro de status estiver em `Todos`. As
+páginas são carregadas em pequenos lotes paralelos para consultas de períodos
+longos não ultrapassarem o tempo da função serverless.
+
 O retorno contém `totalPending`, `invoiceCount`, `companyCount` e `debtors`.
 Cada item de `debtors` informa nome, CNPJ, saldo, percentual do total e número
 de faturas pendentes. O resumo consolidado usa cache temporário de cinco

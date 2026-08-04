@@ -5,6 +5,7 @@ const COMPANY_LOOKUP_CONCURRENCY = 6;
 const COMPANY_INVOICES_CACHE_TTL_MS = 5 * 60 * 1000;
 const DEBTOR_SUMMARY_CACHE_TTL_MS = 5 * 60 * 1000;
 const MAX_COMPANY_INVOICE_PAGES = 50;
+const INVOICE_PAGE_CONCURRENCY = 4;
 const STATUS_LABELS = {
   0: 'Em aberto',
   1: 'Liquidada',
@@ -467,33 +468,53 @@ const collectAllInvoicePages = async (
 
   if (firstInvoices.length < pageSize) return { invoices, pagesLoaded };
 
-  for (let page = 1; page < MAX_COMPANY_INVOICE_PAGES; page += 1) {
-    params.set('skip', String(page * pageSize));
-    const result = await requestPage(params.toString());
-    const pageInvoices = invoiceListFromPayload(result.payload);
-    if (
-      !result.response.ok ||
-      Number(result.payload?.status) !== 1 ||
-      pageInvoices === null
-    ) {
-      throw Object.assign(
-        new Error('Não foi possível carregar todas as faturas do cliente.'),
-        { statusCode: 502 }
-      );
-    }
-    pagesLoaded += 1;
-    if (pageInvoices.length === 0) return { invoices, pagesLoaded };
+  for (
+    let firstPage = 1;
+    firstPage < MAX_COMPANY_INVOICE_PAGES;
+    firstPage += INVOICE_PAGE_CONCURRENCY
+  ) {
+    const pageNumbers = Array.from(
+      { length: Math.min(INVOICE_PAGE_CONCURRENCY, MAX_COMPANY_INVOICE_PAGES - firstPage) },
+      (_, index) => firstPage + index
+    );
+    const results = await Promise.all(pageNumbers.map(async (page) => {
+      const pageParams = new URLSearchParams(params);
+      pageParams.set('skip', String(page * pageSize));
+      try {
+        return { result: await requestPage(pageParams.toString()) };
+      } catch (error) {
+        return { error };
+      }
+    }));
 
-    const fingerprint = invoicePageFingerprint(pageInvoices);
-    if (fingerprints.has(fingerprint)) {
-      throw Object.assign(
-        new Error('A Brudam repetiu uma página durante a consulta por CNPJ.'),
-        { statusCode: 502 }
-      );
+    for (const entry of results) {
+      if (entry.error) throw entry.error;
+      const { result } = entry;
+      const pageInvoices = invoiceListFromPayload(result.payload);
+      if (
+        !result.response.ok ||
+        Number(result.payload?.status) !== 1 ||
+        pageInvoices === null
+      ) {
+        throw Object.assign(
+          new Error('Não foi possível carregar todas as páginas de faturas.'),
+          { statusCode: 502 }
+        );
+      }
+      pagesLoaded += 1;
+      if (pageInvoices.length === 0) return { invoices, pagesLoaded };
+
+      const fingerprint = invoicePageFingerprint(pageInvoices);
+      if (fingerprints.has(fingerprint)) {
+        throw Object.assign(
+          new Error('A Brudam repetiu uma página durante a consulta paginada.'),
+          { statusCode: 502 }
+        );
+      }
+      fingerprints.add(fingerprint);
+      invoices.push(...pageInvoices);
+      if (pageInvoices.length < pageSize) return { invoices, pagesLoaded };
     }
-    fingerprints.add(fingerprint);
-    invoices.push(...pageInvoices);
-    if (pageInvoices.length < pageSize) return { invoices, pagesLoaded };
   }
 
   throw Object.assign(
@@ -632,8 +653,22 @@ const debtorSummaryCacheKey = (query) => {
   return params.toString();
 };
 
+const debtorInvoiceInput = (input = {}) => {
+  const requestedStatus = String(input.status ?? '').trim();
+  if (requestedStatus && requestedStatus !== '0') return null;
+  return { ...input, status: '0', limit: 100, skip: 0 };
+};
+
 const fetchDebtorSummary = async (input) => {
-  const { query, exactId } = buildInvoiceQuery({ ...input, limit: 100, skip: 0 });
+  const debtorInput = debtorInvoiceInput(input);
+  if (!debtorInput) {
+    return {
+      ...buildDebtorSummary([]),
+      pagesLoaded: 0,
+      recordsRead: 0
+    };
+  }
+  const { query, exactId } = buildInvoiceQuery(debtorInput);
   let params = new URLSearchParams(query);
   params.set('limit', '100');
   params.set('skip', '0');
@@ -821,6 +856,7 @@ module.exports = {
   invoiceMatchesQuery,
   isPendingInvoice,
   buildDebtorSummary,
+  debtorInvoiceInput,
   plainInvoiceIdQuery,
   fetchDebtorSummary,
   fetchInvoices

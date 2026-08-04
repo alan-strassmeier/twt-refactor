@@ -22,6 +22,7 @@ const {
   invoiceMatchesQuery,
   isPendingInvoice,
   buildDebtorSummary,
+  debtorInvoiceInput,
   plainInvoiceIdQuery
 } = require('../server/faturamento/brudam');
 const { MAX_ATTEMPTS } = require('../server/faturamento/rate-limit');
@@ -436,6 +437,10 @@ test('carrega todas as páginas de faturas de um CNPJ', async () => {
   assert.equal(result.invoices.length, 101);
   assert.equal(result.pagesLoaded, 2);
   assert.equal(new URLSearchParams(requestedQueries[0]).get('skip'), '100');
+  assert.deepEqual(
+    requestedQueries.map((query) => Number(new URLSearchParams(query).get('skip'))),
+    [100, 200, 300, 400]
+  );
 });
 
 test('filtra pelo CNPJ e ordena todas as faturas pela emissão decrescente', () => {
@@ -482,6 +487,21 @@ test('aplica localmente os filtros usados no modo gráfico', () => {
   ), true);
   assert.equal(invoiceMatchesQuery(invoice, 'emissao%5Bgte%5D=2026-08-04'), false);
   assert.equal(invoiceMatchesQuery(invoice, 'cnpj=06908675000110'), false);
+});
+
+test('limita a consolidação do gráfico às faturas em aberto', () => {
+  assert.deepEqual(debtorInvoiceInput({
+    'emissao[gte]': '2026-01-01',
+    limit: 20,
+    skip: 400
+  }), {
+    'emissao[gte]': '2026-01-01',
+    status: '0',
+    limit: 100,
+    skip: 0
+  });
+  assert.equal(debtorInvoiceInput({ status: '1' }), null);
+  assert.equal(debtorInvoiceInput({ status: '2' }), null);
 });
 
 test('resume somente saldos pendentes por empresa', () => {
