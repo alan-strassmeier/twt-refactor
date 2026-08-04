@@ -18,6 +18,9 @@ const {
   collectAllInvoicePages,
   filterInvoicesById,
   filterAndSortCompanyInvoices,
+  invoiceMatchesQuery,
+  isPendingInvoice,
+  buildDebtorSummary,
   plainInvoiceIdQuery
 } = require('../server/faturamento/brudam');
 const { MAX_ATTEMPTS } = require('../server/faturamento/rate-limit');
@@ -425,4 +428,86 @@ test('ordena números e textos nos dois sentidos', () => {
   assert.deepEqual(sortInvoices(invoices, 'total', 'asc').map((invoice) => invoice.id), [2, 3, 1]);
   assert.deepEqual(sortInvoices(invoices, 'total', 'desc').map((invoice) => invoice.id), [1, 3, 2]);
   assert.deepEqual(sortInvoices(invoices, 'client', 'asc').map((invoice) => invoice.id), [2, 3, 1]);
+});
+
+test('aplica localmente os filtros usados no modo gráfico', () => {
+  const invoice = {
+    id: 11586,
+    issuedAt: '2026-08-03',
+    dueAt: '2026-08-14',
+    clientDocument: '28759933000186',
+    status: 0
+  };
+  assert.equal(invoiceMatchesQuery(
+    invoice,
+    'emissao%5Bgte%5D=2026-08-01&vencimento%5Blte%5D=2026-08-31&status=0'
+  ), true);
+  assert.equal(invoiceMatchesQuery(invoice, 'emissao%5Bgte%5D=2026-08-04'), false);
+  assert.equal(invoiceMatchesQuery(invoice, 'cnpj=06908675000110'), false);
+});
+
+test('resume somente saldos pendentes por empresa', () => {
+  const invoices = [
+    {
+      id: 1,
+      client: 'EMPRESA A',
+      clientDocument: '11111111000111',
+      balance: 100,
+      status: 0,
+      statusLabel: 'PENDENTE'
+    },
+    {
+      id: 2,
+      client: 'EMPRESA A',
+      clientDocument: '11111111000111',
+      balance: 50.25,
+      status: 0,
+      statusLabel: 'EM ABERTO'
+    },
+    {
+      id: 3,
+      client: 'EMPRESA B',
+      clientDocument: '22222222000122',
+      balance: 49.75,
+      status: null,
+      statusLabel: 'PENDENTE'
+    },
+    {
+      id: 4,
+      client: 'EMPRESA C',
+      clientDocument: '33333333000133',
+      balance: 80,
+      status: 1,
+      statusLabel: 'LIQUIDADO'
+    },
+    {
+      id: 5,
+      client: 'EMPRESA D',
+      clientDocument: '44444444000144',
+      balance: 30,
+      status: 2,
+      statusLabel: 'CANCELADA'
+    }
+  ];
+  assert.equal(isPendingInvoice(invoices[0]), true);
+  assert.equal(isPendingInvoice(invoices[3]), false);
+
+  const summary = buildDebtorSummary(invoices);
+  assert.equal(summary.totalPending, 200);
+  assert.equal(summary.invoiceCount, 3);
+  assert.equal(summary.companyCount, 2);
+  assert.equal(summary.debtors[0].name, 'EMPRESA A');
+  assert.equal(summary.debtors[0].value, 150.25);
+  assert.equal(summary.debtors[0].percentage, 75.125);
+  assert.equal(summary.debtors[1].value, 49.75);
+});
+
+test('expõe o modo gráfico e envia a visualização de devedores à API', () => {
+  const html = readFileSync(require.resolve('../faturamento/index.html'), 'utf8');
+  const source = readFileSync(require.resolve('../faturamento/app.js'), 'utf8');
+  assert.match(html, /data-view-mode="debtors"/);
+  assert.match(html, /id="debtorChart"/);
+  assert.match(html, /id="chartTooltipPercentage"/);
+  assert.match(source, /params\.set\('view', 'debtors'\)/);
+  assert.match(source, /createElementNS\('http:\/\/www\.w3\.org\/2000\/svg', 'circle'\)/);
 });

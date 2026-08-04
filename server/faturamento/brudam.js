@@ -3,6 +3,7 @@ const REQUEST_TIMEOUT_MS = 20000;
 const COMPANY_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const COMPANY_LOOKUP_CONCURRENCY = 6;
 const COMPANY_INVOICES_CACHE_TTL_MS = 5 * 60 * 1000;
+const DEBTOR_SUMMARY_CACHE_TTL_MS = 5 * 60 * 1000;
 const MAX_COMPANY_INVOICE_PAGES = 50;
 const STATUS_LABELS = {
   0: 'Em aberto',
@@ -14,6 +15,7 @@ let cachedToken = '';
 let cachedTokenExpiresAt = 0;
 const companyNameCache = new Map();
 const companyInvoicesCache = new Map();
+const debtorSummaryCache = new Map();
 
 const brudamRequest = async (path, options = {}) => {
   const controller = new AbortController();
@@ -520,7 +522,172 @@ const plainInvoiceIdQuery = (query, exactId) => {
   return params.toString();
 };
 
+const invoiceMatchesQuery = (invoice, query) => {
+  const params = query instanceof URLSearchParams ? query : new URLSearchParams(query);
+  const exactId = params.get('id[eq]') || params.get('id');
+  if (exactId && String(invoice.id ?? '') !== String(exactId)) return false;
+
+  const exactCnpj = String(params.get('cnpj') || '').replace(/\D/g, '');
+  if (
+    exactCnpj &&
+    String(invoice.clientDocument || '').replace(/\D/g, '') !== exactCnpj
+  ) return false;
+
+  const status = params.get('status');
+  if (status !== null && status !== '' && String(invoice.status) !== status) return false;
+
+  const issuedAt = String(invoice.issuedAt || '').slice(0, 10);
+  const dueAt = String(invoice.dueAt || '').slice(0, 10);
+  const comparisons = [
+    [issuedAt, params.get('emissao[gt]'), (left, right) => left > right],
+    [issuedAt, params.get('emissao[gte]'), (left, right) => left >= right],
+    [issuedAt, params.get('emissao[lt]'), (left, right) => left < right],
+    [issuedAt, params.get('emissao[lte]'), (left, right) => left <= right],
+    [issuedAt, params.get('emissao[eq]'), (left, right) => left === right],
+    [dueAt, params.get('vencimento[gt]'), (left, right) => left > right],
+    [dueAt, params.get('vencimento[gte]'), (left, right) => left >= right],
+    [dueAt, params.get('vencimento[lt]'), (left, right) => left < right],
+    [dueAt, params.get('vencimento[lte]'), (left, right) => left <= right],
+    [dueAt, params.get('vencimento[eq]'), (left, right) => left === right]
+  ];
+  return comparisons.every(([value, expected, compare]) =>
+    !expected || (value && compare(value, expected))
+  );
+};
+
+const isPendingInvoice = (invoice) => {
+  const balance = Number(invoice?.balance);
+  if (!Number.isFinite(balance) || balance <= 0) return false;
+  if (invoice.status === 1 || invoice.status === 2) return false;
+  const label = normalizedName(invoice.statusLabel);
+  return !['liquid', 'pago', 'quitad', 'cancel'].some((term) => label.includes(term));
+};
+
+const buildDebtorSummary = (invoices) => {
+  const groups = new Map();
+  let invoiceCount = 0;
+  invoices.filter(isPendingInvoice).forEach((invoice) => {
+    const valueInCents = Math.round(Number(invoice.balance) * 100);
+    if (valueInCents <= 0) return;
+    invoiceCount += 1;
+    const cnpj = String(invoice.clientDocument || '').replace(/\D/g, '');
+    const clientId = integer(invoice.clientId, { min: 1 });
+    const name = isMissingClientName(invoice.client) ? 'Não informado' : String(invoice.client);
+    const key = cnpj || (clientId !== null ? `id:${clientId}` : `nome:${normalizedName(name)}`);
+    const current = groups.get(key) || {
+      key,
+      name,
+      cnpj,
+      valueInCents: 0,
+      invoiceCount: 0
+    };
+    if (isMissingClientName(current.name) && !isMissingClientName(name)) current.name = name;
+    current.valueInCents += valueInCents;
+    current.invoiceCount += 1;
+    groups.set(key, current);
+  });
+
+  const totalInCents = [...groups.values()].reduce(
+    (total, debtor) => total + debtor.valueInCents,
+    0
+  );
+  const debtors = [...groups.values()]
+    .sort((left, right) => right.valueInCents - left.valueInCents)
+    .map((debtor) => ({
+      key: debtor.key,
+      name: debtor.name,
+      cnpj: debtor.cnpj,
+      value: debtor.valueInCents / 100,
+      percentage: totalInCents ? (debtor.valueInCents / totalInCents) * 100 : 0,
+      invoiceCount: debtor.invoiceCount
+    }));
+
+  return {
+    view: 'debtors',
+    totalPending: totalInCents / 100,
+    invoiceCount,
+    companyCount: debtors.length,
+    largestDebtor: debtors[0] || null,
+    debtors
+  };
+};
+
+const debtorSummaryCacheKey = (query) => {
+  const params = new URLSearchParams(query);
+  params.delete('limit');
+  params.delete('skip');
+  params.sort();
+  return params.toString();
+};
+
+const fetchDebtorSummary = async (input) => {
+  const { query, exactId } = buildInvoiceQuery({ ...input, limit: 100, skip: 0 });
+  let params = new URLSearchParams(query);
+  params.set('limit', '100');
+  params.set('skip', '0');
+  const cacheKey = debtorSummaryCacheKey(params);
+  const cached = debtorSummaryCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.summary;
+  if (cached) debtorSummaryCache.delete(cacheKey);
+
+  let activeQuery = params.toString();
+  let result = await requestInvoices(activeQuery);
+  let rawInvoices = invoiceListFromPayload(result.payload);
+  if (!result.response.ok || Number(result.payload?.status) !== 1 || rawInvoices === null) {
+    const upstreamMessage = String(result.payload?.message || '').trim();
+    throw Object.assign(new Error(
+      upstreamMessage && upstreamMessage.toUpperCase() !== 'OK'
+        ? upstreamMessage
+        : 'Formato inesperado no retorno de faturas da Brudam.'
+    ), { statusCode: result.response.status >= 400 ? result.response.status : 502 });
+  }
+
+  if (
+    exactId !== null &&
+    filterInvoicesById(normalizeVisibleInvoices(rawInvoices), exactId).length === 0
+  ) {
+    const fallbackQuery = plainInvoiceIdQuery(activeQuery, exactId);
+    const fallbackResult = await requestInvoices(fallbackQuery);
+    const fallbackInvoices = invoiceListFromPayload(fallbackResult.payload);
+    if (
+      fallbackResult.response.ok &&
+      Number(fallbackResult.payload?.status) === 1 &&
+      fallbackInvoices !== null
+    ) {
+      activeQuery = fallbackQuery;
+      result = fallbackResult;
+      rawInvoices = fallbackInvoices;
+    }
+  }
+
+  const collected = await collectAllInvoicePages(activeQuery, rawInvoices);
+  const queryParams = new URLSearchParams(activeQuery);
+  let invoices = normalizeVisibleInvoices(collected.invoices)
+    .filter((invoice) => invoiceMatchesQuery(invoice, queryParams))
+    .filter(isPendingInvoice);
+  invoices = await enrichInvoicesWithCompanies(invoices);
+  const summary = {
+    ...buildDebtorSummary(invoices),
+    pagesLoaded: collected.pagesLoaded,
+    recordsRead: collected.invoices.length
+  };
+
+  if (debtorSummaryCache.size >= 20) {
+    debtorSummaryCache.delete(debtorSummaryCache.keys().next().value);
+  }
+  debtorSummaryCache.set(cacheKey, {
+    summary,
+    expiresAt: Date.now() + DEBTOR_SUMMARY_CACHE_TTL_MS
+  });
+  return summary;
+};
+
 const fetchInvoices = async (input) => {
+  const view = String(input?.view || 'list').trim().toLowerCase();
+  if (view === 'debtors') return fetchDebtorSummary(input);
+  if (view !== 'list') {
+    throw Object.assign(new Error('Modo de visualização inválido.'), { statusCode: 422 });
+  }
   const { query, limit, skip, exactId, exactCnpj } = buildInvoiceQuery(input);
   let { response, payload } = await requestInvoices(query);
   let rawInvoices = invoiceListFromPayload(payload);
@@ -638,6 +805,10 @@ module.exports = {
   collectAllInvoicePages,
   filterInvoicesById,
   filterAndSortCompanyInvoices,
+  invoiceMatchesQuery,
+  isPendingInvoice,
+  buildDebtorSummary,
   plainInvoiceIdQuery,
+  fetchDebtorSummary,
   fetchInvoices
 };

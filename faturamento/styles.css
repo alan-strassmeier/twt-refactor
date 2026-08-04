@@ -185,7 +185,8 @@ p {
 
 .login-card,
 .filter-card,
-.table-card {
+.table-card,
+.chart-card {
   border: 1px solid rgb(216 227 236 / 85%);
   background: rgb(255 255 255 / 95%);
   box-shadow: var(--shadow);
@@ -344,6 +345,65 @@ select:focus {
   width: 100%;
 }
 
+.view-toolbar {
+  margin: -6px 0 22px;
+  padding: 12px 14px 12px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgb(255 255 255 / 82%);
+}
+
+.view-toolbar > div:first-child {
+  display: grid;
+  gap: 2px;
+}
+
+.view-toolbar strong {
+  color: var(--navy-900);
+  font-size: .86rem;
+}
+
+.view-toolbar span {
+  color: var(--muted);
+  font-size: .78rem;
+}
+
+.view-switch {
+  flex: none;
+  padding: 4px;
+  display: inline-flex;
+  gap: 4px;
+  border: 1px solid #cbd9e4;
+  border-radius: 12px;
+  background: #eef4f8;
+}
+
+.view-option {
+  min-height: 36px;
+  padding: 7px 16px;
+  border: 0;
+  border-radius: 8px;
+  color: var(--muted);
+  background: transparent;
+  font-size: .82rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.view-option:hover {
+  color: var(--navy-900);
+}
+
+.view-option.is-active {
+  color: #fff;
+  background: var(--blue-600);
+  box-shadow: 0 5px 14px rgb(38 127 202 / 24%);
+}
+
 .summary-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -376,6 +436,217 @@ select:focus {
 .table-card {
   overflow: hidden;
   border-radius: 18px;
+}
+
+.chart-card {
+  overflow: hidden;
+  border-radius: 18px;
+}
+
+.chart-heading {
+  padding: 22px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  border-bottom: 1px solid var(--line);
+}
+
+.chart-heading p {
+  margin-bottom: 0;
+  font-size: .9rem;
+}
+
+.chart-content {
+  min-height: 520px;
+  padding: clamp(28px, 5vw, 56px);
+  display: grid;
+  grid-template-columns: minmax(320px, 1.1fr) minmax(280px, .9fr);
+  align-items: center;
+  gap: clamp(30px, 6vw, 82px);
+}
+
+.donut-wrap {
+  position: relative;
+  width: min(100%, 560px);
+  aspect-ratio: 1;
+  justify-self: center;
+}
+
+.donut-chart {
+  width: 100%;
+  height: 100%;
+  display: block;
+  overflow: visible;
+  filter: drop-shadow(0 12px 18px rgb(17 42 64 / 9%));
+}
+
+.donut-track,
+.donut-segment {
+  fill: none;
+  stroke-width: 42;
+}
+
+.donut-track {
+  stroke: #e8eff4;
+}
+
+.donut-segment {
+  cursor: pointer;
+  transition: stroke-width .16s ease, opacity .16s ease;
+}
+
+.donut-segment:hover,
+.donut-segment:focus {
+  stroke-width: 48;
+  outline: none;
+}
+
+.donut-chart.has-highlight .donut-segment:not(.is-highlighted) {
+  opacity: .42;
+}
+
+.donut-center {
+  position: absolute;
+  inset: 32%;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  text-align: center;
+  pointer-events: none;
+}
+
+.donut-center span {
+  color: var(--muted);
+  font-size: clamp(.72rem, 1.4vw, .9rem);
+  font-weight: 700;
+}
+
+.donut-center strong {
+  margin-top: 6px;
+  color: var(--navy-900);
+  font-size: clamp(1.1rem, 3vw, 2rem);
+  letter-spacing: -.03em;
+}
+
+.chart-tooltip {
+  position: absolute;
+  z-index: 5;
+  width: max-content;
+  max-width: min(270px, calc(100vw - 48px));
+  padding: 12px 14px;
+  display: grid;
+  gap: 3px;
+  border: 1px solid rgb(17 42 64 / 12%);
+  border-radius: 11px;
+  color: #fff;
+  background: rgb(11 29 44 / 94%);
+  box-shadow: 0 10px 28px rgb(11 29 44 / 25%);
+  pointer-events: none;
+  transform: translate(12px, calc(-100% - 12px));
+}
+
+.chart-tooltip strong {
+  max-width: 240px;
+  overflow: hidden;
+  font-size: .82rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chart-tooltip span {
+  color: #dbeaf5;
+  font-size: .76rem;
+}
+
+.chart-legend-panel {
+  min-width: 0;
+}
+
+.chart-legend-panel h3 {
+  margin: 0 0 14px;
+  color: var(--navy-900);
+  font-size: 1rem;
+}
+
+.chart-legend {
+  max-height: 430px;
+  margin: 0;
+  padding: 0 6px 0 0;
+  display: grid;
+  gap: 7px;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.chart-legend li {
+  padding: 10px 12px;
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid #e2eaf0;
+  border-radius: 10px;
+  background: #fbfdfe;
+}
+
+.legend-swatch {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+}
+
+.legend-company {
+  min-width: 0;
+}
+
+.legend-company strong,
+.legend-company small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.legend-company strong {
+  color: var(--navy-900);
+  font-size: .8rem;
+}
+
+.legend-company small {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: .7rem;
+}
+
+.legend-value {
+  color: var(--ink);
+  font-size: .76rem;
+  font-weight: 800;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.legend-value small {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: .67rem;
+  font-weight: 700;
+}
+
+.chart-empty {
+  padding: 70px 24px;
+  text-align: center;
+}
+
+.chart-empty strong {
+  color: var(--navy-900);
+  font-size: 1.1rem;
+}
+
+.chart-empty p {
+  margin: 6px 0 0;
 }
 
 .table-heading {
@@ -677,6 +948,14 @@ th.numeric {
   .summary-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .chart-content {
+    grid-template-columns: 1fr;
+  }
+
+  .chart-legend {
+    max-height: 360px;
+  }
 }
 
 @media (max-width: 760px) {
@@ -723,9 +1002,45 @@ th.numeric {
     align-items: center;
   }
 
+  .view-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .view-switch {
+    width: 100%;
+  }
+
+  .view-option {
+    flex: 1;
+  }
+
   .table-heading {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .chart-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .chart-content {
+    min-height: 0;
+    padding: 24px 18px 30px;
+  }
+
+  .donut-wrap {
+    width: min(100%, 420px);
+  }
+
+  .chart-legend li {
+    grid-template-columns: 12px minmax(0, 1fr);
+  }
+
+  .legend-value {
+    grid-column: 2;
+    text-align: left;
   }
 
   .table-heading-actions {

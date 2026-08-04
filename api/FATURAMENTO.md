@@ -47,6 +47,19 @@ páginas retornadas pela Brudam, mantém apenas o CNPJ solicitado e ordena o
 resultado completo pela emissão mais recente. A consulta consolidada usa cache
 temporário de cinco minutos.
 
+### Gráfico de saldos pendentes
+
+O seletor `Lista / Gráfico` reutiliza exatamente os filtros preenchidos no
+formulário. No modo gráfico, a interface acrescenta `view=debtors` à requisição.
+O servidor percorre as páginas da consulta, mantém somente faturas com saldo
+positivo que não estejam liquidadas ou canceladas, enriquece os nomes pelo
+cadastro de empresas e agrupa os valores por CNPJ.
+
+O retorno contém `totalPending`, `invoiceCount`, `companyCount` e `debtors`.
+Cada item de `debtors` informa nome, CNPJ, saldo, percentual do total e número
+de faturas pendentes. O resumo consolidado usa cache temporário de cinco
+minutos para reduzir chamadas repetidas à Brudam.
+
 ## PDF da fatura
 
 A coluna `Visualizar` abre `GET /api/faturamento/fatura-pdf?id=...` em uma nova

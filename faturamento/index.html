@@ -7,9 +7,9 @@
   <meta name="theme-color" content="#112a40">
   <title>Faturamento | TWT Airpack</title>
   <link rel="icon" href="/favicon.ico">
-  <link rel="stylesheet" href="/faturamento/styles.css?v=5">
+  <link rel="stylesheet" href="/faturamento/styles.css?v=6">
   <script src="/faturamento/sort.js?v=1" defer></script>
-  <script src="/faturamento/app.js?v=8" defer></script>
+  <script src="/faturamento/app.js?v=9" defer></script>
 </head>
 <body>
   <div class="page-shell">
@@ -111,28 +111,43 @@
           </div>
         </form>
 
+        <div class="view-toolbar">
+          <div>
+            <strong>Modo de visualização</strong>
+            <span>Os filtros acima são aplicados nas duas visualizações.</span>
+          </div>
+          <div class="view-switch" role="group" aria-label="Modo de visualização das faturas">
+            <button class="view-option is-active" type="button" data-view-mode="list" aria-pressed="true">
+              Lista
+            </button>
+            <button class="view-option" type="button" data-view-mode="debtors" aria-pressed="false">
+              Gráfico
+            </button>
+          </div>
+        </div>
+
         <p class="dashboard-message" id="dashboardMessage" role="alert" aria-live="assertive"></p>
 
-        <section class="summary-grid" aria-label="Resumo da página consultada">
+        <section class="summary-grid" id="summaryGrid" aria-label="Resumo da página consultada">
           <article>
-            <span>Faturas na página</span>
+            <span id="invoiceCountLabel">Faturas na página</span>
             <strong id="invoiceCount">0</strong>
           </article>
           <article>
-            <span>Valor total</span>
+            <span id="totalAmountLabel">Valor total</span>
             <strong id="totalAmount">R$ 0,00</strong>
           </article>
           <article>
-            <span>Valor pago</span>
+            <span id="paidAmountLabel">Valor pago</span>
             <strong id="paidAmount">R$ 0,00</strong>
           </article>
           <article>
-            <span>Saldo</span>
+            <span id="balanceAmountLabel">Saldo</span>
             <strong id="balanceAmount">R$ 0,00</strong>
           </article>
         </section>
 
-        <section class="table-card" aria-labelledby="invoiceTableTitle">
+        <section class="table-card" id="tableView" aria-labelledby="invoiceTableTitle">
           <div class="table-heading">
             <div>
               <h2 id="invoiceTableTitle">Lista de faturas</h2>
@@ -173,6 +188,46 @@
             <button class="button button-quiet" id="previousPage" type="button" data-page-action="previous" disabled>Anterior</button>
             <span id="pageIndicator" data-page-indicator>Página 1</span>
             <button class="button button-quiet" id="nextPage" type="button" data-page-action="next" disabled>Próxima</button>
+          </div>
+        </section>
+
+        <section class="chart-card" id="chartView" aria-labelledby="debtorChartHeading" hidden>
+          <div class="chart-heading">
+            <div>
+              <h2 id="debtorChartHeading">Saldo pendente por empresa</h2>
+              <p id="chartResultDescription">Faça uma consulta para gerar o gráfico.</p>
+            </div>
+            <span id="chartLoading" class="table-loading" hidden>
+              <span class="spinner" aria-hidden="true"></span> Consolidando faturas
+            </span>
+          </div>
+          <div class="chart-content" id="chartContent" hidden>
+            <div class="donut-wrap" id="donutWrap">
+              <svg class="donut-chart" id="debtorChart" viewBox="0 0 240 240" role="img"
+                aria-labelledby="debtorChartTitle debtorChartDescription">
+                <title id="debtorChartTitle">Distribuição do saldo pendente por empresa</title>
+                <desc id="debtorChartDescription">Cada divisão representa uma empresa com faturas pendentes.</desc>
+                <circle class="donut-track" cx="120" cy="120" r="82" pathLength="100"></circle>
+                <g id="debtorChartSegments"></g>
+              </svg>
+              <div class="donut-center" aria-hidden="true">
+                <span>Total pendente</span>
+                <strong id="chartTotalPending">R$ 0,00</strong>
+              </div>
+              <div class="chart-tooltip" id="chartTooltip" role="status" hidden>
+                <strong id="chartTooltipName"></strong>
+                <span id="chartTooltipPercentage"></span>
+                <span id="chartTooltipValue"></span>
+              </div>
+            </div>
+            <div class="chart-legend-panel">
+              <h3>Empresas devedoras</h3>
+              <ol class="chart-legend" id="chartLegend"></ol>
+            </div>
+          </div>
+          <div class="chart-empty" id="chartEmptyState">
+            <strong>Nenhum saldo pendente para exibir</strong>
+            <p>Revise os filtros ou faça uma nova consulta.</p>
           </div>
         </section>
       </section>
