@@ -173,6 +173,8 @@ const normalizeInvoice = (invoice) => {
   return {
     id: firstValue(invoice, ['fatura', 'numero', 'id']),
     internalId: firstValue(invoice, ['id']),
+    clientId: firstValue(client, ['id', 'id_cliente', 'codigo']) ||
+      firstValue(invoice, ['id_cliente', 'cliente_id']),
     issuedAt: firstValue(invoice, ['emissao', 'data_emissao']),
     dueAt: firstValue(invoice, ['vencimento', 'data_vencimento']),
     paidAt: firstValue(invoice, ['data_pagamento', 'data_pgto', 'pagamento', 'data_liquidacao']),
@@ -218,11 +220,29 @@ const isMissingClientName = (value) => [
   'nao informada'
 ].includes(normalizedName(value));
 
+const validCnpj = (value) => {
+  const digits = String(value || '').replace(/\D/g, '');
+  if (digits.length !== 14 || /^(\d)\1{13}$/.test(digits)) return false;
+  const calculateDigit = (base, weights) => {
+    const sum = base.reduce((total, digit, index) => total + (digit * weights[index]), 0);
+    const remainder = sum % 11;
+    return remainder < 2 ? 0 : 11 - remainder;
+  };
+  const numbers = [...digits].map(Number);
+  const firstDigit = calculateDigit(numbers.slice(0, 12), [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]);
+  const secondDigit = calculateDigit(
+    [...numbers.slice(0, 12), firstDigit],
+    [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]
+  );
+  return firstDigit === numbers[12] && secondDigit === numbers[13];
+};
+
 const isCompanyRecord = (value) =>
   value &&
   typeof value === 'object' &&
   !Array.isArray(value) &&
-  firstValue(value, ['cnpj', 'cpf_cnpj', 'documento']) !== null &&
+  (firstValue(value, ['cnpj', 'cpf_cnpj', 'documento']) !== null ||
+    firstValue(value, ['id', 'id_cliente', 'codigo']) !== null) &&
   firstValue(value, ['fantasia', 'nome_fantasia', 'razao', 'razao_social', 'nome']) !== null;
 
 const companyRecordsFromPayload = (payload) => {
@@ -247,11 +267,17 @@ const companyRecordsFromPayload = (payload) => {
   return records;
 };
 
-const companyTradeNameFromPayload = (payload, cnpj) => {
+const companyTradeNameFromPayload = (payload, cnpj, clientId = null) => {
   const expectedCnpj = String(cnpj || '').replace(/\D/g, '');
-  const company = companyRecordsFromPayload(payload).find((item) =>
+  const expectedId = integer(clientId, { min: 1 });
+  const records = companyRecordsFromPayload(payload);
+  const company = records.find((item) =>
+    expectedCnpj &&
     String(firstValue(item, ['cnpj', 'cpf_cnpj', 'documento']) || '').replace(/\D/g, '') ===
       expectedCnpj
+  ) || records.find((item) =>
+    expectedId !== null &&
+    integer(firstValue(item, ['id', 'id_cliente', 'codigo']), { min: 1 }) === expectedId
   );
   const names = [
     firstValue(company, ['fantasia', 'nome_fantasia']),
@@ -260,49 +286,88 @@ const companyTradeNameFromPayload = (payload, cnpj) => {
   return String(names.find((name) => !isMissingClientName(name)) || '').trim();
 };
 
-const fetchCompanyTradeName = async (cnpj) => {
+const fetchCompanyTradeName = async (cnpj, clientId = null) => {
   const normalizedCnpj = String(cnpj || '').replace(/\D/g, '');
-  if (normalizedCnpj.length !== 14) return '';
-
-  const cached = companyNameCache.get(normalizedCnpj);
-  if (cached && cached.expiresAt > Date.now()) return cached.name;
-  if (cached) companyNameCache.delete(normalizedCnpj);
-
-  const path = `/cadastro/empresas?${new URLSearchParams({ cnpj: normalizedCnpj })}`;
-  const result = await authenticatedGet(path);
-
-  const name = result.response.ok
-    ? companyTradeNameFromPayload(result.payload, normalizedCnpj)
-    : '';
-  if (name) {
-    companyNameCache.set(normalizedCnpj, {
-      name,
-      expiresAt: Date.now() + COMPANY_CACHE_TTL_MS
-    });
+  const normalizedClientId = integer(clientId, { min: 1 });
+  const cacheKeys = [
+    normalizedCnpj.length === 14 ? `cnpj:${normalizedCnpj}` : '',
+    normalizedClientId !== null ? `id:${normalizedClientId}` : ''
+  ].filter(Boolean);
+  for (const cacheKey of cacheKeys) {
+    const cached = companyNameCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) return cached.name;
+    if (cached) companyNameCache.delete(cacheKey);
   }
-  return name;
+
+  const filters = [];
+  if (validCnpj(normalizedCnpj)) filters.push({ cnpj: normalizedCnpj });
+  if (normalizedClientId !== null) filters.push({ id: String(normalizedClientId) });
+  if (!filters.length) return '';
+
+  const attempts = [];
+  for (const filter of filters) {
+    try {
+      const result = await authenticatedGet(
+        `/cadastro/empresas?${new URLSearchParams(filter)}`
+      );
+      const name = result.response.ok
+        ? companyTradeNameFromPayload(result.payload, normalizedCnpj, normalizedClientId)
+        : '';
+      if (name) {
+        cacheKeys.forEach((cacheKey) => companyNameCache.set(cacheKey, {
+          name,
+          expiresAt: Date.now() + COMPANY_CACHE_TTL_MS
+        }));
+        return name;
+      }
+      attempts.push({
+        filter: Object.keys(filter)[0],
+        httpStatus: result.response.status,
+        apiStatus: result.payload?.status,
+        records: companyRecordsFromPayload(result.payload).length,
+        message: String(result.payload?.message || '').slice(0, 120)
+      });
+    } catch (error) {
+      attempts.push({
+        filter: Object.keys(filter)[0],
+        error: String(error?.message || error).slice(0, 120)
+      });
+    }
+  }
+
+  console.warn('[faturamento:empresa-nao-encontrada]', {
+    cnpj: normalizedCnpj || null,
+    clientId: normalizedClientId,
+    attempts
+  });
+  return '';
 };
 
 const enrichInvoicesWithCompanies = async (invoices, lookup = fetchCompanyTradeName) => {
-  const namesByCnpj = new Map();
-  const cnpjs = [...new Set(invoices
-    .filter((invoice) => isMissingClientName(invoice.client))
-    .map((invoice) => String(invoice.clientDocument || '').replace(/\D/g, ''))
-    .filter((cnpj) => cnpj.length === 14))];
+  const targets = new Map();
+  invoices.filter((invoice) => isMissingClientName(invoice.client)).forEach((invoice) => {
+    const cnpj = String(invoice.clientDocument || '').replace(/\D/g, '');
+    const clientId = integer(invoice.clientId, { min: 1 });
+    if (cnpj.length !== 14 && clientId === null) return;
+    const key = clientId !== null ? `id:${clientId}` : `cnpj:${cnpj}`;
+    if (!targets.has(key)) targets.set(key, { cnpj, clientId });
+  });
+  const lookups = [...targets.entries()];
+  const namesByTarget = new Map();
   let nextIndex = 0;
   const workers = Array.from(
-    { length: Math.min(COMPANY_LOOKUP_CONCURRENCY, cnpjs.length) },
+    { length: Math.min(COMPANY_LOOKUP_CONCURRENCY, lookups.length) },
     async () => {
-      while (nextIndex < cnpjs.length) {
-        const cnpj = cnpjs[nextIndex];
+      while (nextIndex < lookups.length) {
+        const [key, target] = lookups[nextIndex];
         nextIndex += 1;
         let name = '';
         try {
-          name = await lookup(cnpj);
+          name = await lookup(target.cnpj, target.clientId);
         } catch {
           // A fatura continua disponível mesmo se o cadastro da empresa falhar.
         }
-        namesByCnpj.set(cnpj, name);
+        namesByTarget.set(key, name);
       }
     }
   );
@@ -311,7 +376,9 @@ const enrichInvoicesWithCompanies = async (invoices, lookup = fetchCompanyTradeN
   return invoices.map((invoice) => {
     if (!isMissingClientName(invoice.client)) return invoice;
     const cnpj = String(invoice.clientDocument || '').replace(/\D/g, '');
-    const client = namesByCnpj.get(cnpj) || '';
+    const clientId = integer(invoice.clientId, { min: 1 });
+    const key = clientId !== null ? `id:${clientId}` : `cnpj:${cnpj}`;
+    const client = namesByTarget.get(key) || '';
     return client ? { ...invoice, client } : invoice;
   });
 };
@@ -564,6 +631,7 @@ module.exports = {
   buildInvoiceQuery,
   normalizeInvoice,
   normalizeVisibleInvoices,
+  validCnpj,
   companyTradeNameFromPayload,
   enrichInvoicesWithCompanies,
   invoiceListFromPayload,

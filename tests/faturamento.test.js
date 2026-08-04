@@ -11,6 +11,7 @@ const {
   buildInvoiceQuery,
   normalizeInvoice,
   normalizeVisibleInvoices,
+  validCnpj,
   companyTradeNameFromPayload,
   enrichInvoicesWithCompanies,
   invoiceListFromPayload,
@@ -149,6 +150,7 @@ test('normaliza os dados documentados e calcula saldo', () => {
   }), {
     id: '133',
     internalId: '133',
+    clientId: null,
     issuedAt: '2016-11-11',
     dueAt: '2016-11-28',
     paidAt: null,
@@ -186,6 +188,7 @@ test('normaliza o número público da fatura no retorno real da Brudam', () => {
   assert.deepEqual(filterInvoicesById(invoices, 11490), [{
     id: 11490,
     internalId: 20822,
+    clientId: 454,
     issuedAt: '2026-07-10',
     dueAt: '2026-07-24',
     paidAt: null,
@@ -229,6 +232,12 @@ test('remove lançamentos bancários sem número público de fatura', () => {
   assert.deepEqual(invoices.map((invoice) => invoice.id), [11490, 133]);
 });
 
+test('valida CNPJ antes de consultar o cadastro de empresas', () => {
+  assert.equal(validCnpj('06.404.676/0001-95'), false);
+  assert.equal(validCnpj('28.759.933/0001-86'), true);
+  assert.equal(validCnpj('06.908.675/0001-10'), true);
+});
+
 test('obtém o nome fantasia pelo CNPJ no retorno de empresas', () => {
   assert.equal(companyTradeNameFromPayload({
     message: 'OK',
@@ -253,19 +262,26 @@ test('obtém o nome fantasia pelo CNPJ no retorno de empresas', () => {
       }]
     }
   }, '35.820.448/0063-39'), 'WHITE MARTINS GASES INDUSTRIAIS LTDA');
+  assert.equal(companyTradeNameFromPayload({
+    status: 1,
+    data: [{
+      id: 712,
+      fantasia: 'CLIENTE COM CNPJ INVÁLIDO'
+    }]
+  }, '06404676000195', 712), 'CLIENTE COM CNPJ INVÁLIDO');
 });
 
 test('enriquece faturas por CNPJ sem repetir consultas', async () => {
   const calls = [];
   const invoices = await enrichInvoicesWithCompanies([
-    { id: 1, client: '', clientDocument: '35820448008110' },
-    { id: 2, client: 'Não informado', clientDocument: '35.820.448/0081-10' },
+    { id: 1, client: '', clientDocument: '35820448008110', clientId: 444 },
+    { id: 2, client: 'Não informado', clientDocument: '35.820.448/0081-10', clientId: 444 },
     { id: 3, client: 'JÁ INFORMADO', clientDocument: '04004335000139' }
-  ], async (cnpj) => {
-    calls.push(cnpj);
+  ], async (cnpj, clientId) => {
+    calls.push({ cnpj, clientId });
     return 'NOME FANTASIA';
   });
-  assert.deepEqual(calls, ['35820448008110']);
+  assert.deepEqual(calls, [{ cnpj: '35820448008110', clientId: 444 }]);
   assert.equal(invoices[0].client, 'NOME FANTASIA');
   assert.equal(invoices[1].client, 'NOME FANTASIA');
   assert.equal(invoices[2].client, 'JÁ INFORMADO');
