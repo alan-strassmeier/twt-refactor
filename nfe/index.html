@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="theme-color" content="#d5e7fa">
+  <meta name="robots" content="noindex, nofollow, noarchive">
+  <meta http-equiv="Content-Security-Policy"
+    content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'">
+  <title>Importação de NF-e | TWT Airpack</title>
+  <link rel="icon" href="/favicon.ico">
+  <link rel="stylesheet" href="/nfe/style.css?v=2">
+  <script src="/nfe/app.js?v=2" defer></script>
+</head>
+<body>
+  <main class="shell">
+    <section class="login-view" id="loginView" aria-labelledby="loginTitle">
+      <div class="login-brand" aria-hidden="true">
+        <span class="brand-orbit"></span>
+        <span class="brand-grid"></span>
+      </div>
+      <div class="login-panel">
+        <img class="logo" src="/assets/twtlogosince.png" alt="TWT Airpack">
+        <p class="eyebrow">Área interna</p>
+        <h1 id="loginTitle">Importação de NF-e</h1>
+        <p class="intro">Entre para consultar notas fiscais e vinculá-las a uma minuta existente na Brudam.</p>
+        <form id="loginForm" novalidate>
+          <label for="user">Usuário</label>
+          <input id="user" name="user" autocomplete="username" autocapitalize="none" required>
+          <label for="password">Senha</label>
+          <div class="password-field">
+            <input id="password" name="password" type="password" autocomplete="current-password" required>
+            <button class="plain-button" id="togglePassword" type="button" aria-label="Mostrar senha">Mostrar</button>
+          </div>
+          <p class="form-message" id="loginMessage" role="alert"></p>
+          <button class="primary-button full-width" id="loginButton" type="submit">
+            <span>Entrar</span>
+            <span class="button-arrow" aria-hidden="true">→</span>
+          </button>
+        </form>
+      </div>
+    </section>
+
+    <section class="app-view" id="appView" hidden aria-labelledby="pageTitle">
+      <header class="app-header">
+        <div class="header-brand">
+          <img class="logo" src="/assets/twtlogosince.png" alt="TWT Airpack">
+          <div>
+            <p class="eyebrow">Operação interna</p>
+            <h1 id="pageTitle">Importação de NF-e</h1>
+          </div>
+        </div>
+        <button class="secondary-button" id="logoutButton" type="button">Sair</button>
+      </header>
+
+      <div class="workflow">
+        <section class="hero-card">
+          <div>
+            <span class="status-pill"><span></span> Consulta oficial e gratuita</span>
+            <h2>Inclua as notas na minuta que já está aberta.</h2>
+            <p>Informe a minuta de destino e até 10 NF-es. O sistema consulta os dados na SEFAZ e acrescenta as notas à minuta existente.</p>
+          </div>
+          <ol class="mini-flow" aria-label="Etapas da importação">
+            <li><strong>1</strong><span>Informar<br>minuta</span></li>
+            <li><strong>2</strong><span>Consultar<br>SEFAZ</span></li>
+            <li><strong>3</strong><span>Atualizar<br>minuta</span></li>
+          </ol>
+        </section>
+
+        <section class="workspace-card" aria-labelledby="inputTitle">
+          <div class="section-heading">
+            <div>
+              <p class="step-label">Etapa 1</p>
+              <h2 id="inputTitle">Informe as chaves de acesso</h2>
+            </div>
+            <span class="batch-counter" id="batchCounter">0 de 10</span>
+          </div>
+
+          <div class="minuta-field">
+            <label for="minutaInput">Minuta de destino</label>
+            <input id="minutaInput" name="minuta" inputmode="numeric"
+              autocomplete="off" placeholder="Ex.: 7654321">
+            <p>Informe o número da minuta já gerada na Brudam.</p>
+          </div>
+
+          <div class="tab-panel" id="keysPanel">
+            <label for="keysInput">Chaves de acesso da NF-e</label>
+            <textarea id="keysInput" rows="7" inputmode="numeric"
+              placeholder="Cole uma ou várias chaves de 44 dígitos, uma por linha"></textarea>
+            <div class="field-support">
+              <span>Vírgulas, espaços e quebras de linha são aceitos.</span>
+              <span class="free-note">Consulta gratuita · limite oficial de 20 chaves por hora.</span>
+            </div>
+          </div>
+
+          <div class="validation-summary" id="validationSummary" aria-live="polite">
+            <span class="summary-icon">i</span>
+            <span>Informe a minuta de destino e as chaves de acesso.</span>
+          </div>
+
+          <div class="action-row">
+            <p>A integração nunca criará uma nova minuta.</p>
+            <button class="primary-button" id="processButton" type="button" disabled>
+              <span>Adicionar à minuta</span>
+              <span class="button-arrow" aria-hidden="true">→</span>
+            </button>
+          </div>
+        </section>
+
+        <section class="results-card" id="resultsCard" hidden aria-labelledby="resultsTitle">
+          <div class="section-heading results-heading">
+            <div>
+              <p class="step-label">Resultado</p>
+              <h2 id="resultsTitle">Processamento do lote</h2>
+            </div>
+            <div class="result-totals" id="resultTotals"></div>
+          </div>
+          <div class="processing-state" id="processingState" hidden>
+            <span class="spinner" aria-hidden="true"></span>
+            <div>
+              <strong>Consultando e vinculando as NF-es…</strong>
+              <p>Este lote pode levar alguns segundos. Não feche esta página.</p>
+            </div>
+          </div>
+          <div class="results-table-wrap" id="resultsTableWrap" hidden>
+            <table>
+              <thead>
+                <tr>
+                  <th>NF-e</th>
+                  <th>Origem</th>
+                  <th>Status</th>
+                  <th>Minuta</th>
+                  <th>Detalhes</th>
+                </tr>
+              </thead>
+              <tbody id="resultsBody"></tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+      <footer>
+        <span>TWT Airpack</span>
+        <span>Ambiente seguro para operação interna</span>
+      </footer>
+    </section>
+  </main>
+</body>
+</html>

@@ -24,6 +24,31 @@
           "value": "DENY"
         }
       ]
+    },
+    {
+      "source": "/nfe/:path*",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-store, max-age=0"
+        },
+        {
+          "key": "Content-Security-Policy",
+          "value": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; form-action 'self'; base-uri 'self'; frame-ancestors 'none'"
+        },
+        {
+          "key": "Referrer-Policy",
+          "value": "no-referrer"
+        },
+        {
+          "key": "X-Content-Type-Options",
+          "value": "nosniff"
+        },
+        {
+          "key": "X-Frame-Options",
+          "value": "DENY"
+        }
+      ]
     }
   ],
   "functions": {
@@ -38,6 +63,16 @@
       "maxDuration": 60,
       "memory": 1024,
       "includeFiles": "node_modules/zxing-wasm/dist/reader/zxing_reader.wasm"
+    },
+    "api/nfe.js": {
+      "maxDuration": 60,
+      "memory": 1024
     }
-  }
+  },
+  "rewrites": [
+    {
+      "source": "/nfe",
+      "destination": "/nfe/index.html"
+    }
+  ]
 }

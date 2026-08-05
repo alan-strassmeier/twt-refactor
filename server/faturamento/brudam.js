@@ -1,5 +1,4 @@
-const BASE_URL = String(process.env.BRUDAM_API_URL || 'https://twt.brudam.com.br/api/v1').replace(/\/$/, '');
-const REQUEST_TIMEOUT_MS = 20000;
+const { authenticatedGet } = require('../shared/brudam');
 const COMPANY_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const COMPANY_LOOKUP_CONCURRENCY = 3;
 const COMPANY_LOOKUP_ATTEMPTS = 3;
@@ -13,75 +12,9 @@ const STATUS_LABELS = {
   2: 'Cancelada'
 };
 
-let cachedToken = '';
-let cachedTokenExpiresAt = 0;
 const companyNameCache = new Map();
 const companyInvoicesCache = new Map();
 const debtorSummaryCache = new Map();
-
-const brudamRequest = async (path, options = {}) => {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-  try {
-    const response = await fetch(`${BASE_URL}${path}`, {
-      ...options,
-      signal: controller.signal
-    });
-    const contentType = response.headers.get('content-type') || '';
-    const payload = contentType.includes('application/json')
-      ? await response.json()
-      : { status: 0, message: 'Resposta inválida da Brudam.' };
-    return { response, payload };
-  } finally {
-    clearTimeout(timeout);
-  }
-};
-
-const tokenExpiration = (token) => {
-  try {
-    const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'));
-    return Number(payload.exp) * 1000;
-  } catch {
-    return Date.now() + 240000;
-  }
-};
-
-const getAccessToken = async (forceRefresh = false) => {
-  if (!forceRefresh && cachedToken && Date.now() < cachedTokenExpiresAt - 30000) return cachedToken;
-  const usuario = String(process.env.BRUDAM_API_USER || '');
-  const senha = String(process.env.BRUDAM_API_PASSWORD || '');
-  if (!/^[A-Fa-f0-9]{32}$/.test(usuario) || !/^[A-Fa-f0-9]{64}$/.test(senha)) {
-    throw Object.assign(new Error('Integração Brudam não configurada.'), { statusCode: 503 });
-  }
-
-  const { response, payload } = await brudamRequest('/acesso/auth/login', {
-    method: 'POST',
-    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-    body: JSON.stringify({ usuario, senha })
-  });
-  const token = payload?.data?.access_key;
-  if (!response.ok || typeof token !== 'string' || !token) {
-    throw Object.assign(new Error(payload?.message || 'Falha de autenticação na Brudam.'), { statusCode: 502 });
-  }
-  cachedToken = token;
-  cachedTokenExpiresAt = tokenExpiration(token);
-  return token;
-};
-
-const authenticatedGet = async (path) => {
-  let token = await getAccessToken();
-  let result = await brudamRequest(path, {
-    headers: { Accept: 'application/json', Authorization: `Bearer ${token}` }
-  });
-  if (result.response.status !== 401) return result;
-
-  cachedToken = '';
-  cachedTokenExpiresAt = 0;
-  token = await getAccessToken(true);
-  return brudamRequest(path, {
-    headers: { Accept: 'application/json', Authorization: `Bearer ${token}` }
-  });
-};
 
 const requestInvoices = async (query) =>
   authenticatedGet(`/financeiro/faturas?${query}`);

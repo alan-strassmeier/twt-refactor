@@ -1,5 +1,16 @@
 # Integração Brudam na Vercel
 
+Este repositório concentra os módulos do projeto TWT:
+
+- rastreamento público;
+- faturamento interno;
+- baixa de entregas pelo WhatsApp;
+- vinculação de NF-e a minutas existentes em `/nfe`.
+
+Todos reutilizam o mesmo cliente autenticado da Brudam no servidor. Sessões,
+respostas HTTP e acesso ao Redis também ficam em utilitários compartilhados,
+sem expor credenciais no navegador.
+
 O rastreamento usa a função serverless `api/rastreamento.js`. O navegador chama apenas `/api/rastreamento`; usuário, senha e JWT da Brudam ficam nas variáveis de ambiente da Vercel e não são enviados para o cliente.
 
 Configure estas variáveis no painel da Vercel, em **Project Settings > Environment Variables**:

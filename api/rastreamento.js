@@ -1,66 +1,30 @@
-const BRUDAM_API_URL = (process.env.BRUDAM_API_URL || 'https://twt.brudam.com.br/api/v1').replace(/\/$/, '');
-const REQUEST_TIMEOUT_MS = 15000;
+const { authorizedRequest } = require('../server/shared/brudam');
+const {
+  createHttpError,
+  sendJson,
+  parseJsonBody,
+  clientAddress
+} = require('../server/shared/http');
+const { createFixedWindowLimiter } = require('../server/shared/rate-limit');
+
 const MAX_REQUEST_SIZE = 2048;
 const RATE_LIMIT_WINDOW_MS = 60000;
 const RATE_LIMIT_MAX_REQUESTS = 30;
 const ALLOWED_DOCUMENT_TYPES = new Set(['nf', 'cte', 'minuta']);
 const TAXPAYER_DOCUMENT_TYPES = new Set(['nf', 'cte']);
 
-let cachedToken = '';
-let cachedTokenExpiresAt = 0;
-const rateLimitStore = new Map();
-
-const createHttpError = (message, statusCode) => Object.assign(new Error(message), { statusCode });
-
-const sendJson = (res, statusCode, payload) => {
-  res.statusCode = statusCode;
-  res.setHeader('Content-Type', 'application/json; charset=utf-8');
-  res.setHeader('Cache-Control', 'no-store, max-age=0');
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('Referrer-Policy', 'no-referrer');
-  res.end(JSON.stringify(payload));
-};
-
-const parseJsonBody = async (req) => {
-  if (req.body && typeof req.body === 'object') return req.body;
-  if (typeof req.body === 'string') return JSON.parse(req.body);
-
-  const chunks = [];
-  let size = 0;
-
-  for await (const chunk of req) {
-    size += chunk.length;
-    if (size > MAX_REQUEST_SIZE) {
-      throw createHttpError('Requisição muito grande.', 413);
-    }
-    chunks.push(chunk);
-  }
-
-  return JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
-};
-
-const clientAddress = (req) => {
-  const forwardedFor = String(req.headers['x-forwarded-for'] || '');
-  return forwardedFor.split(',')[0].trim() || req.socket?.remoteAddress || 'unknown';
-};
+const rateLimiter = createFixedWindowLimiter({
+  maximum: RATE_LIMIT_MAX_REQUESTS,
+  durationMs: RATE_LIMIT_WINDOW_MS
+});
 
 const enforceRateLimit = (req, res) => {
-  const now = Date.now();
   const address = clientAddress(req);
-  const current = rateLimitStore.get(address);
-
-  if (!current || current.expiresAt <= now) {
-    rateLimitStore.set(address, { count: 1, expiresAt: now + RATE_LIMIT_WINDOW_MS });
-    return true;
-  }
-
-  current.count += 1;
-  if (current.count > RATE_LIMIT_MAX_REQUESTS) {
+  if (!rateLimiter.consume(address)) {
     res.setHeader('Retry-After', '60');
     sendJson(res, 429, { status: 0, message: 'Muitas consultas. Aguarde um minuto.' });
     return false;
   }
-
   return true;
 };
 
@@ -83,68 +47,6 @@ const validateInput = (payload) => {
   return { type, number, taxpayer };
 };
 
-const brudamRequest = async (path, options = {}) => {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-
-  try {
-    const response = await fetch(`${BRUDAM_API_URL}${path}`, {
-      ...options,
-      signal: controller.signal
-    });
-    const contentType = response.headers.get('content-type') || '';
-    const payload = contentType.includes('application/json')
-      ? await response.json()
-      : { status: 0, message: 'Resposta inválida da Brudam.' };
-
-    return { response, payload };
-  } finally {
-    clearTimeout(timeout);
-  }
-};
-
-const tokenExpiration = (token) => {
-  try {
-    const encodedPayload = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
-    const padding = '='.repeat((4 - encodedPayload.length % 4) % 4);
-    const payload = JSON.parse(Buffer.from(encodedPayload + padding, 'base64').toString('utf8'));
-    return Number(payload.exp) * 1000;
-  } catch {
-    return Date.now() + 240000;
-  }
-};
-
-const getAccessToken = async (forceRefresh = false) => {
-  if (!forceRefresh && cachedToken && Date.now() < cachedTokenExpiresAt - 30000) {
-    return cachedToken;
-  }
-
-  const usuario = process.env.BRUDAM_API_USER || '';
-  const senha = process.env.BRUDAM_API_PASSWORD || '';
-
-  if (!/^[A-Fa-f0-9]{32}$/.test(usuario) || !/^[A-Fa-f0-9]{64}$/.test(senha)) {
-    throw createHttpError('Integração de rastreamento não configurada.', 503);
-  }
-
-  const { response, payload } = await brudamRequest('/acesso/auth/login', {
-    method: 'POST',
-    headers: {
-      Accept: 'application/json',
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({ usuario, senha })
-  });
-  const token = payload?.data?.access_key;
-
-  if (!response.ok || typeof token !== 'string' || token === '') {
-    throw createHttpError(payload?.message || 'Não foi possível autenticar na Brudam.', 502);
-  }
-
-  cachedToken = token;
-  cachedTokenExpiresAt = tokenExpiration(token);
-  return cachedToken;
-};
-
 const trackingPath = ({ type, taxpayer, number }) => {
   const routes = {
     nf: ['/tracking/ocorrencias/cnpj/nf', { documento: taxpayer, numero: number }],
@@ -155,26 +57,12 @@ const trackingPath = ({ type, taxpayer, number }) => {
   return `${path}?${new URLSearchParams(query)}`;
 };
 
-const requestTracking = (path, token) => brudamRequest(path, {
+const fetchTracking = (input) => authorizedRequest(trackingPath(input), {
   method: 'GET',
   headers: {
-    Accept: 'application/json',
-    Authorization: `Bearer ${token}`
+    Accept: 'application/json'
   }
 });
-
-const fetchTracking = async (input) => {
-  const path = trackingPath(input);
-  let token = await getAccessToken();
-  let result = await requestTracking(path, token);
-
-  if (result.response.status !== 401) return result;
-
-  cachedToken = '';
-  cachedTokenExpiresAt = 0;
-  token = await getAccessToken(true);
-  return requestTracking(path, token);
-};
 
 module.exports = async (req, res) => {
   if (req.method !== 'POST') {
@@ -186,7 +74,7 @@ module.exports = async (req, res) => {
   if (!enforceRateLimit(req, res)) return;
 
   try {
-    const payload = await parseJsonBody(req);
+    const payload = await parseJsonBody(req, MAX_REQUEST_SIZE);
     const input = validateInput(payload);
     const { response, payload: brudamPayload } = await fetchTracking(input);
 

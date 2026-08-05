@@ -1,27 +1,4 @@
-const redisConfig = () => ({
-  url: (process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL || '').replace(/\/$/, ''),
-  token: process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN || ''
-});
-
-const command = async (...args) => {
-  const { url, token } = redisConfig();
-  if (!url || !token) {
-    throw new Error('Redis não configurado. Defina UPSTASH_REDIS_REST_URL e UPSTASH_REDIS_REST_TOKEN.');
-  }
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify(args)
-  });
-  const payload = await response.json();
-  if (!response.ok || payload.error) {
-    throw new Error(`Falha no Redis: ${payload.error || response.status}`);
-  }
-  return payload.result;
-};
+const { command } = require('../shared/redis');
 
 const claimMessage = async (messageId) => {
   const result = await command('SET', `whatsapp:message:${messageId}`, 'processing', 'NX', 'EX', 900);
