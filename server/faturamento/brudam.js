@@ -1,7 +1,8 @@
 const BASE_URL = String(process.env.BRUDAM_API_URL || 'https://twt.brudam.com.br/api/v1').replace(/\/$/, '');
 const REQUEST_TIMEOUT_MS = 20000;
 const COMPANY_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
-const COMPANY_LOOKUP_CONCURRENCY = 6;
+const COMPANY_LOOKUP_CONCURRENCY = 3;
+const COMPANY_LOOKUP_ATTEMPTS = 3;
 const COMPANY_INVOICES_CACHE_TTL_MS = 5 * 60 * 1000;
 const DEBTOR_SUMMARY_CACHE_TTL_MS = 5 * 60 * 1000;
 const MAX_COMPANY_INVOICE_PAGES = 50;
@@ -303,6 +304,16 @@ const companyLookupPath = (filter = {}) => {
   return `/cadastro/empresas?${params}`;
 };
 
+const shouldRetryCompanyLookup = (result, error = null) => {
+  if (error) return true;
+  const status = Number(result?.response?.status);
+  return status === 408 || status === 429 || status >= 500;
+};
+
+const retryDelay = (attempt) => new Promise((resolve) => {
+  setTimeout(resolve, attempt * 150);
+});
+
 const fetchCompanyTradeName = async (cnpj, clientId = null) => {
   const normalizedCnpj = String(cnpj || '').replace(/\D/g, '');
   const normalizedClientId = integer(clientId, { min: 1 });
@@ -323,30 +334,37 @@ const fetchCompanyTradeName = async (cnpj, clientId = null) => {
 
   const attempts = [];
   for (const filter of filters) {
-    try {
-      const result = await authenticatedGet(companyLookupPath(filter));
-      const name = result.response.ok
-        ? companyTradeNameFromPayload(result.payload, normalizedCnpj, normalizedClientId)
-        : '';
-      if (name) {
-        cacheKeys.forEach((cacheKey) => companyNameCache.set(cacheKey, {
-          name,
-          expiresAt: Date.now() + COMPANY_CACHE_TTL_MS
-        }));
-        return name;
+    for (let attempt = 1; attempt <= COMPANY_LOOKUP_ATTEMPTS; attempt += 1) {
+      try {
+        const result = await authenticatedGet(companyLookupPath(filter));
+        const name = result.response.ok
+          ? companyTradeNameFromPayload(result.payload, normalizedCnpj, normalizedClientId)
+          : '';
+        if (name) {
+          cacheKeys.forEach((cacheKey) => companyNameCache.set(cacheKey, {
+            name,
+            expiresAt: Date.now() + COMPANY_CACHE_TTL_MS
+          }));
+          return name;
+        }
+        attempts.push({
+          filter: Object.keys(filter)[0],
+          attempt,
+          httpStatus: result.response.status,
+          apiStatus: result.payload?.status,
+          records: companyRecordsFromPayload(result.payload).length,
+          message: String(result.payload?.message || '').slice(0, 120)
+        });
+        if (!shouldRetryCompanyLookup(result) || attempt === COMPANY_LOOKUP_ATTEMPTS) break;
+      } catch (error) {
+        attempts.push({
+          filter: Object.keys(filter)[0],
+          attempt,
+          error: String(error?.message || error).slice(0, 120)
+        });
+        if (attempt === COMPANY_LOOKUP_ATTEMPTS) break;
       }
-      attempts.push({
-        filter: Object.keys(filter)[0],
-        httpStatus: result.response.status,
-        apiStatus: result.payload?.status,
-        records: companyRecordsFromPayload(result.payload).length,
-        message: String(result.payload?.message || '').slice(0, 120)
-      });
-    } catch (error) {
-      attempts.push({
-        filter: Object.keys(filter)[0],
-        error: String(error?.message || error).slice(0, 120)
-      });
+      await retryDelay(attempt);
     }
   }
 
@@ -848,6 +866,7 @@ module.exports = {
   validCnpj,
   companyTradeNameFromPayload,
   companyLookupPath,
+  shouldRetryCompanyLookup,
   enrichInvoicesWithCompanies,
   invoiceListFromPayload,
   collectAllInvoicePages,

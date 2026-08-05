@@ -14,6 +14,7 @@ const {
   validCnpj,
   companyTradeNameFromPayload,
   companyLookupPath,
+  shouldRetryCompanyLookup,
   enrichInvoicesWithCompanies,
   invoiceListFromPayload,
   collectAllInvoicePages,
@@ -132,6 +133,7 @@ test('coluna Visualizar abre o PDF em nova guia e não oferece ordenação', () 
   assert.match(source, /\/api\/faturamento\/fatura-pdf\?id=/);
   assert.match(source, /link\.target = '_blank'/);
   assert.match(source, /noopener noreferrer/);
+  assert.match(html, /Conferindo faturas e empresas/);
 });
 
 test('rejeita data, status e CNPJ inválidos', () => {
@@ -297,6 +299,14 @@ test('monta a consulta de empresa com o CNPJ sem máscara', () => {
   );
 });
 
+test('repete somente falhas transitórias da consulta de empresas', () => {
+  assert.equal(shouldRetryCompanyLookup(null, new Error('timeout')), true);
+  assert.equal(shouldRetryCompanyLookup({ response: { status: 429 } }), true);
+  assert.equal(shouldRetryCompanyLookup({ response: { status: 503 } }), true);
+  assert.equal(shouldRetryCompanyLookup({ response: { status: 404 } }), false);
+  assert.equal(shouldRetryCompanyLookup({ response: { status: 200 } }), false);
+});
+
 test('enriquece faturas por CNPJ sem repetir consultas', async () => {
   const calls = [];
   const invoices = await enrichInvoicesWithCompanies([
@@ -311,6 +321,27 @@ test('enriquece faturas por CNPJ sem repetir consultas', async () => {
   assert.equal(invoices[0].client, 'NOME FANTASIA');
   assert.equal(invoices[1].client, 'NOME FANTASIA');
   assert.equal(invoices[2].client, 'JÁ INFORMADO');
+});
+
+test('aguarda a consulta do nome fantasia antes de devolver as faturas', async () => {
+  let releaseLookup;
+  const lookup = new Promise((resolve) => {
+    releaseLookup = resolve;
+  });
+  let settled = false;
+  const pending = enrichInvoicesWithCompanies([
+    { id: 11577, client: '', clientDocument: '11280282000144' }
+  ], async () => lookup).then((invoices) => {
+    settled = true;
+    return invoices;
+  });
+
+  await Promise.resolve();
+  assert.equal(settled, false);
+  releaseLookup('BHZ - TARGET CARGO');
+  const invoices = await pending;
+  assert.equal(settled, true);
+  assert.equal(invoices[0].client, 'BHZ - TARGET CARGO');
 });
 
 test('usa o CNPJ como chave principal mesmo quando o id_cliente se repete', async () => {
