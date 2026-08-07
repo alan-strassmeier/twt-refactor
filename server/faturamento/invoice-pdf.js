@@ -25,6 +25,9 @@ const DETAIL_CONCURRENCY = 6;
 const DOCCOB_DETAIL_CONCURRENCY = 4;
 const PAGE = { width: 595.28, height: 841.89, margin: 14 };
 const CONTENT_WIDTH = PAGE.width - (PAGE.margin * 2);
+const ISSUER_DISPLAY_NAMES = new Map([
+  ['09123137000108', 'TWT AIRPACK SERVICOS AUX. DE TRANSP. AEREO LTDA']
+]);
 const legalTextFor = (companyName) => [
   'Reconheço (emos) a exatidão desta fatura de PRESTAÇÃO DE SERVIÇOS, na importância acima pagarei (emos)',
   `à ${safeText(companyName, COMPANY.name)}, ou à sua ordem, na Praça e vencimento indicados.`,
@@ -82,6 +85,13 @@ const formatDate = (value) => {
   return brazilian ? brazilian[0] : safeText(value);
 };
 
+const formatDateForQuery = (value) => {
+  const iso = String(value || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+  const brazilian = String(value || '').match(/^(\d{2})\/(\d{2})\/(\d{4})/);
+  return brazilian ? `${brazilian[3]}-${brazilian[2]}-${brazilian[1]}` : '';
+};
+
 const formatNumber = (value, decimals = 2) => {
   const number = numberValue(value);
   return number === null
@@ -90,6 +100,11 @@ const formatNumber = (value, decimals = 2) => {
       minimumFractionDigits: decimals,
       maximumFractionDigits: decimals
     }).format(number);
+};
+
+const displayAuthorization = (value) => {
+  const text = safeText(value, '');
+  return text && text.length <= 20 && digits(text).length !== 44 ? text : '-';
 };
 
 const exactInvoiceRecord = (invoices, invoiceId) => invoices.find((invoice) => {
@@ -183,6 +198,9 @@ const fetchMinuteDetail = async (document, get = authenticatedGet) => {
   return null;
 };
 
+const issuerDisplayName = (issuer) =>
+  ISSUER_DISPLAY_NAMES.get(digits(issuer?.document)) || safeText(issuer?.name, COMPANY.name);
+
 const normalizedLookupText = (value) => String(value || '')
   .trim()
   .normalize('NFD')
@@ -256,24 +274,40 @@ const minuteIdentity = (detail) => comparableNumber(
   detail?.minuta?.id || detail?.minuta?.codigo || detail?.id_minuta
 );
 
-const fetchMinuteDetailsForNote = async (note, get = authenticatedGet) => {
-  const document = digits(note?.partyCnpj);
+const fetchMinuteDetailsForNote = async (note, get = authenticatedGet, context = {}) => {
+  const documents = [...new Set([
+    digits(note?.partyCnpj),
+    digits(context?.clientCnpj)
+  ].filter((document) => document.length === 14))];
   const number = comparableNumber(note?.number);
-  if (document.length !== 14 || !number) return [];
-  const query = new URLSearchParams({ documento: document, numero: number });
-  const occurrenceResult = await get(`/tracking/ocorrencias/cnpj/nf?${query}`);
-  if (!occurrenceResult.response.ok || Number(occurrenceResult.payload?.status) !== 1) return [];
-
-  const identifiers = occurrenceMinuteIdentifiers(occurrenceResult.payload);
-  for (const cteNumber of occurrenceCteNumbers(occurrenceResult.payload)) {
+  if (!documents.length || !number) return [];
+  const transportIssuedAt = formatDateForQuery(
+    context?.transportIssuedAt || note?.transportIssuedAt || note?.issuedAt
+  );
+  const identifiers = [];
+  for (const document of documents) {
     try {
-      const costsQuery = new URLSearchParams({ numero: cteNumber, limit: '10' });
-      const costsResult = await get(`/operacional/custos?${costsQuery}`);
-      if (costsResult.response.ok) {
-        identifiers.push(...minuteIdsFromCostsPayload(costsResult.payload));
+      const query = new URLSearchParams({ documento: document, numero: number });
+      const occurrenceResult = await get(`/tracking/ocorrencias/cnpj/nf?${query}`);
+      if (!occurrenceResult.response.ok || Number(occurrenceResult.payload?.status) !== 1) continue;
+      identifiers.push(...occurrenceMinuteIdentifiers(occurrenceResult.payload));
+      for (const cteNumber of occurrenceCteNumbers(occurrenceResult.payload)) {
+        try {
+          const costsQuery = new URLSearchParams({
+            numero: comparableNumber(String(cteNumber).split('-')[0]),
+            limit: '10'
+          });
+          if (transportIssuedAt) costsQuery.set('emissao[eq]', transportIssuedAt);
+          const costsResult = await get(`/operacional/custos?${costsQuery}`);
+          if (costsResult.response.ok) {
+            identifiers.push(...minuteIdsFromCostsPayload(costsResult.payload));
+          }
+        } catch {
+          // A própria ocorrência ainda pode ter fornecido a minuta ou a chave do CT-e.
+        }
       }
     } catch {
-      // A própria ocorrência ainda pode ter fornecido a minuta ou a chave do CT-e.
+      // Tenta o próximo CNPJ relacionado ao mesmo transporte.
     }
   }
 
@@ -305,7 +339,10 @@ const resolveDoccobTransportDetail = async (transport, get = authenticatedGet) =
 
   const matches = new Map();
   for (const note of transport?.notes || []) {
-    const details = await fetchMinuteDetailsForNote(note, get);
+    const details = await fetchMinuteDetailsForNote(note, get, {
+      clientCnpj: transport?.clientCnpj,
+      transportIssuedAt: transport?.issuedAt
+    });
     details.forEach((detail) => {
       const identity = minuteIdentity(detail);
       if (identity) matches.set(identity, detail);
@@ -420,7 +457,7 @@ const shipmentFromDetail = (linkedDocument, detail, parties = {}) => {
     ),
     note: safeText(noteNumbers),
     noteValue: documents.length ? sumDocumentValues(documents, 'vNF') : null,
-    authorization: safeText(firstValue(minute, ['cAut', 'nAver'])),
+    authorization: displayAuthorization(firstValue(minute, ['cAut', 'nAver'])),
     origin: safeText([
       origin.tradeName || origin.name,
       originLocation
@@ -568,6 +605,16 @@ const drawBox = (doc, x, y, width, height, options = {}) => {
     .restore();
 };
 
+const singleLineFontSize = (doc, text, width, preferred = 6.7, minimum = 4.8) => {
+  let size = preferred;
+  while (size > minimum) {
+    doc.fontSize(size);
+    if (doc.widthOfString(text) <= width) return size;
+    size -= 0.2;
+  }
+  return minimum;
+};
+
 const drawCellText = (doc, text, x, y, width, options = {}) => {
   doc.font(options.bold ? 'Helvetica-Bold' : 'Helvetica')
     .fontSize(options.size || 6.5)
@@ -593,6 +640,7 @@ const drawLogo = (doc) => {
 
 const drawInvoiceHeader = (doc, data, barcode) => {
   const issuer = data.issuer || normalizedCompany(null, COMPANY);
+  const displayName = issuerDisplayName(issuer);
   const issuerCityLine = [
     issuer.district,
     [issuer.city, issuer.state].filter(Boolean).join('-'),
@@ -608,8 +656,9 @@ const drawInvoiceHeader = (doc, data, barcode) => {
   doc.moveTo(x + companyWidth, y).lineTo(x + companyWidth, y + h).stroke();
   doc.moveTo(x + companyWidth + titleWidth, y).lineTo(x + companyWidth + titleWidth, y + h).stroke();
   drawLogo(doc);
-  doc.font('Helvetica-Bold').fontSize(6.7).fillColor('#111111')
-    .text(issuer.name, 130, 18, { width: 205 });
+  doc.font('Helvetica-Bold').fillColor('#111111');
+  doc.fontSize(singleLineFontSize(doc, displayName, 205))
+    .text(displayName, 130, 18, { width: 205, height: 9, lineBreak: false });
   doc.font('Helvetica').fontSize(5.3)
     .text(issuer.address, 130, 30, { width: 205 })
     .text(issuerCityLine, 130, 40, { width: 205 })
@@ -703,6 +752,14 @@ const TABLE_COLUMNS = [
   ['Frete', 42, 'freight', 'right']
 ];
 
+const TABLE_COLUMN_GEOMETRY = Object.freeze(TABLE_COLUMNS.reduce((geometry, column) => {
+  const [, width, key] = column;
+  const previous = Object.values(geometry).at(-1);
+  const x = previous ? previous.x + previous.width : PAGE.margin;
+  geometry[key] = Object.freeze({ x, width });
+  return geometry;
+}, {}));
+
 const displayShipmentValue = (shipment, key) => {
   if (['noteValue', 'taxedWeight', 'freight'].includes(key)) return formatNumber(shipment[key]);
   if (key === 'volumes') {
@@ -729,16 +786,38 @@ const drawTableHeader = (doc, y) => {
   return y + h;
 };
 
-const shipmentHeight = (doc, shipment) => {
-  const originHeight = doc.heightOfString(safeText(shipment.origin), { width: 94 });
-  const destinationHeight = doc.heightOfString(safeText(shipment.destination), { width: 95 });
-  const base = Math.max(22, originHeight + 6, destinationHeight + 6);
-  return base + (shipment.observation ? 12 : 0);
+const observationHeight = (doc, observation) => {
+  if (!observation) return 0;
+  doc.font('Helvetica').fontSize(5.2);
+  const textHeight = doc.heightOfString(`Obs.: ${safeText(observation)}`, {
+    width: CONTENT_WIDTH - 6,
+    lineGap: 0.5
+  });
+  return Math.max(12, Math.ceil(textHeight) + 4);
 };
 
+const shipmentLayout = (doc, shipment) => {
+  doc.font('Helvetica').fontSize(5.4);
+  const originHeight = doc.heightOfString(safeText(shipment.origin), {
+    width: TABLE_COLUMN_GEOMETRY.origin.width - 6
+  });
+  const destinationHeight = doc.heightOfString(safeText(shipment.destination), {
+    width: TABLE_COLUMN_GEOMETRY.destination.width - 6
+  });
+  const mainHeight = Math.max(22, Math.ceil(originHeight) + 8, Math.ceil(destinationHeight) + 8);
+  const observationRowHeight = observationHeight(doc, shipment.observation);
+  return {
+    mainHeight,
+    observationHeight: observationRowHeight,
+    totalHeight: mainHeight + observationRowHeight
+  };
+};
+
+const shipmentHeight = (doc, shipment) => shipmentLayout(doc, shipment).totalHeight;
+
 const drawShipment = (doc, shipment, y) => {
-  const rowHeight = shipmentHeight(doc.font('Helvetica').fontSize(5.6), shipment);
-  const mainHeight = shipment.observation ? rowHeight - 12 : rowHeight;
+  const layout = shipmentLayout(doc, shipment);
+  const { mainHeight } = layout;
   let x = PAGE.margin;
   TABLE_COLUMNS.forEach(([, width, key, align]) => {
     drawBox(doc, x, y, width, mainHeight);
@@ -750,15 +829,17 @@ const drawShipment = (doc, shipment, y) => {
     });
     x += width;
   });
-  if (shipment.observation) {
-    drawBox(doc, PAGE.margin, y + mainHeight, CONTENT_WIDTH, 12);
+  if (layout.observationHeight) {
+    drawBox(doc, PAGE.margin, y + mainHeight, CONTENT_WIDTH, layout.observationHeight);
     drawCellText(doc, `Obs.: ${shipment.observation}`, PAGE.margin, y + mainHeight, CONTENT_WIDTH, {
       size: 5.2,
-      height: 9,
-      topPadding: 2
+      height: layout.observationHeight - 4,
+      topPadding: 2,
+      lineGap: 0.5,
+      ellipsis: false
     });
   }
-  return y + rowHeight;
+  return y + layout.totalHeight;
 };
 
 const shipmentTotals = (shipments) => ({
@@ -771,36 +852,55 @@ const shipmentTotals = (shipments) => ({
 const drawTotals = (doc, shipments, y) => {
   const totals = shipmentTotals(shipments);
   const h = 15;
+  const minute = TABLE_COLUMN_GEOMETRY.minute;
+  const cte = TABLE_COLUMN_GEOMETRY.cte;
+  const collection = TABLE_COLUMN_GEOMETRY.collection;
+  const date = TABLE_COLUMN_GEOMETRY.date;
+  const noteValue = TABLE_COLUMN_GEOMETRY.noteValue;
+  const taxedWeight = TABLE_COLUMN_GEOMETRY.taxedWeight;
+  const volumes = TABLE_COLUMN_GEOMETRY.volumes;
+  const freight = TABLE_COLUMN_GEOMETRY.freight;
   drawBox(doc, PAGE.margin, y, CONTENT_WIDTH, h);
-  drawCellText(doc, `Qtd. Remessas     ${shipments.length}`, PAGE.margin, y, 105, {
+  [collection.x, date.x, date.x + date.width, noteValue.x, noteValue.x + noteValue.width,
+    taxedWeight.x, volumes.x, freight.x].forEach((lineX) => {
+    doc.moveTo(lineX, y).lineTo(lineX, y + h).stroke();
+  });
+  drawCellText(doc, 'Qtd. Remessas', minute.x, y, minute.width + cte.width, {
     bold: true,
     size: 6.2,
     topPadding: 4
   });
-  drawCellText(doc, 'Totais', PAGE.margin + 105, y, 70, {
+  drawCellText(doc, shipments.length, collection.x, y, collection.width, {
     bold: true,
     size: 6.2,
+    align: 'center',
     topPadding: 4
   });
-  drawCellText(doc, formatNumber(totals.noteValue), PAGE.margin + 175, y, 155, {
+  drawCellText(doc, 'Totais', date.x, y, date.width, {
+    bold: true,
+    size: 6.2,
+    align: 'center',
+    topPadding: 4
+  });
+  drawCellText(doc, formatNumber(totals.noteValue), noteValue.x, y, noteValue.width, {
     bold: true,
     size: 6.2,
     align: 'right',
     topPadding: 4
   });
-  drawCellText(doc, formatNumber(totals.taxedWeight), PAGE.margin + 430, y, 45, {
+  drawCellText(doc, formatNumber(totals.taxedWeight), taxedWeight.x, y, taxedWeight.width, {
     bold: true,
     size: 6.2,
     align: 'right',
     topPadding: 4
   });
-  drawCellText(doc, formatNumber(totals.volumes, 0), PAGE.margin + 475, y, 42, {
+  drawCellText(doc, formatNumber(totals.volumes, 0), volumes.x, y, volumes.width, {
     bold: true,
     size: 6.2,
     align: 'right',
     topPadding: 4
   });
-  drawCellText(doc, formatNumber(totals.freight), PAGE.margin + 517, y, 50, {
+  drawCellText(doc, formatNumber(totals.freight), freight.x, y, freight.width, {
     bold: true,
     size: 6.2,
     align: 'right',
@@ -812,7 +912,7 @@ const drawTotals = (doc, shipments, y) => {
 const drawLegalFooter = (doc, data) => {
   const y = PAGE.height - 72;
   doc.font('Helvetica').fontSize(5.3).fillColor('#111111')
-    .text(legalTextFor(data?.issuer?.name), PAGE.margin, y, {
+    .text(legalTextFor(issuerDisplayName(data?.issuer)), PAGE.margin, y, {
       width: CONTENT_WIDTH,
       align: 'justify',
       lineGap: 0.5
@@ -895,7 +995,7 @@ const buildInvoicePdf = async (data) => {
       compress: true,
       info: {
         Title: `Fatura ${safeText(data.invoice.id)}`,
-        Author: safeText(data?.issuer?.name, COMPANY.name),
+        Author: issuerDisplayName(data?.issuer),
         Subject: 'Fatura de prestação de serviços'
       }
     });
@@ -909,6 +1009,10 @@ const buildInvoicePdf = async (data) => {
 
 module.exports = {
   COMPANY,
+  issuerDisplayName,
+  displayAuthorization,
+  TABLE_COLUMN_GEOMETRY,
+  shipmentLayout,
   exactInvoiceRecord,
   companyFromPayload,
   normalizedCompany,

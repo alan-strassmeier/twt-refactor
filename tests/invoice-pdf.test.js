@@ -1,6 +1,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const PDFDocument = require('pdfkit');
 const {
+  issuerDisplayName,
+  displayAuthorization,
+  TABLE_COLUMN_GEOMETRY,
+  shipmentLayout,
   exactInvoiceRecord,
   companyFromPayload,
   normalizedCompany,
@@ -12,6 +17,48 @@ const {
   shipmentFromDetail,
   buildInvoicePdf
 } = require('../server/faturamento/invoice-pdf');
+
+test('abrevia o nome da TWT sem alterar os demais emitentes', () => {
+  assert.equal(issuerDisplayName({
+    document: '09.123.137/0001-08',
+    name: 'TWT AIRPACK SERVICOS AUXILIARES DE TRANSPORTE AEREO LTDA ME'
+  }), 'TWT AIRPACK SERVICOS AUX. DE TRANSP. AEREO LTDA');
+  assert.equal(issuerDisplayName({
+    document: '97.434.690/0001-29',
+    name: 'DSL DO BRASIL TRANSPORTE E LOGISTICA LTDA'
+  }), 'DSL DO BRASIL TRANSPORTE E LOGISTICA LTDA');
+});
+
+test('não exibe uma chave longa no campo de autorização', () => {
+  assert.equal(displayAuthorization('7666'), '7666');
+  assert.equal(displayAuthorization('43260797434690000129570000000151221704715130'), '-');
+});
+
+test('mantém os totais exatamente sob as colunas solicitadas', () => {
+  assert.equal(TABLE_COLUMN_GEOMETRY.collection.x, 85);
+  assert.equal(TABLE_COLUMN_GEOMETRY.date.x, 115);
+  assert.equal(TABLE_COLUMN_GEOMETRY.noteValue.x, 198);
+  assert.equal(TABLE_COLUMN_GEOMETRY.taxedWeight.x, 471);
+  assert.equal(TABLE_COLUMN_GEOMETRY.volumes.x, 505);
+  assert.equal(TABLE_COLUMN_GEOMETRY.freight.x, 539);
+});
+
+test('aumenta a linha para preservar observações longas', () => {
+  const doc = new PDFDocument({ autoFirstPage: false });
+  const shortLayout = shipmentLayout(doc, {
+    origin: 'PORTO ALEGRE, RS',
+    destination: 'SAO PAULO, SP',
+    observation: 'CLIENTE RETIRA NA BASE.'
+  });
+  const longLayout = shipmentLayout(doc, {
+    origin: 'PORTO ALEGRE, RS',
+    destination: 'SAO PAULO, SP',
+    observation: 'ENTREGA SOMENTE MEDIANTE AGENDAMENTO. '.repeat(35)
+  });
+  assert.ok(longLayout.observationHeight > shortLayout.observationHeight);
+  assert.equal(longLayout.totalHeight, longLayout.mainHeight + longLayout.observationHeight);
+  doc.end();
+});
 
 test('não confunde o número público da fatura com o ID interno do lançamento', () => {
   const invoices = [
@@ -162,6 +209,58 @@ test('usa NF e CNPJ para encontrar a minuta quando não há chave nem número di
   }, get);
   assert.deepEqual(matches, [detail]);
   assert.equal(calls.length, 3);
+});
+
+test('tenta também o CNPJ do cliente e informa a emissão na consulta de custos', async () => {
+  const calls = [];
+  const detail = {
+    minuta: { id: 24891 },
+    rem: { nDoc: '00280273001028' },
+    documentos: [{ nDoc: '317063' }]
+  };
+  const get = async (path) => {
+    calls.push(path);
+    if (path.startsWith('/tracking/ocorrencias/cnpj/nf?')) {
+      const query = new URLSearchParams(path.split('?')[1]);
+      if (query.get('documento') === '28759933000186') {
+        return {
+          response: { ok: true, status: 200 },
+          payload: { status: 1, data: [{ dados: [{ cte_numero: '15127-0' }] }] }
+        };
+      }
+      return {
+        response: { ok: false, status: 404 },
+        payload: { status: 0 }
+      };
+    }
+    if (path.startsWith('/operacional/custos?')) {
+      const query = new URLSearchParams(path.split('?')[1]);
+      assert.equal(query.get('numero'), '15127');
+      assert.equal(query.get('emissao[eq]'), '2026-06-26');
+      return {
+        response: { ok: true, status: 200 },
+        payload: { status: 1, data: [{ id: 24891 }] }
+      };
+    }
+    if (path === '/operacional/consulta/minuta/24891') {
+      return {
+        response: { ok: true, status: 200 },
+        payload: { status: 1, data: [detail] }
+      };
+    }
+    throw new Error(`Caminho inesperado: ${path}`);
+  };
+
+  const matches = await fetchMinuteDetailsForNote({
+    number: '317063',
+    partyCnpj: '00280273001028',
+    transportIssuedAt: '2026-06-26'
+  }, get, {
+    clientCnpj: '28759933000186',
+    transportIssuedAt: '2026-06-26'
+  });
+  assert.deepEqual(matches, [detail]);
+  assert.equal(calls.length, 4);
 });
 
 test('não aceita uma minuta de NF pertencente a outro CNPJ', async () => {
