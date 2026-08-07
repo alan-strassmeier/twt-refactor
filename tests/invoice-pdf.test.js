@@ -5,7 +5,10 @@ const {
   companyFromPayload,
   normalizedCompany,
   linkedDocumentsFromInvoice,
+  linkedDocumentsFromDoccob,
   detailIdentifiers,
+  fetchMinuteDetailsForNote,
+  resolveDoccobTransportDetail,
   shipmentFromDetail,
   buildInvoicePdf
 } = require('../server/faturamento/invoice-pdf');
@@ -80,6 +83,114 @@ test('não trata o ID interno ou o número do CT-e como ID da minuta', () => {
   }), ['43260797434690000129570000000151131927245991', '24437']);
 });
 
+test('transforma cada vínculo DOCCOB em um documento seguro para consulta', () => {
+  const documents = linkedDocumentsFromDoccob({
+    transports: [{
+      reference: '24783',
+      minuteHint: '24783',
+      cteNumber: null,
+      accessKey: null,
+      freight: 47,
+      notes: [{ number: '317063', partyCnpj: '00280273001028' }]
+    }]
+  });
+  assert.equal(documents.length, 1);
+  assert.equal(documents[0].tipo, 'MINUTA');
+  assert.equal(documents[0].id_minuta, '24783');
+  assert.equal(documents[0].numero, null);
+  assert.deepEqual(detailIdentifiers(documents[0]), ['24783']);
+});
+
+test('resolve um vínculo sem chave diretamente pelo número da minuta', async () => {
+  const calls = [];
+  const detail = {
+    minuta: { id: 24766 },
+    documentos: []
+  };
+  const get = async (path) => {
+    calls.push(path);
+    return {
+      response: { ok: true, status: 200 },
+      payload: { status: 1, data: [detail] }
+    };
+  };
+  const result = await resolveDoccobTransportDetail({
+    minuteHint: '24766',
+    accessKey: null,
+    notes: []
+  }, get);
+  assert.equal(result, detail);
+  assert.deepEqual(calls, ['/operacional/consulta/minuta/24766']);
+});
+
+test('usa NF e CNPJ para encontrar a minuta quando não há chave nem número direto', async () => {
+  const calls = [];
+  const detail = {
+    minuta: { id: 24891 },
+    rem: { nDoc: '00280273001028' },
+    documentos: [{ nDoc: '317063' }]
+  };
+  const get = async (path) => {
+    calls.push(path);
+    if (path.startsWith('/tracking/ocorrencias/cnpj/nf?')) {
+      return {
+        response: { ok: true, status: 200 },
+        payload: {
+          status: 1,
+          data: [{ dados: [{ tipo: 'CTE', cte_numero: '15127-0' }] }]
+        }
+      };
+    }
+    if (path.startsWith('/operacional/custos?')) {
+      return {
+        response: { ok: true, status: 200 },
+        payload: { status: 1, data: [{ id: 24891 }] }
+      };
+    }
+    if (path === '/operacional/consulta/minuta/24891') {
+      return {
+        response: { ok: true, status: 200 },
+        payload: { status: 1, data: [detail] }
+      };
+    }
+    throw new Error(`Caminho inesperado: ${path}`);
+  };
+
+  const matches = await fetchMinuteDetailsForNote({
+    number: '317063',
+    partyCnpj: '00280273001028'
+  }, get);
+  assert.deepEqual(matches, [detail]);
+  assert.equal(calls.length, 3);
+});
+
+test('não aceita uma minuta de NF pertencente a outro CNPJ', async () => {
+  const get = async (path) => {
+    if (path.startsWith('/tracking/ocorrencias/cnpj/nf?')) {
+      return {
+        response: { ok: true, status: 200 },
+        payload: { status: 1, data: [{ dados: [{ tipo: 'Minuta', numero: 24891 }] }] }
+      };
+    }
+    return {
+      response: { ok: true, status: 200 },
+      payload: {
+        status: 1,
+        data: [{
+          minuta: { id: 24891 },
+          rem: { nDoc: '11111111000111' },
+          documentos: [{ nDoc: '317063' }]
+        }]
+      }
+    };
+  };
+  const matches = await fetchMinuteDetailsForNote({
+    number: '317063',
+    partyCnpj: '00280273001028'
+  }, get);
+  assert.deepEqual(matches, []);
+});
+
 test('normaliza uma minuta detalhada para a linha da fatura', () => {
   const shipment = shipmentFromDetail(
     { id: 24847, numero: '15097-0', tipo: 'CTE', valor: 677.10 },
@@ -112,7 +223,7 @@ test('normaliza uma minuta detalhada para a linha da fatura', () => {
   assert.equal(shipment.freight, 677.10);
 });
 
-test('gera um PDF A4 com detalhe e resumo da fatura', async () => {
+test('gera somente a página principal da fatura em PDF A4', async () => {
   const pdf = await buildInvoicePdf({
     invoice: {
       id: 11490,
@@ -156,5 +267,5 @@ test('gera um PDF A4 com detalhe e resumo da fatura', async () => {
   });
   assert.equal(pdf.subarray(0, 5).toString('ascii'), '%PDF-');
   assert.ok(pdf.length > 5000);
-  assert.equal((pdf.toString('latin1').match(/\/Type \/Page\b/g) || []).length, 2);
+  assert.equal((pdf.toString('latin1').match(/\/Type \/Page\b/g) || []).length, 1);
 });

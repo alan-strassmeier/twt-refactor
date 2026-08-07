@@ -7,22 +7,27 @@ const {
   invoiceListFromPayload,
   normalizeInvoice
 } = require('./brudam');
+const { findDoccobForInvoice } = require('./r2-doccob');
 
 const COMPANY = {
   name: 'DSL DO BRASIL TRANSPORTE E LOGISTICA LTDA',
   address: 'AV SERTORIO, 4455',
-  cityLine: 'JARDIM SAO PEDRO, PORTO ALEGRE-RS CEP: 91040-621',
+  district: 'JARDIM SAO PEDRO',
+  city: 'PORTO ALEGRE',
+  state: 'RS',
+  cep: '91040-621',
   document: '97.434.690/0001-29',
   phone: '(51) 3342-4425',
   stateRegistration: '0963199668'
 };
 const MAX_LINKED_DOCUMENTS = 100;
 const DETAIL_CONCURRENCY = 6;
+const DOCCOB_DETAIL_CONCURRENCY = 4;
 const PAGE = { width: 595.28, height: 841.89, margin: 14 };
 const CONTENT_WIDTH = PAGE.width - (PAGE.margin * 2);
-const LEGAL_TEXT = [
+const legalTextFor = (companyName) => [
   'Reconheço (emos) a exatidão desta fatura de PRESTAÇÃO DE SERVIÇOS, na importância acima pagarei (emos)',
-  'à DSL DO BRASIL TRANSPORTE E LOGISTICA LTDA, ou à sua ordem, na Praça e vencimento indicados.',
+  `à ${safeText(companyName, COMPANY.name)}, ou à sua ordem, na Praça e vencimento indicados.`,
   'Na falta de pagamento no vencimento serão cobrados juros legais e atualização conforme indicadores fixados pelo Governo.'
 ].join(' ');
 
@@ -102,11 +107,11 @@ const normalizedCompany = (company, fallback = {}) => {
   const street = firstValue(company, ['endereco', 'logradouro', 'xLgr']) || '';
   const number = firstValue(company, ['numero', 'nro']) || '';
   const complement = firstValue(company, ['complemento', 'xCpl']) || '';
-  const address = [street, number, complement].filter(Boolean).join(', ');
-  const district = firstValue(company, ['bairro', 'xBairro']) || '';
-  const city = firstValue(company, ['cidade', 'municipio', 'xMun']) || '';
-  const state = firstValue(company, ['uf', 'UF', 'estado']) || '';
-  const cep = firstValue(company, ['cep', 'CEP']) || '';
+  const address = [street, number, complement].filter(Boolean).join(', ') || fallback.address || '';
+  const district = firstValue(company, ['bairro', 'xBairro']) || fallback.district || '';
+  const city = firstValue(company, ['cidade', 'municipio', 'xMun']) || fallback.city || '';
+  const state = firstValue(company, ['uf', 'UF', 'estado']) || fallback.state || '';
+  const cep = firstValue(company, ['cep', 'CEP']) || fallback.cep || '';
 
   return {
     name: safeText(
@@ -115,8 +120,9 @@ const normalizedCompany = (company, fallback = {}) => {
     ),
     tradeName: safeText(firstValue(company, ['fantasia', 'xFant']) || fallback.tradeName || '', ''),
     document: firstValue(company, ['cnpj', 'cpf_cnpj', 'nDoc']) || fallback.document || '',
-    stateRegistration: firstValue(company, ['ie', 'inscricao_estadual', 'IE']) || '',
-    phone: firstValue(company, ['telefone', 'fone', 'nFone']) || '',
+    stateRegistration: firstValue(company, ['ie', 'inscricao_estadual', 'IE']) ||
+      fallback.stateRegistration || '',
+    phone: firstValue(company, ['telefone', 'fone', 'nFone']) || fallback.phone || '',
     address: safeText(address, ''),
     district: safeText(district, ''),
     city: safeText(city, ''),
@@ -130,6 +136,18 @@ const linkedDocumentsFromInvoice = (invoice) =>
     .filter((document) => document && typeof document === 'object')
     .slice(0, MAX_LINKED_DOCUMENTS);
 
+const linkedDocumentsFromDoccob = (doccob) =>
+  (Array.isArray(doccob?.transports) ? doccob.transports : [])
+    .slice(0, MAX_LINKED_DOCUMENTS)
+    .map((transport) => ({
+      chave: transport.accessKey,
+      id_minuta: transport.minuteHint,
+      numero: transport.cteNumber,
+      tipo: transport.accessKey ? 'CTE' : 'MINUTA',
+      valor: transport.freight,
+      doccob: transport
+    }));
+
 const minuteDataFromPayload = (payload) => {
   if (!payload || Number(payload.status) !== 1 || !Array.isArray(payload.data)) return null;
   return payload.data.find((item) => item && typeof item === 'object') || null;
@@ -141,7 +159,8 @@ const detailIdentifiers = (document) => {
     document?.chave_cte,
     document?.id_minuta,
     document?.minuta_id,
-    typeof document?.minuta === 'object' ? null : document?.minuta
+    typeof document?.minuta === 'object' ? null : document?.minuta,
+    document?.doccob?.minuteHint
   ];
   return [...new Set(values
     .map((value) => String(value ?? '').trim())
@@ -149,10 +168,10 @@ const detailIdentifiers = (document) => {
     .filter((value) => value && value.length <= 64))];
 };
 
-const fetchMinuteDetail = async (document) => {
+const fetchMinuteDetail = async (document, get = authenticatedGet) => {
   for (const identifier of detailIdentifiers(document)) {
     try {
-      const result = await authenticatedGet(
+      const result = await get(
         `/operacional/consulta/minuta/${encodeURIComponent(identifier)}`
       );
       const detail = result.response.ok ? minuteDataFromPayload(result.payload) : null;
@@ -162,6 +181,137 @@ const fetchMinuteDetail = async (document) => {
     }
   }
   return null;
+};
+
+const normalizedLookupText = (value) => String(value || '')
+  .trim()
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .toUpperCase();
+
+const comparableNumber = (value) => {
+  const normalized = digits(value).replace(/^0+(?=\d)/, '');
+  return normalized || '';
+};
+
+const occurrenceEventsFromPayload = (payload) => {
+  if (!payload || Number(payload.status) !== 1 || !Array.isArray(payload.data)) return [];
+  return payload.data.flatMap((item) => Array.isArray(item?.dados) ? item.dados : []);
+};
+
+const occurrenceMinuteIdentifiers = (payload) => {
+  const identifiers = [];
+  occurrenceEventsFromPayload(payload).forEach((event) => {
+    [event?.minuta, event?.id_minuta, event?.minuta_id, event?.numero_minuta]
+      .forEach((value) => {
+        const identifier = comparableNumber(value);
+        if (identifier) identifiers.push(identifier);
+      });
+    if (normalizedLookupText(event?.tipo).includes('MINUTA')) {
+      const identifier = comparableNumber(event?.numero);
+      if (identifier) identifiers.push(identifier);
+    }
+    [event?.chave, event?.chave_cte, event?.cte_chave].forEach((value) => {
+      const identifier = digits(value);
+      if (identifier.length === 44) identifiers.push(identifier);
+    });
+  });
+  return [...new Set(identifiers)];
+};
+
+const occurrenceCteNumbers = (payload) => [...new Set(
+  occurrenceEventsFromPayload(payload)
+    .flatMap((event) => [event?.cte_numero, event?.numero_cte, event?.xDocCTe])
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+)];
+
+const minuteIdsFromCostsPayload = (payload) => {
+  if (!payload || Number(payload.status) !== 1 || !Array.isArray(payload.data)) return [];
+  return [...new Set(payload.data
+    .map((item) => comparableNumber(item?.id))
+    .filter(Boolean))];
+};
+
+const minuteDetailMatchesNote = (detail, note) => {
+  if (!detail || !note) return false;
+  const expectedNumber = comparableNumber(note.number);
+  const expectedCnpj = digits(note.partyCnpj);
+  const documentNumbers = (Array.isArray(detail.documentos) ? detail.documentos : [])
+    .flatMap((document) => [document?.nDoc, document?.numero, document?.numero_nf])
+    .map(comparableNumber)
+    .filter(Boolean);
+  if (documentNumbers.length && expectedNumber && !documentNumbers.includes(expectedNumber)) {
+    return false;
+  }
+  const partyDocuments = [detail.rem, detail.dest, detail.toma, detail.exped, detail.receb]
+    .flatMap((party) => [party?.nDoc, party?.cnpj, party?.documento])
+    .map(digits)
+    .filter((document) => document.length === 14);
+  return !(partyDocuments.length && expectedCnpj.length === 14 &&
+    !partyDocuments.includes(expectedCnpj));
+};
+
+const minuteIdentity = (detail) => comparableNumber(
+  detail?.minuta?.id || detail?.minuta?.codigo || detail?.id_minuta
+);
+
+const fetchMinuteDetailsForNote = async (note, get = authenticatedGet) => {
+  const document = digits(note?.partyCnpj);
+  const number = comparableNumber(note?.number);
+  if (document.length !== 14 || !number) return [];
+  const query = new URLSearchParams({ documento: document, numero: number });
+  const occurrenceResult = await get(`/tracking/ocorrencias/cnpj/nf?${query}`);
+  if (!occurrenceResult.response.ok || Number(occurrenceResult.payload?.status) !== 1) return [];
+
+  const identifiers = occurrenceMinuteIdentifiers(occurrenceResult.payload);
+  for (const cteNumber of occurrenceCteNumbers(occurrenceResult.payload)) {
+    try {
+      const costsQuery = new URLSearchParams({ numero: cteNumber, limit: '10' });
+      const costsResult = await get(`/operacional/custos?${costsQuery}`);
+      if (costsResult.response.ok) {
+        identifiers.push(...minuteIdsFromCostsPayload(costsResult.payload));
+      }
+    } catch {
+      // A própria ocorrência ainda pode ter fornecido a minuta ou a chave do CT-e.
+    }
+  }
+
+  const uniqueIdentifiers = [...new Set(identifiers)];
+  const details = [];
+  for (const identifier of uniqueIdentifiers) {
+    try {
+      const detail = await fetchMinuteDetail({ id_minuta: identifier }, get);
+      if (detail && minuteDetailMatchesNote(detail, note)) details.push(detail);
+    } catch {
+      // Um candidato inválido não deve impedir a validação dos demais.
+    }
+  }
+  const byMinute = new Map();
+  details.forEach((detail) => {
+    const identity = minuteIdentity(detail);
+    if (identity) byMinute.set(identity, detail);
+  });
+  return [...byMinute.values()];
+};
+
+const resolveDoccobTransportDetail = async (transport, get = authenticatedGet) => {
+  const primaryDocument = {
+    chave: transport?.accessKey,
+    id_minuta: transport?.minuteHint
+  };
+  const primary = await fetchMinuteDetail(primaryDocument, get);
+  if (primary) return primary;
+
+  const matches = new Map();
+  for (const note of transport?.notes || []) {
+    const details = await fetchMinuteDetailsForNote(note, get);
+    details.forEach((detail) => {
+      const identity = minuteIdentity(detail);
+      if (identity) matches.set(identity, detail);
+    });
+  }
+  return matches.size === 1 ? matches.values().next().value : null;
 };
 
 const fetchCompany = async (cnpj) => {
@@ -194,26 +344,38 @@ const sumDocumentValues = (documents, key) => documents.reduce((total, document)
   total + (numberValue(document?.[key]) || 0), 0);
 
 const shipmentFromDetail = (linkedDocument, detail, parties = {}) => {
+  const transport = linkedDocument?.doccob || null;
+  const doccobNotes = Array.isArray(transport?.notes) ? transport.notes : [];
+  const doccobNoteNumbers = doccobNotes
+    .map((note) => note.number)
+    .filter(Boolean)
+    .join(', ');
   if (!detail) {
     const type = safeText(firstValue(linkedDocument, ['tipo', 'tpDoc']), '');
     return {
-      minute: type.toLowerCase().includes('minuta')
-        ? safeText(firstValue(linkedDocument, ['numero', 'id']))
-        : '-',
-      cte: type.toLowerCase().includes('cte')
-        ? safeText(firstValue(linkedDocument, ['numero', 'id']))
-        : '-',
+      minute: safeText(
+        transport?.minuteHint ||
+        (type.toLowerCase().includes('minuta')
+          ? firstValue(linkedDocument, ['id_minuta', 'minuta', 'numero', 'id'])
+          : null)
+      ),
+      cte: safeText(
+        transport?.cteNumber ||
+        (type.toLowerCase().includes('cte')
+          ? firstValue(linkedDocument, ['numero'])
+          : null)
+      ),
       collection: '-',
-      date: '-',
-      note: '-',
+      date: formatDate(transport?.issuedAt),
+      note: safeText(doccobNoteNumbers),
       noteValue: null,
       authorization: '-',
       origin: '-',
       destination: '-',
       destinationState: '-',
-      taxedWeight: null,
-      volumes: null,
-      freight: numberValue(linkedDocument?.valor),
+      taxedWeight: numberValue(transport?.taxedWeight),
+      volumes: numberValue(transport?.volumes),
+      freight: numberValue(transport?.freight) ?? numberValue(linkedDocument?.valor),
       observation: '',
       service: type || 'Não informado'
     };
@@ -225,7 +387,7 @@ const shipmentFromDetail = (linkedDocument, detail, parties = {}) => {
   const noteNumbers = documents
     .map((document) => firstValue(document, ['nDoc', 'numero']))
     .filter(Boolean)
-    .join(', ');
+    .join(', ') || doccobNoteNumbers;
   const origin = normalizedCompany(parties.origin || detail.rem, {
     name: firstValue(detail.rem, ['xFant', 'xNome'])
   });
@@ -238,13 +400,24 @@ const shipmentFromDetail = (linkedDocument, detail, parties = {}) => {
   const cubedWeight = numberValue(cargo.pCub);
 
   return {
-    minute: safeText(firstValue(minute, ['id']) || firstValue(linkedDocument, ['id'])),
+    minute: safeText(
+      firstValue(minute, ['id']) ||
+      transport?.minuteHint ||
+      firstValue(linkedDocument, ['id_minuta', 'id'])
+    ),
     cte: safeText(
       firstValue(minute, ['xDocCTe', 'numero_cte']) ||
-      firstValue(linkedDocument, ['numero'])
+      transport?.cteNumber ||
+      (String(linkedDocument?.tipo || '').toLowerCase().includes('cte')
+        ? firstValue(linkedDocument, ['numero'])
+        : null)
     ),
     collection: safeText(firstValue(minute, ['coleta', 'id_coleta', 'cColeta'])),
-    date: formatDate(firstValue(minute, ['dEmi']) || firstValue(documents[0], ['dEmi'])),
+    date: formatDate(
+      firstValue(minute, ['dEmi']) ||
+      firstValue(documents[0], ['dEmi']) ||
+      transport?.issuedAt
+    ),
     note: safeText(noteNumbers),
     noteValue: documents.length ? sumDocumentValues(documents, 'vNF') : null,
     authorization: safeText(firstValue(minute, ['cAut', 'nAver'])),
@@ -258,11 +431,13 @@ const shipmentFromDetail = (linkedDocument, detail, parties = {}) => {
     ].filter(Boolean).join('\n')),
     destinationState: destination.state || '-',
     taxedWeight: grossWeight === null && cubedWeight === null
-      ? null
+      ? numberValue(transport?.taxedWeight)
       : Math.max(grossWeight || 0, cubedWeight || 0),
     volumes: numberValue(firstValue(cargo, ['qVol'])) ??
-      (documents.length ? sumDocumentValues(documents, 'qVol') : null),
-    freight: numberValue(detail?.valores?.vFrete) ?? numberValue(linkedDocument?.valor),
+      (documents.length ? sumDocumentValues(documents, 'qVol') : numberValue(transport?.volumes)),
+    freight: numberValue(detail?.valores?.vFrete) ??
+      numberValue(transport?.freight) ??
+      numberValue(linkedDocument?.valor),
     observation: safeText(detail?.compl?.xObs, ''),
     service: safeText(firstValue(minute, ['xServico', 'servico', 'cServ']))
   };
@@ -308,11 +483,42 @@ const fetchInvoicePdfData = async (invoiceId) => {
     name: normalizedInvoice.client,
     document: clientDocument
   });
-  const linkedDocuments = linkedDocumentsFromInvoice(invoice);
+  let doccob = null;
+  try {
+    doccob = await findDoccobForInvoice({
+      invoiceId: normalizedInvoice.id || invoiceId,
+      clientCnpj: clientDocument
+    });
+  } catch (error) {
+    console.warn('[faturamento:doccob]', {
+      invoiceId,
+      clientCnpj: clientDocument,
+      error: error.message
+    });
+  }
+
+  const issuerDocument = digits(doccob?.invoice?.issuerCnpj || COMPANY.document);
+  let issuerRecord = null;
+  try {
+    issuerRecord = await fetchCompany(issuerDocument);
+  } catch {
+    // Mantém os dados conhecidos da transportadora se o cadastro estiver indisponível.
+  }
+  const issuer = normalizedCompany(issuerRecord, {
+    ...COMPANY,
+    document: issuerDocument || COMPANY.document
+  });
+
+  const doccobDocuments = linkedDocumentsFromDoccob(doccob);
+  const linkedDocuments = doccobDocuments.length
+    ? doccobDocuments
+    : linkedDocumentsFromInvoice(invoice);
   const details = await mapWithConcurrency(
     linkedDocuments,
-    DETAIL_CONCURRENCY,
-    fetchMinuteDetail
+    doccobDocuments.length ? DOCCOB_DETAIL_CONCURRENCY : DETAIL_CONCURRENCY,
+    doccobDocuments.length
+      ? (document) => resolveDoccobTransportDetail(document.doccob)
+      : fetchMinuteDetail
   );
 
   const partyDocuments = [...new Set(details.flatMap((detail) => [
@@ -338,16 +544,18 @@ const fetchInvoicePdfData = async (invoiceId) => {
   return {
     invoice: {
       id: normalizedInvoice.id,
-      issuedAt: normalizedInvoice.issuedAt,
-      dueAt: normalizedInvoice.dueAt,
-      total: normalizedInvoice.total,
+      issuedAt: normalizedInvoice.issuedAt || doccob?.invoice?.issuedAt,
+      dueAt: normalizedInvoice.dueAt || doccob?.invoice?.dueAt,
+      total: normalizedInvoice.total ?? doccob?.invoice?.total,
       surcharge: numberValue(firstValue(invoice, ['acrescimo', 'valor_acrescimo', 'vAcre'])) || 0,
       discount: numberValue(firstValue(invoice, ['desconto', 'valor_desconto', 'vDesc'])) || 0,
       nfs: safeText(firstValue(invoice, ['nfs', 'numero_nfs']), '')
     },
     client,
+    issuer,
     shipments,
-    detailAvailable: shipments.some((shipment) => shipment.minute !== '-' || shipment.cte !== '-')
+    detailAvailable: shipments.some((shipment) => shipment.minute !== '-' || shipment.cte !== '-'),
+    source: doccobDocuments.length ? 'doccob' : 'brudam'
   };
 };
 
@@ -384,6 +592,12 @@ const drawLogo = (doc) => {
 };
 
 const drawInvoiceHeader = (doc, data, barcode) => {
+  const issuer = data.issuer || normalizedCompany(null, COMPANY);
+  const issuerCityLine = [
+    issuer.district,
+    [issuer.city, issuer.state].filter(Boolean).join('-'),
+    issuer.cep ? `CEP: ${issuer.cep}` : ''
+  ].filter(Boolean).join(', ');
   const x = PAGE.margin;
   const y = 12;
   const h = 60;
@@ -395,13 +609,13 @@ const drawInvoiceHeader = (doc, data, barcode) => {
   doc.moveTo(x + companyWidth + titleWidth, y).lineTo(x + companyWidth + titleWidth, y + h).stroke();
   drawLogo(doc);
   doc.font('Helvetica-Bold').fontSize(6.7).fillColor('#111111')
-    .text(COMPANY.name, 130, 18, { width: 205 });
+    .text(issuer.name, 130, 18, { width: 205 });
   doc.font('Helvetica').fontSize(5.3)
-    .text(COMPANY.address, 130, 30, { width: 205 })
-    .text(COMPANY.cityLine, 130, 40, { width: 205 })
-    .text(`CNPJ: ${COMPANY.document}`, 130, 50, { width: 130 })
-    .text(`Fone: ${COMPANY.phone}`, 130, 60, { width: 110 })
-    .text(`IE: ${COMPANY.stateRegistration}`, 240, 60, { width: 95 });
+    .text(issuer.address, 130, 30, { width: 205 })
+    .text(issuerCityLine, 130, 40, { width: 205 })
+    .text(`CNPJ: ${formatCnpj(issuer.document)}`, 130, 50, { width: 130 })
+    .text(`Fone: ${safeText(issuer.phone)}`, 130, 60, { width: 110 })
+    .text(`IE: ${safeText(issuer.stateRegistration)}`, 240, 60, { width: 95 });
   doc.font('Helvetica-Bold').fontSize(17)
     .text('Fatura', x + companyWidth, y + 20, { width: titleWidth, align: 'center' });
   doc.font('Helvetica-Bold').fontSize(16)
@@ -482,11 +696,11 @@ const TABLE_COLUMNS = [
   ['Nota', 41, 'note', 'left'],
   ['NF. valor', 43, 'noteValue', 'right'],
   ['Aut.', 44, 'authorization', 'left'],
-  ['Origem / Cidade', 100, 'origin', 'left'],
-  ['Destino / Cidade', 101, 'destination', 'left'],
+  ['Origem / Cidade', 93, 'origin', 'left'],
+  ['Destino / Cidade', 93, 'destination', 'left'],
   ['Taxado', 34, 'taxedWeight', 'right'],
   ['Volumes', 34, 'volumes', 'right'],
-  ['Frete', 27, 'freight', 'right']
+  ['Frete', 42, 'freight', 'right']
 ];
 
 const displayShipmentValue = (shipment, key) => {
@@ -595,11 +809,17 @@ const drawTotals = (doc, shipments, y) => {
   return y + h;
 };
 
-const drawLegalFooter = (doc, total) => {
+const drawLegalFooter = (doc, data) => {
   const y = PAGE.height - 72;
   doc.font('Helvetica').fontSize(5.3).fillColor('#111111')
-    .text(LEGAL_TEXT, PAGE.margin, y, { width: CONTENT_WIDTH, align: 'justify', lineGap: 0.5 });
-  doc.fontSize(7).text(`Total: ${formatNumber(total)}`, PAGE.margin, y + 28, { width: 150 });
+    .text(legalTextFor(data?.issuer?.name), PAGE.margin, y, {
+      width: CONTENT_WIDTH,
+      align: 'justify',
+      lineGap: 0.5
+    });
+  doc.fontSize(7).text(`Total: ${formatNumber(data?.invoice?.total)}`, PAGE.margin, y + 28, {
+    width: 150
+  });
   doc.text('Em ______/______/______', 205, y + 28, { width: 125, align: 'center' });
   doc.text('_________________________________________', 390, y + 28, { width: 190, align: 'center' });
   doc.fontSize(8).text('Data do aceite', 205, y + 42, { width: 125, align: 'center' });
@@ -640,78 +860,14 @@ const drawDetailPages = (doc, data, barcode) => {
     const height = shipmentHeight(doc.font('Helvetica').fontSize(5.6), shipment);
     if (y + height + 18 > PAGE.height - 90) {
       drawTotals(doc, pageShipments, y);
-      drawLegalFooter(doc, data.invoice.total);
+      drawLegalFooter(doc, data);
       startPage();
     }
     y = drawShipment(doc, shipment, y);
     pageShipments.push(shipment);
   });
   drawTotals(doc, pageShipments, y);
-  drawLegalFooter(doc, data.invoice.total);
-};
-
-const groupedTotals = (shipments, key, fallback) => {
-  const groups = new Map();
-  shipments.forEach((shipment) => {
-    const label = safeText(shipment[key], fallback);
-    groups.set(label, (groups.get(label) || 0) + (numberValue(shipment.freight) || 0));
-  });
-  return groups.size
-    ? [...groups.entries()]
-    : [[fallback, 0]];
-};
-
-const drawSummaryTable = (doc, x, y, width, leftLabel, rows) => {
-  const valueWidth = 84;
-  const headerHeight = 17;
-  drawBox(doc, x, y, width, headerHeight);
-  doc.moveTo(x + width - valueWidth, y).lineTo(x + width - valueWidth, y + headerHeight).stroke();
-  drawCellText(doc, leftLabel, x, y, width - valueWidth, {
-    bold: true,
-    size: 8,
-    align: 'center',
-    topPadding: 5
-  });
-  drawCellText(doc, 'Total', x + width - valueWidth, y, valueWidth, {
-    bold: true,
-    size: 8,
-    topPadding: 5
-  });
-  let currentY = y + headerHeight;
-  rows.forEach(([label, total]) => {
-    drawBox(doc, x, currentY, width, 18);
-    doc.moveTo(x + width - valueWidth, currentY)
-      .lineTo(x + width - valueWidth, currentY + 18)
-      .stroke();
-    drawCellText(doc, label, x, currentY, width - valueWidth, {
-      size: 7,
-      topPadding: 5
-    });
-    drawCellText(doc, formatNumber(total), x + width - valueWidth, currentY, valueWidth, {
-      size: 7,
-      topPadding: 5,
-      align: 'right'
-    });
-    currentY += 18;
-  });
-};
-
-const drawSummaryPage = (doc, data, barcode) => {
-  doc.addPage({ size: 'A4', margin: 0 });
-  drawInvoiceHeader(doc, data, barcode);
-  drawClientBlock(doc, data);
-  const shipments = data.shipments.length ? data.shipments : [{
-    destinationState: 'Não informado',
-    service: 'Não informado',
-    freight: data.invoice.total
-  }];
-  const stateRows = groupedTotals(shipments, 'destinationState', 'Não informado');
-  const serviceRows = groupedTotals(shipments, 'service', 'Não informado');
-  const gap = 12;
-  const width = (CONTENT_WIDTH - gap) / 2;
-  drawSummaryTable(doc, PAGE.margin, 144, width, 'UF de destino', stateRows);
-  drawSummaryTable(doc, PAGE.margin + width + gap, 144, width, 'Serviço', serviceRows);
-  drawLegalFooter(doc, data.invoice.total);
+  drawLegalFooter(doc, data);
 };
 
 const buildInvoicePdf = async (data) => {
@@ -739,7 +895,7 @@ const buildInvoicePdf = async (data) => {
       compress: true,
       info: {
         Title: `Fatura ${safeText(data.invoice.id)}`,
-        Author: COMPANY.name,
+        Author: safeText(data?.issuer?.name, COMPANY.name),
         Subject: 'Fatura de prestação de serviços'
       }
     });
@@ -747,7 +903,6 @@ const buildInvoicePdf = async (data) => {
     doc.on('error', reject);
     doc.on('end', () => resolve(Buffer.concat(chunks)));
     drawDetailPages(doc, data, barcode);
-    drawSummaryPage(doc, data, barcode);
     doc.end();
   });
 };
@@ -758,8 +913,15 @@ module.exports = {
   companyFromPayload,
   normalizedCompany,
   linkedDocumentsFromInvoice,
+  linkedDocumentsFromDoccob,
   minuteDataFromPayload,
   detailIdentifiers,
+  occurrenceMinuteIdentifiers,
+  occurrenceCteNumbers,
+  minuteIdsFromCostsPayload,
+  minuteDetailMatchesNote,
+  fetchMinuteDetailsForNote,
+  resolveDoccobTransportDetail,
   shipmentFromDetail,
   requestExactInvoice,
   fetchInvoicePdfData,
