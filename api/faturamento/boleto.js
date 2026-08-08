@@ -33,7 +33,7 @@ module.exports = async (req, res) => {
     if (statusCode >= 500) console.error('[faturamento:boleto]', error);
     sendJson(res, statusCode, {
       message: statusCode >= 500
-        ? (error.expose ? error.message : 'Não foi possível gerar o boleto no C6.')
+        ? (error.expose ? error.message : 'Não foi possível gerar o boleto no banco configurado.')
         : error.message
     });
   }

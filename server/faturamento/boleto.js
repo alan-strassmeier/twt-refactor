@@ -5,7 +5,7 @@ const {
   fetchCompany
 } = require('./invoice-pdf');
 const { findDoccobForInvoice } = require('./r2-doccob');
-const { TWT_ISSUER_CNPJ, isTwtIssuer } = require('./billing-rules');
+const { bankSlipBankForIssuer } = require('./billing-rules');
 const {
   c6Config,
   createC6BankSlip,
@@ -24,11 +24,12 @@ const firstValue = (object, keys) => {
 
 const validInvoiceId = (value) => /^\d{1,20}$/.test(String(value || '')) && Number(value) > 0;
 
-const externalReferenceForInvoice = (invoiceId) => {
+const externalReferenceForInvoice = (invoiceId, prefix = 'TWT') => {
   const number = digits(invoiceId);
-  const readable = `TWT${number}`;
+  const safePrefix = String(prefix || '').replace(/[^A-Z0-9]/gi, '').toUpperCase().slice(0, 3) || 'FAT';
+  const readable = `${safePrefix}${number}`;
   if (readable.length <= 10) return readable;
-  return `TWT${createHash('sha256').update(number).digest('hex').slice(0, 7).toUpperCase()}`;
+  return `${safePrefix}${createHash('sha256').update(number).digest('hex').slice(0, 10 - safePrefix.length).toUpperCase()}`;
 };
 
 const dateOnly = (value) => {
@@ -112,8 +113,9 @@ const resolveInvoiceBillingData = async (invoiceId, dependencies = {}) => {
   }
 
   const issuerCnpj = issuerFromInvoice(invoice, doccob);
-  if (!isTwtIssuer(issuerCnpj)) {
-    throw Object.assign(new Error('Boletos C6 são permitidos somente para faturas emitidas pela TWT.'), {
+  const bank = bankSlipBankForIssuer(issuerCnpj);
+  if (!bank) {
+    throw Object.assign(new Error('O emitente da fatura não possui banco de cobrança configurado.'), {
       statusCode: 403
     });
   }
@@ -140,6 +142,7 @@ const resolveInvoiceBillingData = async (invoiceId, dependencies = {}) => {
   return {
     invoiceId: normalizedInvoiceId,
     issuerCnpj,
+    bank,
     amount: Number(amount.toFixed(2)),
     dueAt,
     payer: payerFromCompany(company, {
@@ -164,6 +167,7 @@ const publicRecord = (record, created = false) => ({
   created,
   amount: record.amount,
   dueAt: record.dueAt,
+  bank: record.bank || 'c6',
   digitableLine: record.digitableLine || '',
   barCode: record.barCode || ''
 });
@@ -175,6 +179,13 @@ const generationConflict = (state) => Object.assign(
   { statusCode: 409 }
 );
 
+const itauContractRequired = () => Object.assign(new Error(
+  'A fatura é da DSL e deve gerar boleto no Itaú. A integração aguarda as credenciais e a especificação de Cobrança liberadas pelo Itaú para a conta da DSL.'
+), {
+  statusCode: 503,
+  expose: true
+});
+
 const generateInvoiceBankSlip = async (invoiceId, dependencies = {}) => {
   if (!validInvoiceId(invoiceId)) throw validationError('Número da fatura inválido.');
   const getRecord = dependencies.getBankSlipRecord || store.getBankSlipRecord;
@@ -185,18 +196,26 @@ const generateInvoiceBankSlip = async (invoiceId, dependencies = {}) => {
   const getConfig = dependencies.c6Config || c6Config;
   const now = dependencies.now || new Date();
   const normalizedInvoiceId = String(invoiceId);
+  const billing = await resolveInvoiceBillingData(normalizedInvoiceId, dependencies);
   const existing = await getRecord(normalizedInvoiceId);
+  const existingBank = existing?.bank || 'c6';
+  if (existing && existingBank !== billing.bank.id) {
+    throw Object.assign(new Error('Existe um registro bancário divergente para esta fatura. Faça a conferência antes de emitir outro boleto.'), {
+      statusCode: 409
+    });
+  }
   if (existing?.state === 'ready') return publicRecord(existing, false);
   if (existing?.state === 'processing' || existing?.state === 'review') {
     throw generationConflict(existing.state);
   }
 
-  const billing = await resolveInvoiceBillingData(normalizedInvoiceId, dependencies);
+  if (billing.bank.id === 'itau') throw itauContractRequired();
   const config = getConfig();
   const processingRecord = {
     state: 'processing',
     invoiceId: billing.invoiceId,
-    issuerCnpj: TWT_ISSUER_CNPJ,
+    issuerCnpj: billing.issuerCnpj,
+    bank: billing.bank.id,
     startedAt: now.toISOString()
   };
   const claimed = await claim(billing.invoiceId, processingRecord);
@@ -222,6 +241,7 @@ const generateInvoiceBankSlip = async (invoiceId, dependencies = {}) => {
       state: 'ready',
       invoiceId: billing.invoiceId,
       issuerCnpj: billing.issuerCnpj,
+      bank: billing.bank.id,
       bankSlipId,
       externalReferenceId: payload.external_reference_id,
       amount: Number(bankResponse.amount ?? billing.amount),
@@ -255,6 +275,7 @@ const getInvoiceBankSlipPdf = async (invoiceId, dependencies = {}) => {
   if (!record || record.state !== 'ready' || !record.bankSlipId) {
     throw Object.assign(new Error('Nenhum boleto foi gerado para esta fatura.'), { statusCode: 404 });
   }
+  if ((record.bank || 'c6') !== 'c6') throw itauContractRequired();
   const config = (dependencies.c6Config || c6Config)();
   return download(record.bankSlipId, { config });
 };
@@ -265,6 +286,7 @@ module.exports = {
   issuerFromInvoice,
   resolveInvoiceBillingData,
   bankSlipPayload,
+  itauContractRequired,
   generateInvoiceBankSlip,
   getInvoiceBankSlipPdf
 };

@@ -125,7 +125,7 @@ test('coleta os filtros do formulário antes de desabilitar os campos', () => {
   assert.match(loadInvoices, /faturas\?\$\{params\}/);
 });
 
-test('coluna Visualizar oferece Fatura, DACTE e boleto C6 conforme elegibilidade', () => {
+test('coluna Visualizar oferece Fatura, DACTE e boleto do banco definido pelo emitente', () => {
   const html = readFileSync(require.resolve('../faturamento/index.html'), 'utf8');
   const source = readFileSync(require.resolve('../faturamento/app.js'), 'utf8');
   assert.match(html, /class="visualize-header">Visualizar<\/th>/);
@@ -138,6 +138,8 @@ test('coluna Visualizar oferece Fatura, DACTE e boleto C6 conforme elegibilidade
   assert.match(source, /method: 'POST'/);
   assert.match(source, /\/api\/faturamento\/boleto/);
   assert.match(source, /window\.confirm/);
+  assert.match(source, /bankSlipBankLabel/);
+  assert.match(source, /dataset\.bankLabel/);
   assert.match(source, /openPdfAfterCheck\(invoicePdfUrl/);
   assert.match(source, /window\.location\.assign\(url\)/);
   assert.doesNotMatch(source, /about:blank|prepareDocumentTab|pendingTab/);
@@ -145,6 +147,7 @@ test('coluna Visualizar oferece Fatura, DACTE e boleto C6 conforme elegibilidade
   assert.match(html, /id="invoicePdfChoice"[^>]*target="_blank"/);
   assert.match(html, /id="dactePdfChoice"[^>]*target="_blank"/);
   assert.match(html, /id="bankSlipChoice"[^>]*hidden/);
+  assert.match(html, /id="bankSlipBankIcon"/);
   assert.match(html, />Fatura<\/strong>/);
   assert.match(html, />DACTE<\/strong>/);
   assert.match(html, />Gerar boleto<\/strong>/);

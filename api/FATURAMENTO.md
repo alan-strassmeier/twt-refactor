@@ -42,13 +42,20 @@ instância.
 
 Depois de cadastrar ou alterar as variáveis, faça um novo deployment.
 
-## Boletos C6
+## Roteamento dos boletos
 
-A emissão bancária é exclusiva das faturas cujo emitente confirmado nos dados
-da fatura/DOCCOB é a TWT (`09.123.137/0001-08`). Faturas DSL e faturas sem identificação segura
-do emitente são recusadas no servidor, ainda que alguém tente chamar o endpoint
-manualmente. Não existe parâmetro para selecionar outro banco: a integração usa
-somente o C6.
+O banco é definido no servidor pelo emitente confirmado nos dados da
+fatura/DOCCOB. Não existe parâmetro no navegador para selecionar ou trocar o
+banco:
+
+- TWT (`09.123.137/0001-08`) gera boleto exclusivamente no C6;
+- DSL (`97.434.690/0001-29`) gera boleto exclusivamente no Itaú;
+- faturas sem identificação segura do emitente são recusadas.
+
+Essa validação também ocorre no endpoint de geração. Assim, uma chamada manual
+jamais envia uma fatura DSL ao C6 nem uma fatura TWT ao Itaú.
+
+## Boletos C6 (TWT)
 
 O C6 exige OAuth2 `client_credentials` e autenticação mTLS. Cadastre-se no
 [C6 Developers](https://developers.c6bank.com.br/create-access), solicite acesso
@@ -64,7 +71,7 @@ Comece com `C6_ENVIRONMENT=sandbox`. O código seleciona automaticamente a
 carteira 21 no sandbox e a carteira 15 em produção. Só altere para `production`
 depois da homologação e da liberação das credenciais produtivas pelo C6.
 
-O botão de boleto aparece no modal apenas para faturas TWT. A geração usa o
+O botão identifica o C6 para faturas TWT. A geração usa o
 saldo pendente, o vencimento da fatura e os dados do pagador consultados em
 `GET /cadastro/empresas`. O C6 exige razão social, CPF/CNPJ, logradouro, número,
 cidade, UF e CEP; se algum desses dados estiver ausente, a emissão é bloqueada
@@ -78,6 +85,26 @@ O Redis é obrigatório para a emissão: ele mantém o vínculo entre a fatura e
 identificador do C6 e impede boletos duplicados em cliques simultâneos ou novas
 execuções serverless. Uma falha de rede com resultado bancário incerto bloqueia
 nova tentativa até conferência manual.
+
+## Boletos Itaú (DSL)
+
+O sistema já reconhece o CNPJ da DSL e apresenta o Itaú como banco obrigatório.
+A fatura DSL é bloqueada antes de qualquer chamada ao C6.
+
+A emissão efetiva depende da contratação/liberação da API de Cobrança para a
+conta Itaú da DSL. O contrato técnico detalhado fica disponível no portal Itaú
+da organização após essa liberação. Antes de implementar o adaptador bancário,
+obtenha no Itaú:
+
+- acesso da DSL à API de Cobrança em homologação e produção;
+- especificação OpenAPI ou coleção oficial liberada para a conta;
+- `client_id`, `client_secret`, certificado mTLS e chave privada;
+- código do beneficiário, carteira/convênio e demais identificadores exigidos;
+- endpoints de emissão, consulta e obtenção do boleto/PDF.
+
+Enquanto esses dados não estiverem disponíveis, a tentativa de emissão de uma
+fatura DSL retorna uma mensagem explícita de integração Itaú pendente. Nenhum
+endpoint ou payload bancário é presumido pelo código.
 
 ## Consulta
 

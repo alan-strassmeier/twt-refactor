@@ -54,6 +54,7 @@
     dactePdfChoice: document.getElementById('dactePdfChoice'),
     dacteChoiceDescription: document.getElementById('dacteChoiceDescription'),
     bankSlipChoice: document.getElementById('bankSlipChoice'),
+    bankSlipBankIcon: document.getElementById('bankSlipBankIcon'),
     bankSlipChoiceDescription: document.getElementById('bankSlipChoiceDescription')
   };
 
@@ -219,9 +220,12 @@
       : `${cteCount} DACTEs em um único PDF`;
     elements.bankSlipChoice.hidden = !options.bankSlipEligible;
     elements.bankSlipChoice.dataset.invoiceId = options.bankSlipEligible ? invoiceId : '';
+    const bankLabel = String(options.bankSlipBankLabel || 'Banco');
+    elements.bankSlipChoice.dataset.bankLabel = bankLabel;
+    elements.bankSlipBankIcon.textContent = bankLabel;
     elements.bankSlipChoice.disabled = false;
     elements.bankSlipChoice.classList.remove('is-loading');
-    elements.bankSlipChoiceDescription.textContent = 'Cobrança emitida exclusivamente pelo C6';
+    elements.bankSlipChoiceDescription.textContent = `Cobrança emitida exclusivamente pelo ${bankLabel}`;
     elements.documentModal.hidden = false;
     document.body.classList.add('modal-open');
     elements.documentModalClose.focus();
@@ -239,15 +243,16 @@
 
   const generateBankSlip = async () => {
     const invoiceId = String(elements.bankSlipChoice.dataset.invoiceId || '');
+    const bankLabel = String(elements.bankSlipChoice.dataset.bankLabel || 'banco');
     if (!invoiceId || elements.bankSlipChoice.disabled) return;
     const confirmed = window.confirm(
-      `Confirma a geração do boleto C6 para a fatura ${invoiceId}? Se ele já existir, será apenas aberto.`
+      `Confirma a geração do boleto ${bankLabel} para a fatura ${invoiceId}? Se ele já existir, será apenas aberto.`
     );
     if (!confirmed) return;
     elements.bankSlipChoice.disabled = true;
     elements.bankSlipChoice.classList.add('is-loading');
     elements.bankSlipChoice.setAttribute('aria-busy', 'true');
-    elements.bankSlipChoiceDescription.textContent = 'Gerando e registrando o boleto no C6…';
+    elements.bankSlipChoiceDescription.textContent = `Gerando e registrando o boleto no ${bankLabel}…`;
     elements.dashboardMessage.textContent = '';
     try {
       const payload = await requestJson('/api/faturamento/boleto', {
@@ -289,7 +294,8 @@
         showDocumentModal(invoiceId, {
           hasCte: Boolean(payload.hasCte),
           cteCount: Number(payload.cteCount) || 0,
-          bankSlipEligible: Boolean(payload.bankSlipEligible)
+          bankSlipEligible: Boolean(payload.bankSlipEligible),
+          bankSlipBankLabel: payload.bankSlipBankLabel
         }, trigger);
       } else {
         openPdfAfterCheck(invoicePdfUrl(invoiceId));

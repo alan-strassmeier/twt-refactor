@@ -14,6 +14,10 @@ const {
   bankSlipPayload,
   generateInvoiceBankSlip
 } = require('../server/faturamento/boleto');
+const {
+  BILLING_BANKS,
+  bankSlipBankForIssuer
+} = require('../server/faturamento/billing-rules');
 
 const twtInvoice = {
   fatura: 11518,
@@ -110,17 +114,38 @@ test('gera referência externa determinística com no máximo dez caracteres', (
   assert.equal(long.length, 10);
 });
 
-test('resolve cobrança somente quando o DOCCOB confirma emitente TWT', async () => {
+test('roteia TWT para C6 e DSL para Itaú usando o emitente confirmado no DOCCOB', async () => {
   const billing = await resolveInvoiceBillingData('11518', billingDependencies());
   assert.equal(billing.invoiceId, '11518');
   assert.equal(billing.issuerCnpj, '09123137000108');
+  assert.equal(billing.bank, BILLING_BANKS.c6);
   assert.equal(billing.amount, 1844);
   assert.equal(billing.dueAt, '2026-08-14');
 
-  await assert.rejects(
-    resolveInvoiceBillingData('11518', billingDependencies('97434690000129')),
-    (error) => error.statusCode === 403 && /somente para faturas emitidas pela TWT/.test(error.message)
+  const dslBilling = await resolveInvoiceBillingData(
+    '11518',
+    billingDependencies('97.434.690/0001-29')
   );
+  assert.equal(dslBilling.bank, BILLING_BANKS.itau);
+  assert.equal(bankSlipBankForIssuer('97.434.690/0001-29').label, 'Itaú');
+
+  await assert.rejects(
+    resolveInvoiceBillingData('11518', billingDependencies('00000000000000')),
+    (error) => error.statusCode === 403 && /não possui banco de cobrança/.test(error.message)
+  );
+});
+
+test('fatura DSL nunca é enviada ao C6 enquanto o contrato Itaú não está disponível', async () => {
+  let c6Calls = 0;
+  await assert.rejects(
+    generateInvoiceBankSlip('11518', {
+      ...billingDependencies('97434690000129'),
+      getBankSlipRecord: async () => null,
+      createC6BankSlip: async () => { c6Calls += 1; }
+    }),
+    (error) => error.statusCode === 503 && error.expose === true && /deve gerar boleto no Itaú/.test(error.message)
+  );
+  assert.equal(c6Calls, 0);
 });
 
 test('bloqueia fatura vencida até a data ser corrigida na Brudam', async () => {
