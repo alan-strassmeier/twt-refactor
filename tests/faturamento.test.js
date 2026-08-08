@@ -145,6 +145,17 @@ test('coluna Visualizar confere CT-e e oferece Fatura e DACTE sem ordenação', 
   assert.match(html, /Conferindo faturas e empresas/);
 });
 
+test('centraliza o X dentro do botão de fechar o modal', () => {
+  const styles = readFileSync(require.resolve('../faturamento/styles.css'), 'utf8');
+  const closeButton = styles.slice(
+    styles.indexOf('.document-modal-close {'),
+    styles.indexOf('.document-modal-eyebrow')
+  );
+  assert.match(closeButton, /display:\s*grid/);
+  assert.match(closeButton, /place-items:\s*center/);
+  assert.match(closeButton, /padding:\s*0/);
+});
+
 test('rejeita data, status e CNPJ inválidos', () => {
   assert.throws(() => buildInvoiceQuery({ 'emissao[gte]': '2026-02-30' }), /Data inválida/);
   assert.throws(() => buildInvoiceQuery({ status: '9' }), /Status inválido/);
