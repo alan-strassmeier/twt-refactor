@@ -1016,6 +1016,7 @@ module.exports = {
   exactInvoiceRecord,
   companyFromPayload,
   normalizedCompany,
+  fetchCompany,
   linkedDocumentsFromInvoice,
   linkedDocumentsFromDoccob,
   minuteDataFromPayload,

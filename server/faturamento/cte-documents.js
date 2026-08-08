@@ -11,6 +11,14 @@ const XML_MAX_BYTES = 2 * 1024 * 1024;
 
 const digits = (value) => String(value || '').replace(/\D/g, '');
 
+const invoiceIssuerCnpj = (invoice, doccob) => digits(
+  doccob?.invoice?.issuerCnpj ||
+  invoice?.cnpj_emitente ||
+  invoice?.cnpj_empresa ||
+  invoice?.emitente_cnpj ||
+  invoice?.emitente?.cnpj
+);
+
 const validInvoiceId = (value) => /^\d{1,20}$/.test(String(value || '')) && Number(value) > 0;
 
 const cteKeysFromInvoice = (invoice) => {
@@ -57,6 +65,7 @@ const resolveInvoiceCteKeys = async (invoiceId, dependencies = {}) => {
   return {
     invoiceId: String(normalized.id || invoiceId),
     cteKeys: normalizeCteKeys([...doccobKeys, ...cteKeysFromInvoice(invoice)]),
+    issuerCnpj: invoiceIssuerCnpj(invoice, doccob),
     source: doccobKeys.some((value) => isValidCteAccessKey(digits(value)))
       ? 'doccob'
       : 'brudam'
@@ -165,6 +174,7 @@ module.exports = {
   MAX_CTES_PER_INVOICE,
   XML_MAX_BYTES,
   normalizeCteKeys,
+  invoiceIssuerCnpj,
   resolveInvoiceCteKeys,
   decodeCteXmlPayload,
   accessKeyFromXml,

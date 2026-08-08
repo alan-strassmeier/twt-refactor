@@ -125,7 +125,7 @@ test('coleta os filtros do formulário antes de desabilitar os campos', () => {
   assert.match(loadInvoices, /faturas\?\$\{params\}/);
 });
 
-test('coluna Visualizar confere CT-e e oferece Fatura e DACTE sem ordenação', () => {
+test('coluna Visualizar oferece Fatura, DACTE e boleto C6 conforme elegibilidade', () => {
   const html = readFileSync(require.resolve('../faturamento/index.html'), 'utf8');
   const source = readFileSync(require.resolve('../faturamento/app.js'), 'utf8');
   assert.match(html, /class="visualize-header">Visualizar<\/th>/);
@@ -133,16 +133,25 @@ test('coluna Visualizar confere CT-e e oferece Fatura e DACTE sem ordenação', 
   assert.match(source, /\/api\/faturamento\/fatura-pdf\?id=/);
   assert.match(source, /\/api\/faturamento\/documentos\?id=/);
   assert.match(source, /\/api\/faturamento\/dacte-pdf\?id=/);
-  assert.match(source, /if \(payload\.hasCte\)/);
+  assert.match(source, /\/api\/faturamento\/boleto-pdf\?id=/);
+  assert.match(source, /if \(payload\.hasCte \|\| payload\.bankSlipEligible\)/);
+  assert.match(source, /method: 'POST'/);
+  assert.match(source, /\/api\/faturamento\/boleto/);
+  assert.match(source, /window\.confirm/);
   assert.match(source, /openPdfAfterCheck\(invoicePdfUrl/);
   assert.match(source, /window\.location\.assign\(url\)/);
   assert.doesNotMatch(source, /about:blank|prepareDocumentTab|pendingTab/);
   assert.match(source, /aria-busy/);
   assert.match(html, /id="invoicePdfChoice"[^>]*target="_blank"/);
   assert.match(html, /id="dactePdfChoice"[^>]*target="_blank"/);
+  assert.match(html, /id="bankSlipChoice"[^>]*hidden/);
   assert.match(html, />Fatura<\/strong>/);
   assert.match(html, />DACTE<\/strong>/);
+  assert.match(html, />Gerar boleto<\/strong>/);
   assert.match(html, /Conferindo faturas e empresas/);
+  const boletoApi = readFileSync(require.resolve('../api/faturamento/boleto.js'), 'utf8');
+  assert.match(boletoApi, /hasSameOrigin\(req\)/);
+  assert.match(boletoApi, /sessionFromRequest\(req\)/);
 });
 
 test('centraliza o X dentro do botão de fechar o modal', () => {

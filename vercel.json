@@ -38,6 +38,12 @@
     "api/faturamento/documentos.js": {
       "maxDuration": 60
     },
+    "api/faturamento/boleto.js": {
+      "maxDuration": 60
+    },
+    "api/faturamento/boleto-pdf.js": {
+      "maxDuration": 60
+    },
     "api/faturamento/faturas.js": {
       "maxDuration": 60
     },

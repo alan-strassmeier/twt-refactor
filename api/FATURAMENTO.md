@@ -22,6 +22,15 @@ R2_BUCKET_NAME=twt-brudam-documentos
 R2_DOCCOB_PREFIX=brudam/clientes
 R2_DOCCOB_SCAN_LIMIT=250
 
+C6_ENVIRONMENT=sandbox
+C6_CLIENT_ID=
+C6_CLIENT_SECRET=
+C6_MTLS_CERT_BASE64=
+C6_MTLS_KEY_BASE64=
+C6_MTLS_KEY_PASSPHRASE=
+C6_PARTNER_SOFTWARE_NAME=TWT Faturamento
+C6_PARTNER_SOFTWARE_VERSION=1.0.0
+
 UPSTASH_REDIS_REST_URL=
 UPSTASH_REDIS_REST_TOKEN=
 ```
@@ -32,6 +41,43 @@ consistente entre as funções serverless. Sem Redis, há uma proteção local p
 instância.
 
 Depois de cadastrar ou alterar as variáveis, faça um novo deployment.
+
+## Boletos C6
+
+A emissão bancária é exclusiva das faturas cujo emitente confirmado nos dados
+da fatura/DOCCOB é a TWT (`09.123.137/0001-08`). Faturas DSL e faturas sem identificação segura
+do emitente são recusadas no servidor, ainda que alguém tente chamar o endpoint
+manualmente. Não existe parâmetro para selecionar outro banco: a integração usa
+somente o C6.
+
+O C6 exige OAuth2 `client_credentials` e autenticação mTLS. Cadastre-se no
+[C6 Developers](https://developers.c6bank.com.br/create-access), solicite acesso
+à API de Boleto e receba `client_id`, `client_secret`, certificado `.crt` e chave
+`.key`. Converta os dois arquivos para Base64 antes de cadastrá-los na Vercel:
+
+```powershell
+[Convert]::ToBase64String([IO.File]::ReadAllBytes('caminho\certificado.crt'))
+[Convert]::ToBase64String([IO.File]::ReadAllBytes('caminho\chave.key'))
+```
+
+Comece com `C6_ENVIRONMENT=sandbox`. O código seleciona automaticamente a
+carteira 21 no sandbox e a carteira 15 em produção. Só altere para `production`
+depois da homologação e da liberação das credenciais produtivas pelo C6.
+
+O botão de boleto aparece no modal apenas para faturas TWT. A geração usa o
+saldo pendente, o vencimento da fatura e os dados do pagador consultados em
+`GET /cadastro/empresas`. O C6 exige razão social, CPF/CNPJ, logradouro, número,
+cidade, UF e CEP; se algum desses dados estiver ausente, a emissão é bloqueada
+com uma mensagem para correção do cadastro.
+
+`POST /api/faturamento/boleto` gera ou recupera de forma idempotente o boleto da
+fatura. `GET /api/faturamento/boleto-pdf?id=...` baixa o PDF diretamente do C6.
+Ambos exigem a sessão administrativa. O POST também exige mesma origem.
+
+O Redis é obrigatório para a emissão: ele mantém o vínculo entre a fatura e o
+identificador do C6 e impede boletos duplicados em cliques simultâneos ou novas
+execuções serverless. Uma falha de rede com resultado bancário incerto bloqueia
+nova tentativa até conferência manual.
 
 ## Consulta
 

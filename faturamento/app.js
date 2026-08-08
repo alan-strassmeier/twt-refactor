@@ -52,7 +52,9 @@
     documentModalTitle: document.getElementById('documentModalTitle'),
     invoicePdfChoice: document.getElementById('invoicePdfChoice'),
     dactePdfChoice: document.getElementById('dactePdfChoice'),
-    dacteChoiceDescription: document.getElementById('dacteChoiceDescription')
+    dacteChoiceDescription: document.getElementById('dacteChoiceDescription'),
+    bankSlipChoice: document.getElementById('bankSlipChoice'),
+    bankSlipChoiceDescription: document.getElementById('bankSlipChoiceDescription')
   };
 
   const state = {
@@ -194,6 +196,9 @@
   const dactePdfUrl = (invoiceId) =>
     `/api/faturamento/dacte-pdf?id=${encodeURIComponent(invoiceId)}`;
 
+  const bankSlipPdfUrl = (invoiceId) =>
+    `/api/faturamento/boleto-pdf?id=${encodeURIComponent(invoiceId)}`;
+
   const closeDocumentModal = () => {
     if (elements.documentModal.hidden) return;
     elements.documentModal.hidden = true;
@@ -202,14 +207,21 @@
     modalPreviousFocus = null;
   };
 
-  const showDocumentModal = (invoiceId, cteCount, trigger) => {
+  const showDocumentModal = (invoiceId, options, trigger) => {
+    const cteCount = Number(options.cteCount) || 0;
     modalPreviousFocus = trigger;
     elements.documentModalTitle.textContent = `Documentos da fatura ${invoiceId}`;
     elements.invoicePdfChoice.href = invoicePdfUrl(invoiceId);
     elements.dactePdfChoice.href = dactePdfUrl(invoiceId);
+    elements.dactePdfChoice.hidden = !options.hasCte;
     elements.dacteChoiceDescription.textContent = cteCount === 1
       ? 'Documento do CT-e vinculado'
       : `${cteCount} DACTEs em um único PDF`;
+    elements.bankSlipChoice.hidden = !options.bankSlipEligible;
+    elements.bankSlipChoice.dataset.invoiceId = options.bankSlipEligible ? invoiceId : '';
+    elements.bankSlipChoice.disabled = false;
+    elements.bankSlipChoice.classList.remove('is-loading');
+    elements.bankSlipChoiceDescription.textContent = 'Cobrança emitida exclusivamente pelo C6';
     elements.documentModal.hidden = false;
     document.body.classList.add('modal-open');
     elements.documentModalClose.focus();
@@ -225,6 +237,42 @@
     window.location.assign(url);
   };
 
+  const generateBankSlip = async () => {
+    const invoiceId = String(elements.bankSlipChoice.dataset.invoiceId || '');
+    if (!invoiceId || elements.bankSlipChoice.disabled) return;
+    const confirmed = window.confirm(
+      `Confirma a geração do boleto C6 para a fatura ${invoiceId}? Se ele já existir, será apenas aberto.`
+    );
+    if (!confirmed) return;
+    elements.bankSlipChoice.disabled = true;
+    elements.bankSlipChoice.classList.add('is-loading');
+    elements.bankSlipChoice.setAttribute('aria-busy', 'true');
+    elements.bankSlipChoiceDescription.textContent = 'Gerando e registrando o boleto no C6…';
+    elements.dashboardMessage.textContent = '';
+    try {
+      const payload = await requestJson('/api/faturamento/boleto', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: invoiceId })
+      });
+      closeDocumentModal();
+      openPdfAfterCheck(payload.pdfUrl || bankSlipPdfUrl(invoiceId));
+    } catch (error) {
+      if (error.status === 401) {
+        closeDocumentModal();
+        showPanel('login');
+        elements.loginMessage.textContent = 'Sua sessão expirou. Entre novamente.';
+      } else {
+        elements.dashboardMessage.textContent = error.message;
+        elements.bankSlipChoiceDescription.textContent = error.message;
+      }
+    } finally {
+      elements.bankSlipChoice.disabled = false;
+      elements.bankSlipChoice.classList.remove('is-loading');
+      elements.bankSlipChoice.removeAttribute('aria-busy');
+    }
+  };
+
   const openInvoiceDocuments = async (invoiceId, trigger) => {
     if (trigger.disabled) return;
     const originalTitle = trigger.title;
@@ -237,8 +285,12 @@
       const payload = await requestJson(
         `/api/faturamento/documentos?id=${encodeURIComponent(invoiceId)}`
       );
-      if (payload.hasCte) {
-        showDocumentModal(invoiceId, Number(payload.cteCount) || 1, trigger);
+      if (payload.hasCte || payload.bankSlipEligible) {
+        showDocumentModal(invoiceId, {
+          hasCte: Boolean(payload.hasCte),
+          cteCount: Number(payload.cteCount) || 0,
+          bankSlipEligible: Boolean(payload.bankSlipEligible)
+        }, trigger);
       } else {
         openPdfAfterCheck(invoicePdfUrl(invoiceId));
       }
@@ -703,6 +755,7 @@
 
   elements.documentModalClose.addEventListener('click', closeDocumentModal);
   elements.documentModalBackdrop.addEventListener('click', closeDocumentModal);
+  elements.bankSlipChoice.addEventListener('click', generateBankSlip);
   elements.invoicePdfChoice.addEventListener('click', closeDocumentModal);
   elements.dactePdfChoice.addEventListener('click', closeDocumentModal);
   document.addEventListener('keydown', (event) => {

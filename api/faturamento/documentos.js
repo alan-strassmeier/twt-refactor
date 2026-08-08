@@ -1,6 +1,7 @@
 const { sessionFromRequest } = require('../../server/faturamento/auth');
 const { queryFromRequest, sendJson } = require('../../server/faturamento/http');
 const { resolveInvoiceCteKeys } = require('../../server/faturamento/cte-documents');
+const { isTwtIssuer } = require('../../server/faturamento/billing-rules');
 
 module.exports = async (req, res) => {
   if (req.method !== 'GET') {
@@ -19,7 +20,8 @@ module.exports = async (req, res) => {
     sendJson(res, 200, {
       invoiceId: documents.invoiceId,
       hasCte: documents.cteKeys.length > 0,
-      cteCount: documents.cteKeys.length
+      cteCount: documents.cteKeys.length,
+      bankSlipEligible: isTwtIssuer(documents.issuerCnpj)
     });
   } catch (error) {
     const statusCode = Number(error.statusCode) || (error.name === 'AbortError' ? 504 : 502);

@@ -7,9 +7,9 @@
   <meta name="theme-color" content="#112a40">
   <title>Faturamento | TWT Airpack</title>
   <link rel="icon" href="/favicon.ico">
-  <link rel="stylesheet" href="/faturamento/styles.css?v=6">
+  <link rel="stylesheet" href="/faturamento/styles.css?v=7">
   <script src="/faturamento/sort.js?v=1" defer></script>
-  <script src="/faturamento/app.js?v=9" defer></script>
+  <script src="/faturamento/app.js?v=10" defer></script>
 </head>
 <body>
   <div class="page-shell">
@@ -252,6 +252,10 @@
           <span class="pdf-icon" aria-hidden="true">PDF</span>
           <span><strong>DACTE</strong><small id="dacteChoiceDescription">Documento do CT-e</small></span>
         </a>
+        <button class="document-choice bank-slip-choice" id="bankSlipChoice" type="button" hidden>
+          <span class="bank-slip-icon" aria-hidden="true">C6</span>
+          <span><strong>Gerar boleto</strong><small id="bankSlipChoiceDescription">Cobrança emitida exclusivamente pelo C6</small></span>
+        </button>
       </div>
     </section>
   </div>

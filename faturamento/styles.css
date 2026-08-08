@@ -960,7 +960,10 @@ body.modal-open {
   border-radius: 14px;
   color: var(--navy-900);
   background: #fff;
+  font: inherit;
+  text-align: left;
   text-decoration: none;
+  cursor: pointer;
   transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease;
 }
 
@@ -987,6 +990,35 @@ body.modal-open {
   color: #cf3138;
   background: transparent;
   font: inherit;
+}
+
+.bank-slip-choice:disabled {
+  cursor: wait;
+  opacity: .68;
+  transform: none;
+}
+
+.bank-slip-icon {
+  flex: 0 0 auto;
+  width: 39px;
+  height: 39px;
+  display: grid;
+  place-items: center;
+  border-radius: 11px;
+  color: #fff;
+  background: #111;
+  font-size: .78rem;
+  font-weight: 900;
+  letter-spacing: -.02em;
+}
+
+.bank-slip-choice.is-loading .bank-slip-icon {
+  border: 3px solid rgb(17 17 17 / 18%);
+  border-top-color: #111;
+  border-radius: 50%;
+  color: transparent;
+  background: transparent;
+  animation: document-spin .72s linear infinite;
 }
 
 @media (max-width: 520px) {
