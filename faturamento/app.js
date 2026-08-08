@@ -215,40 +215,34 @@
     elements.documentModalClose.focus();
   };
 
-  const prepareDocumentTab = () => {
-    const tab = window.open('about:blank', '_blank');
-    if (!tab) return null;
-    try {
+  const openPdfAfterCheck = (url) => {
+    const tab = window.open(url, '_blank');
+    if (tab) {
       tab.opener = null;
-      tab.document.title = 'Conferindo documentos…';
-      tab.document.body.textContent = 'Conferindo documentos da fatura…';
-      tab.document.body.style.cssText = 'font:16px system-ui;padding:32px;color:#123047';
-    } catch {
-      // A guia continua disponível mesmo se o navegador bloquear sua personalização.
+      return;
     }
-    return tab;
+    // Garante a abertura mesmo quando o navegador bloqueia pop-ups após uma espera assíncrona.
+    window.location.assign(url);
   };
 
   const openInvoiceDocuments = async (invoiceId, trigger) => {
     if (trigger.disabled) return;
+    const originalTitle = trigger.title;
     trigger.disabled = true;
     trigger.classList.add('is-loading');
+    trigger.setAttribute('aria-busy', 'true');
+    trigger.title = 'Conferindo documentos da fatura…';
     elements.dashboardMessage.textContent = '';
-    const pendingTab = prepareDocumentTab();
     try {
       const payload = await requestJson(
         `/api/faturamento/documentos?id=${encodeURIComponent(invoiceId)}`
       );
       if (payload.hasCte) {
-        if (pendingTab && !pendingTab.closed) pendingTab.close();
         showDocumentModal(invoiceId, Number(payload.cteCount) || 1, trigger);
-      } else if (pendingTab && !pendingTab.closed) {
-        pendingTab.location.replace(invoicePdfUrl(invoiceId));
       } else {
-        window.open(invoicePdfUrl(invoiceId), '_blank', 'noopener,noreferrer');
+        openPdfAfterCheck(invoicePdfUrl(invoiceId));
       }
     } catch (error) {
-      if (pendingTab && !pendingTab.closed) pendingTab.close();
       if (error.status === 401) {
         showPanel('login');
         elements.loginMessage.textContent = 'Sua sessão expirou. Entre novamente.';
@@ -258,6 +252,8 @@
     } finally {
       trigger.disabled = false;
       trigger.classList.remove('is-loading');
+      trigger.removeAttribute('aria-busy');
+      trigger.title = originalTitle;
     }
   };
 

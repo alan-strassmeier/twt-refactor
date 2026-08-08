@@ -789,6 +789,8 @@ th.numeric {
   padding: 3px;
   border-radius: 7px;
   color: #cf3138;
+  background: transparent;
+  font: inherit;
   text-decoration: none;
   cursor: pointer;
   transition: color .16s ease, background .16s ease, transform .16s ease;
@@ -800,11 +802,25 @@ th.numeric {
 }
 
 .pdf-link.is-loading .pdf-icon {
-  animation: document-pulse .8s ease-in-out infinite alternate;
+  width: 31px;
+  height: 31px;
+  margin: 5px 2px;
+  padding: 0;
+  border: 3px solid rgb(207 49 56 / 22%);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  background: transparent;
+  color: #cf3138;
+  font-size: 0;
+  animation: document-spin .72s linear infinite;
 }
 
-@keyframes document-pulse {
-  to { transform: scale(.9); opacity: .55; }
+.pdf-link.is-loading .pdf-icon::after {
+  display: none;
+}
+
+@keyframes document-spin {
+  to { transform: rotate(360deg); }
 }
 
 .pdf-link:hover {

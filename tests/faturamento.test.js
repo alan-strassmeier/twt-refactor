@@ -134,7 +134,10 @@ test('coluna Visualizar confere CT-e e oferece Fatura e DACTE sem ordenação', 
   assert.match(source, /\/api\/faturamento\/documentos\?id=/);
   assert.match(source, /\/api\/faturamento\/dacte-pdf\?id=/);
   assert.match(source, /if \(payload\.hasCte\)/);
-  assert.match(source, /pendingTab\.location\.replace\(invoicePdfUrl/);
+  assert.match(source, /openPdfAfterCheck\(invoicePdfUrl/);
+  assert.match(source, /window\.location\.assign\(url\)/);
+  assert.doesNotMatch(source, /about:blank|prepareDocumentTab|pendingTab/);
+  assert.match(source, /aria-busy/);
   assert.match(html, /id="invoicePdfChoice"[^>]*target="_blank"/);
   assert.match(html, /id="dactePdfChoice"[^>]*target="_blank"/);
   assert.match(html, />Fatura<\/strong>/);
