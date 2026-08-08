@@ -45,7 +45,14 @@
     chartTooltipValue: document.getElementById('chartTooltipValue'),
     sortHeaders: [...document.querySelectorAll('[data-sort-key]')],
     tableHeader: document.querySelector('.table-card thead'),
-    backToTopButton: document.getElementById('backToTopButton')
+    backToTopButton: document.getElementById('backToTopButton'),
+    documentModal: document.getElementById('documentModal'),
+    documentModalBackdrop: document.getElementById('documentModalBackdrop'),
+    documentModalClose: document.getElementById('documentModalClose'),
+    documentModalTitle: document.getElementById('documentModalTitle'),
+    invoicePdfChoice: document.getElementById('invoicePdfChoice'),
+    dactePdfChoice: document.getElementById('dactePdfChoice'),
+    dacteChoiceDescription: document.getElementById('dacteChoiceDescription')
   };
 
   const state = {
@@ -163,20 +170,95 @@
       return cell;
     }
 
-    const link = document.createElement('a');
+    const link = document.createElement('button');
     link.className = 'pdf-link';
-    link.href = `/api/faturamento/fatura-pdf?id=${encodeURIComponent(invoiceId)}`;
-    link.target = '_blank';
-    link.rel = 'noopener noreferrer';
-    link.setAttribute('aria-label', `Visualizar PDF da fatura ${invoiceId} em nova guia`);
-    link.title = `Visualizar fatura ${invoiceId}`;
+    link.type = 'button';
+    link.dataset.invoiceId = invoiceId;
+    link.setAttribute('aria-label', `Visualizar documentos da fatura ${invoiceId}`);
+    link.title = `Visualizar documentos da fatura ${invoiceId}`;
     const icon = document.createElement('span');
     icon.className = 'pdf-icon';
     icon.setAttribute('aria-hidden', 'true');
     icon.textContent = 'PDF';
     link.appendChild(icon);
+    link.addEventListener('click', () => openInvoiceDocuments(invoiceId, link));
     cell.appendChild(link);
     return cell;
+  };
+
+  let modalPreviousFocus = null;
+
+  const invoicePdfUrl = (invoiceId) =>
+    `/api/faturamento/fatura-pdf?id=${encodeURIComponent(invoiceId)}`;
+
+  const dactePdfUrl = (invoiceId) =>
+    `/api/faturamento/dacte-pdf?id=${encodeURIComponent(invoiceId)}`;
+
+  const closeDocumentModal = () => {
+    if (elements.documentModal.hidden) return;
+    elements.documentModal.hidden = true;
+    document.body.classList.remove('modal-open');
+    modalPreviousFocus?.focus();
+    modalPreviousFocus = null;
+  };
+
+  const showDocumentModal = (invoiceId, cteCount, trigger) => {
+    modalPreviousFocus = trigger;
+    elements.documentModalTitle.textContent = `Documentos da fatura ${invoiceId}`;
+    elements.invoicePdfChoice.href = invoicePdfUrl(invoiceId);
+    elements.dactePdfChoice.href = dactePdfUrl(invoiceId);
+    elements.dacteChoiceDescription.textContent = cteCount === 1
+      ? 'Documento do CT-e vinculado'
+      : `${cteCount} DACTEs em um único PDF`;
+    elements.documentModal.hidden = false;
+    document.body.classList.add('modal-open');
+    elements.documentModalClose.focus();
+  };
+
+  const prepareDocumentTab = () => {
+    const tab = window.open('about:blank', '_blank');
+    if (!tab) return null;
+    try {
+      tab.opener = null;
+      tab.document.title = 'Conferindo documentos…';
+      tab.document.body.textContent = 'Conferindo documentos da fatura…';
+      tab.document.body.style.cssText = 'font:16px system-ui;padding:32px;color:#123047';
+    } catch {
+      // A guia continua disponível mesmo se o navegador bloquear sua personalização.
+    }
+    return tab;
+  };
+
+  const openInvoiceDocuments = async (invoiceId, trigger) => {
+    if (trigger.disabled) return;
+    trigger.disabled = true;
+    trigger.classList.add('is-loading');
+    elements.dashboardMessage.textContent = '';
+    const pendingTab = prepareDocumentTab();
+    try {
+      const payload = await requestJson(
+        `/api/faturamento/documentos?id=${encodeURIComponent(invoiceId)}`
+      );
+      if (payload.hasCte) {
+        if (pendingTab && !pendingTab.closed) pendingTab.close();
+        showDocumentModal(invoiceId, Number(payload.cteCount) || 1, trigger);
+      } else if (pendingTab && !pendingTab.closed) {
+        pendingTab.location.replace(invoicePdfUrl(invoiceId));
+      } else {
+        window.open(invoicePdfUrl(invoiceId), '_blank', 'noopener,noreferrer');
+      }
+    } catch (error) {
+      if (pendingTab && !pendingTab.closed) pendingTab.close();
+      if (error.status === 401) {
+        showPanel('login');
+        elements.loginMessage.textContent = 'Sua sessão expirou. Entre novamente.';
+      } else {
+        elements.dashboardMessage.textContent = error.message;
+      }
+    } finally {
+      trigger.disabled = false;
+      trigger.classList.remove('is-loading');
+    }
   };
 
   const createInvoiceRow = (invoice) => {
@@ -554,6 +636,7 @@
   });
 
   elements.logoutButton.addEventListener('click', async () => {
+    closeDocumentModal();
     elements.logoutButton.disabled = true;
     try {
       await requestJson('/api/faturamento/logout', { method: 'POST' });
@@ -620,6 +703,14 @@
       top: 0,
       behavior: reduceMotion ? 'auto' : 'smooth'
     });
+  });
+
+  elements.documentModalClose.addEventListener('click', closeDocumentModal);
+  elements.documentModalBackdrop.addEventListener('click', closeDocumentModal);
+  elements.invoicePdfChoice.addEventListener('click', closeDocumentModal);
+  elements.dactePdfChoice.addEventListener('click', closeDocumentModal);
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && !elements.documentModal.hidden) closeDocumentModal();
   });
 
   const start = async () => {

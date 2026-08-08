@@ -125,14 +125,20 @@ test('coleta os filtros do formulário antes de desabilitar os campos', () => {
   assert.match(loadInvoices, /faturas\?\$\{params\}/);
 });
 
-test('coluna Visualizar abre o PDF em nova guia e não oferece ordenação', () => {
+test('coluna Visualizar confere CT-e e oferece Fatura e DACTE sem ordenação', () => {
   const html = readFileSync(require.resolve('../faturamento/index.html'), 'utf8');
   const source = readFileSync(require.resolve('../faturamento/app.js'), 'utf8');
   assert.match(html, /class="visualize-header">Visualizar<\/th>/);
   assert.doesNotMatch(html, /data-sort-key="paidAt"/);
   assert.match(source, /\/api\/faturamento\/fatura-pdf\?id=/);
-  assert.match(source, /link\.target = '_blank'/);
-  assert.match(source, /noopener noreferrer/);
+  assert.match(source, /\/api\/faturamento\/documentos\?id=/);
+  assert.match(source, /\/api\/faturamento\/dacte-pdf\?id=/);
+  assert.match(source, /if \(payload\.hasCte\)/);
+  assert.match(source, /pendingTab\.location\.replace\(invoicePdfUrl/);
+  assert.match(html, /id="invoicePdfChoice"[^>]*target="_blank"/);
+  assert.match(html, /id="dactePdfChoice"[^>]*target="_blank"/);
+  assert.match(html, />Fatura<\/strong>/);
+  assert.match(html, />DACTE<\/strong>/);
   assert.match(html, /Conferindo faturas e empresas/);
 });
 

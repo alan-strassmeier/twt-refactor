@@ -31,6 +31,13 @@
       "maxDuration": 60,
       "includeFiles": "assets/twtlogo.png"
     },
+    "api/faturamento/dacte-pdf.js": {
+      "maxDuration": 60,
+      "includeFiles": "assets/twtlogo.png"
+    },
+    "api/faturamento/documentos.js": {
+      "maxDuration": 60
+    },
     "api/faturamento/faturas.js": {
       "maxDuration": 60
     },

@@ -233,6 +233,28 @@
       </section>
     </main>
   </div>
+  <div class="document-modal" id="documentModal" hidden>
+    <button class="document-modal-backdrop" id="documentModalBackdrop" type="button"
+      aria-label="Fechar opções de documentos"></button>
+    <section class="document-modal-panel" role="dialog" aria-modal="true"
+      aria-labelledby="documentModalTitle" aria-describedby="documentModalDescription">
+      <button class="document-modal-close" id="documentModalClose" type="button"
+        aria-label="Fechar opções de documentos">×</button>
+      <span class="document-modal-eyebrow">Documentos da entrega</span>
+      <h2 id="documentModalTitle">Visualizar fatura</h2>
+      <p id="documentModalDescription">Escolha qual documento deseja abrir em uma nova guia.</p>
+      <div class="document-modal-actions">
+        <a class="document-choice" id="invoicePdfChoice" target="_blank" rel="noopener noreferrer">
+          <span class="pdf-icon" aria-hidden="true">PDF</span>
+          <span><strong>Fatura</strong><small>Documento de cobrança</small></span>
+        </a>
+        <a class="document-choice" id="dactePdfChoice" target="_blank" rel="noopener noreferrer">
+          <span class="pdf-icon" aria-hidden="true">PDF</span>
+          <span><strong>DACTE</strong><small id="dacteChoiceDescription">Documento do CT-e</small></span>
+        </a>
+      </div>
+    </section>
+  </div>
   <button class="back-to-top" id="backToTopButton" type="button"
     aria-label="Voltar ao topo da página" title="Voltar ao topo" hidden>
     <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
