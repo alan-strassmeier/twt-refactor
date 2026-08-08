@@ -7,7 +7,11 @@ const {
   accessKeyFromXml,
   fetchCteXmls
 } = require('../server/faturamento/cte-documents');
-const { parseCteXml, buildDactePdf } = require('../server/faturamento/dacte');
+const {
+  parseCteXml,
+  buildDactePdf,
+  flowPassageFrom
+} = require('../server/faturamento/dacte');
 
 const KEY = '43260797434690000129570000000151221704715130';
 const XML = `<?xml version="1.0" encoding="utf-8"?>
@@ -68,6 +72,11 @@ test('normaliza somente chaves CT-e válidas e limita duplicidades', () => {
   assert.deepEqual(normalizeCteKeys([KEY, KEY, '123']), [KEY]);
 });
 
+test('separa somente os pontos intermediários no fluxo da carga', () => {
+  assert.equal(flowPassageFrom('|PLU', 'NVT', 'PLU'), '');
+  assert.equal(flowPassageFrom('|NVT|GRU|VCP|PLU', 'NVT', 'PLU'), 'GRU - VCP');
+});
+
 test('interpreta o XML e gera um DACTE por página', async () => {
   const model = parseCteXml(XML);
   assert.equal(model.accessKey, KEY);
@@ -75,6 +84,9 @@ test('interpreta o XML e gera um DACTE por página', async () => {
   assert.equal(model.minute, '0000024885');
   assert.equal(model.parties.sender.name, 'JIMI BRASIL LTDA');
   assert.equal(model.parties.taker.type, 'REMETENTE');
+  assert.equal(model.flow.origin, 'NVT');
+  assert.equal(model.flow.passage, '');
+  assert.equal(model.flow.destination, 'PLU');
   assert.equal(model.totalService, '2.272,90');
   assert.equal(model.documents[0].number, '42260741870054000276550010000017761819198958');
 

@@ -172,6 +172,17 @@ const componentsFrom = (xml) => sections(xml, 'Comp').map((item) => ({
   amount: numberText(value(item, 'vComp'))
 }));
 
+const flowPassageFrom = (route, origin, destination) => {
+  const boundaries = new Set([origin, destination]
+    .map((item) => clean(item, '').toUpperCase())
+    .filter(Boolean));
+  const stops = String(route || '')
+    .split(/[|>,;/]+/)
+    .map((item) => clean(item, ''))
+    .filter((item) => item && !boundaries.has(item.toUpperCase()));
+  return [...new Set(stops)].join(' - ');
+};
+
 const continuousObservations = (compl) => {
   const result = {};
   const pattern = /<(?:[\w.-]+:)?ObsCont\b([^>]*)>([\s\S]*?)<\/(?:[\w.-]+:)?ObsCont\s*>/gi;
@@ -258,6 +269,9 @@ const parseCteXml = (xml) => {
   const flow = section(compl, 'fluxo');
   const delivery = section(compl, 'Entrega');
   const modal = section(section(normal, 'infModal'), 'rodo');
+  const flowOrigin = value(flow, 'xOrig', '');
+  const flowDestination = value(flow, 'xDest', '');
+  const flowRoute = value(flow, 'xRota', '');
   return {
     accessKey,
     model: value(ide, 'mod'),
@@ -278,9 +292,10 @@ const parseCteXml = (xml) => {
     observation: value(compl, 'xObs', ''),
     minute: observations.minuta || '',
     flow: {
-      origin: value(flow, 'xOrig', ''),
-      destination: value(flow, 'xDest', ''),
-      route: value(flow, 'xRota', '')
+      origin: flowOrigin,
+      passage: flowPassageFrom(flowRoute, flowOrigin, flowDestination),
+      destination: flowDestination,
+      route: flowRoute
     },
     parties,
     cargo: {
@@ -324,23 +339,24 @@ const write = (doc, text, x, y, options = {}) => {
       height,
       align,
       ellipsis,
-      lineGap: 0.3
+    lineGap: 0.6
     });
 };
 
 const cell = (doc, x, y, width, height, label, content, options = {}) => {
+  const valueY = options.valueY || 10;
   box(doc, x, y, width, height);
   write(doc, label, x + 3, y + 2, {
     width: width - 6,
-    height: 8,
-    size: options.labelSize || 4.9,
+    height: options.labelHeight || 8,
+    size: options.labelSize || 5.1,
     bold: true,
     color: '#333333'
   });
-  write(doc, content, x + 3, y + (options.valueY || 10), {
+  write(doc, content, x + 3, y + valueY, {
     width: width - 6,
-    height: height - (options.valueY || 10) - 2,
-    size: options.size || 6.4,
+    height: height - valueY - 2,
+    size: options.size || 6.65,
     bold: options.bold,
     align: options.align || 'left',
     ellipsis: options.ellipsis !== false
@@ -416,7 +432,7 @@ const drawHeader = (doc, data, images) => {
     [address.street, address.number, address.district].filter((item) => item && item !== '-').join(', '),
     [address.city, address.state, address.cep].filter((item) => item && item !== '-').join(' - '),
     `CNPJ: ${issuer?.document || '-'}  IE: ${issuer?.ie || '-'}  FONE: ${issuer?.phone || '-'}`
-  ].join('\n'), x + 7, y + 55, { width: left - 14, height: 32, size: 5.4 });
+  ].join('\n'), x + 7, y + 55, { width: left - 14, height: 32, size: 5.7 });
 
   write(doc, 'DACTE', x + left + 3, y + 5, { width: middle - 6, size: 13, bold: true, align: 'center' });
   write(doc, 'Documento Auxiliar do Conhecimento\nde Transporte Eletrônico', x + left + 5, y + 23, {
@@ -471,34 +487,34 @@ const drawDactePage = (doc, data, images) => {
   let y = drawHeader(doc, data, images);
   const x = PAGE.margin;
 
-  cell(doc, x, y, WIDTH * .25, 23, 'TIPO DO CT-E', data.cteType, { size: 5.8, bold: true });
-  cell(doc, x + WIDTH * .25, y, WIDTH * .25, 23, 'TIPO DO SERVIÇO', data.serviceType, { size: 5.8, bold: true });
-  cell(doc, x + WIDTH * .5, y, WIDTH * .25, 23, 'TOMADOR DO SERVIÇO', data.parties.taker?.type, { size: 5.8, bold: true });
-  cell(doc, x + WIDTH * .75, y, WIDTH * .25, 23, 'INDICADOR GLOBALIZADO', data.globalized, { size: 5.8, bold: true, align: 'center' });
+  cell(doc, x, y, WIDTH * .25, 23, 'TIPO DO CT-E', data.cteType, { size: 6.1, bold: true });
+  cell(doc, x + WIDTH * .25, y, WIDTH * .25, 23, 'TIPO DO SERVIÇO', data.serviceType, { size: 6.1, bold: true });
+  cell(doc, x + WIDTH * .5, y, WIDTH * .25, 23, 'TOMADOR DO SERVIÇO', data.parties.taker?.type, { size: 6.1, bold: true });
+  cell(doc, x + WIDTH * .75, y, WIDTH * .25, 23, 'INDICADOR GLOBALIZADO', data.globalized, { size: 6.1, bold: true, align: 'center' });
   y += 23;
 
   cell(doc, x, y, WIDTH * .15, 26, 'CFOP', data.cfop, { size: 7.5, bold: true, align: 'center' });
-  cell(doc, x + WIDTH * .15, y, WIDTH * .45, 26, 'NATUREZA DA PRESTAÇÃO', data.nature, { size: 5.8, bold: true });
-  cell(doc, x + WIDTH * .6, y, WIDTH * .2, 26, 'INÍCIO DA PRESTAÇÃO', data.origin, { size: 6.1, bold: true });
-  cell(doc, x + WIDTH * .8, y, WIDTH * .2, 26, 'TÉRMINO DA PRESTAÇÃO', data.destination, { size: 6.1, bold: true });
+  cell(doc, x + WIDTH * .15, y, WIDTH * .45, 26, 'NATUREZA DA PRESTAÇÃO', data.nature, { size: 6.1, bold: true });
+  cell(doc, x + WIDTH * .6, y, WIDTH * .2, 26, 'INÍCIO DA PRESTAÇÃO', data.origin, { size: 6.4, bold: true });
+  cell(doc, x + WIDTH * .8, y, WIDTH * .2, 26, 'TÉRMINO DA PRESTAÇÃO', data.destination, { size: 6.4, bold: true });
   y += 26;
 
   const half = WIDTH / 2;
-  cell(doc, x, y, half, 50, 'REMETENTE', partyLines(data.parties.sender), { size: 5.35, valueY: 9 });
-  cell(doc, x + half, y, half, 50, 'DESTINATÁRIO', partyLines(data.parties.recipient), { size: 5.35, valueY: 9 });
+  cell(doc, x, y, half, 50, 'REMETENTE', partyLines(data.parties.sender), { size: 5.65, valueY: 9 });
+  cell(doc, x + half, y, half, 50, 'DESTINATÁRIO', partyLines(data.parties.recipient), { size: 5.65, valueY: 9 });
   y += 50;
-  cell(doc, x, y, half, 50, 'EXPEDIDOR', partyLines(data.parties.dispatcher), { size: 5.35, valueY: 9 });
-  cell(doc, x + half, y, half, 50, 'RECEBEDOR', partyLines(data.parties.receiver), { size: 5.35, valueY: 9 });
+  cell(doc, x, y, half, 50, 'EXPEDIDOR', partyLines(data.parties.dispatcher), { size: 5.65, valueY: 9 });
+  cell(doc, x + half, y, half, 50, 'RECEBEDOR', partyLines(data.parties.receiver), { size: 5.65, valueY: 9 });
   y += 50;
 
   cell(doc, x, y, WIDTH, 48, `TOMADOR DO SERVIÇO: ${data.parties.taker?.type || '-'}`, partyLines(data.parties.taker), {
-    size: 5.3,
+    size: 5.6,
     valueY: 9
   });
   y += 48;
 
   cell(doc, x, y, WIDTH * .35, 34, 'PRODUTO PREDOMINANTE', data.cargo.predominantProduct, { size: 7, bold: true });
-  cell(doc, x + WIDTH * .35, y, WIDTH * .25, 34, 'OUTRAS CARACTERÍSTICAS DA CARGA', data.cargo.otherCharacteristics, { size: 5.9 });
+  cell(doc, x + WIDTH * .35, y, WIDTH * .25, 34, 'OUTRAS CARACTERÍSTICAS DA CARGA', data.cargo.otherCharacteristics, { size: 6.2 });
   cell(doc, x + WIDTH * .6, y, WIDTH * .4, 34, 'VALOR TOTAL DA MERCADORIA', `R$ ${data.cargo.totalValue}`, { size: 8, bold: true, align: 'center' });
   y += 34;
   const quantities = data.cargo.quantities.slice(0, 6);
@@ -512,7 +528,7 @@ const drawDactePage = (doc, data, images) => {
     27,
     quantity.measure,
     quantity.quantity,
-    { size: 6.4, bold: true, align: 'center' }
+    { size: 6.7, bold: true, align: 'center' }
   ));
   y += 27;
 
@@ -526,11 +542,11 @@ const drawDactePage = (doc, data, images) => {
     31,
     component.name,
     `R$ ${component.amount}`,
-    { size: 5.9, bold: true, align: 'right' }
+    { size: 6.15, bold: true, align: 'right' }
   ));
   const totalsX = x + (componentWidth * components.length);
-  cell(doc, totalsX, y, componentWidth, 31, 'VALOR TOTAL DO SERVIÇO', `R$ ${data.totalService}`, { size: 6.2, bold: true, align: 'right' });
-  cell(doc, totalsX + componentWidth, y, WIDTH - (componentWidth * (components.length + 1)), 31, 'VALOR A RECEBER', `R$ ${data.amountReceivable}`, { size: 6.2, bold: true, align: 'right' });
+  cell(doc, totalsX, y, componentWidth, 31, 'VALOR TOTAL DO SERVIÇO', `R$ ${data.totalService}`, { size: 6.45, bold: true, align: 'right' });
+  cell(doc, totalsX + componentWidth, y, WIDTH - (componentWidth * (components.length + 1)), 31, 'VALOR A RECEBER', `R$ ${data.amountReceivable}`, { size: 6.45, bold: true, align: 'right' });
   y += 31;
 
   const taxWidth = WIDTH / 5;
@@ -541,7 +557,7 @@ const drawDactePage = (doc, data, images) => {
     ['VALOR ICMS', `R$ ${data.tax.amount}`],
     ['% RED. BC', `${data.tax.reduction}%`]
   ].forEach(([label, content], index) => cell(doc, x + taxWidth * index, y, taxWidth, 28, label, content, {
-    size: 6,
+    size: 6.3,
     bold: true,
     align: 'center'
   }));
@@ -550,29 +566,58 @@ const drawDactePage = (doc, data, images) => {
   const documentText = data.documents.length
     ? data.documents.map((item) => `${item.type}: ${item.number}${item.value ? `  R$ ${item.value}` : ''}`).join('\n')
     : '-';
-  cell(doc, x, y, WIDTH, 50, 'DOCUMENTOS ORIGINÁRIOS', documentText, { size: 5.5, valueY: 9 });
+  cell(doc, x, y, WIDTH, 50, 'DOCUMENTOS ORIGINÁRIOS', documentText, { size: 5.8, valueY: 9 });
   y += 50;
 
-  cell(doc, x, y, WIDTH * .35, 29, 'PREVISÃO DO FLUXO DA CARGA', [
-    data.flow.origin,
-    data.flow.destination,
-    data.flow.route
-  ].filter(Boolean).join(' > '), { size: 6, bold: true });
-  cell(doc, x + WIDTH * .35, y, WIDTH * .25, 29, 'DATA PREVISTA DE ENTREGA', data.expectedDelivery, { size: 7, bold: true, align: 'center' });
-  cell(doc, x + WIDTH * .6, y, WIDTH * .4, 29, 'EMISSOR', data.operator, { size: 6, bold: true });
-  y += 29;
+  box(doc, x, y, WIDTH, 11);
+  write(doc, 'PREVISÃO DO FLUXO DA CARGA', x + 3, y + 2, {
+    width: WIDTH - 6,
+    height: 8,
+    size: 5.7,
+    bold: true,
+    align: 'center'
+  });
+  y += 11;
+  const flowWidth = WIDTH / 3;
+  [
+    ['SIGLA OU CÓDIGO INT. DA FILIAL/PORTO/ESTAÇÃO/AEROPORTO DE ORIGEM', data.flow.origin],
+    ['SIGLA OU CÓDIGO INT. DA FILIAL/PORTO/ESTAÇÃO/AEROPORTO DE PASSAGEM', data.flow.passage],
+    ['SIGLA OU CÓDIGO INT. DA FILIAL/PORTO/ESTAÇÃO/AEROPORTO DE DESTINO', data.flow.destination]
+  ].forEach(([label, content], index) => cell(doc, x + (flowWidth * index), y, flowWidth, 34, label, content, {
+    labelSize: 4.2,
+    labelHeight: 11,
+    valueY: 15,
+    size: 7.2,
+    bold: true,
+    align: 'center'
+  }));
+  y += 34;
 
   cell(doc, x, y, WIDTH, 90, 'OBSERVAÇÕES', data.observation, {
-    size: 5.7,
+    size: 6,
     valueY: 10,
     ellipsis: true
   });
   y += 90;
 
-  cell(doc, x, y, WIDTH * .25, 27, 'RNTRC DA EMPRESA', data.rntrc, { size: 7, bold: true });
-  cell(doc, x + WIDTH * .25, y, WIDTH * .25, 27, 'MODAL', data.modal, { size: 6.5, bold: true });
-  cell(doc, x + WIDTH * .5, y, WIDTH * .5, 27, 'STATUS DA AUTORIZAÇÃO', data.authorizationStatus, { size: 6, bold: true });
-  y += 27;
+  box(doc, x, y, WIDTH, 11);
+  write(doc, `DADOS ESPECÍFICOS DO MODAL ${data.modal} - CARGA FRACIONADA`, x + 3, y + 2, {
+    width: WIDTH - 6,
+    height: 8,
+    size: 5.7,
+    bold: true,
+    align: 'center'
+  });
+  y += 11;
+  cell(doc, x, y, WIDTH * .23, 34, 'RNTRC DA EMPRESA', data.rntrc, { size: 7.2, bold: true });
+  cell(doc, x + WIDTH * .23, y, WIDTH * .2, 34, 'DATA PREVISTA DE ENTREGA', data.expectedDelivery, { size: 7, bold: true });
+  cell(doc, x + WIDTH * .43, y, WIDTH * .37, 34, 'LEGISLAÇÃO', 'ESTE CONHECIMENTO DE TRANSPORTE ATENDE À LEGISLAÇÃO DE TRANSPORTE RODOVIÁRIO EM VIGOR', {
+    size: 5.4,
+    bold: true,
+    align: 'center'
+  });
+  cell(doc, x + WIDTH * .8, y, WIDTH * .2, 34, 'EMISSOR', data.operator, { size: 5.8, bold: true });
+  y += 34;
 
   box(doc, x, y, WIDTH, 95, 0.8);
   write(doc, 'DECLARO QUE RECEBI OS VOLUMES DESTE CONHECIMENTO EM PERFEITO ESTADO PELO QUE DOU POR CUMPRIDO O PRESENTE CONTRATO DE TRANSPORTE', x + 4, y + 3, {
@@ -633,6 +678,7 @@ const buildDactePdf = async (models) => {
 module.exports = {
   parseCteXml,
   buildDactePdf,
+  flowPassageFrom,
   formatCnpjCpf,
   formatDateTime
 };
