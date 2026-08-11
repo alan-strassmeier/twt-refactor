@@ -125,7 +125,7 @@ test('coleta os filtros do formulário antes de desabilitar os campos', () => {
   assert.match(loadInvoices, /faturas\?\$\{params\}/);
 });
 
-test('coluna Visualizar oferece Fatura, DACTE e boleto do banco definido pelo emitente', () => {
+test('coluna Visualizar oferece Fatura, DACTE, boleto e NFS-e conforme o emitente', () => {
   const html = readFileSync(require.resolve('../faturamento/index.html'), 'utf8');
   const source = readFileSync(require.resolve('../faturamento/app.js'), 'utf8');
   assert.match(html, /class="visualize-header">Visualizar<\/th>/);
@@ -134,9 +134,10 @@ test('coluna Visualizar oferece Fatura, DACTE e boleto do banco definido pelo em
   assert.match(source, /\/api\/faturamento\/documentos\?id=/);
   assert.match(source, /\/api\/faturamento\/dacte-pdf\?id=/);
   assert.match(source, /\/api\/faturamento\/boleto-pdf\?id=/);
-  assert.match(source, /if \(payload\.hasCte \|\| payload\.bankSlipEligible\)/);
+  assert.match(source, /if \(payload\.hasCte \|\| payload\.bankSlipEligible \|\| payload\.nfseEligible\)/);
   assert.match(source, /method: 'POST'/);
   assert.match(source, /\/api\/faturamento\/boleto/);
+  assert.match(source, /\/api\/faturamento\/nfse/);
   assert.match(source, /window\.confirm/);
   assert.match(source, /bankSlipBankLabel/);
   assert.match(source, /dataset\.bankLabel/);
@@ -147,10 +148,13 @@ test('coluna Visualizar oferece Fatura, DACTE e boleto do banco definido pelo em
   assert.match(html, /id="invoicePdfChoice"[^>]*target="_blank"/);
   assert.match(html, /id="dactePdfChoice"[^>]*target="_blank"/);
   assert.match(html, /id="bankSlipChoice"[^>]*hidden/);
+  assert.match(html, /id="nfseChoice"[^>]*hidden/);
+  assert.match(html, /id="nfseConfirmModal"[^>]*hidden/);
   assert.match(html, /id="bankSlipBankIcon"/);
   assert.match(html, />Fatura<\/strong>/);
   assert.match(html, />DACTE<\/strong>/);
   assert.match(html, />Gerar boleto<\/strong>/);
+  assert.match(html, />Gerar NFS-e<\/strong>/);
   assert.match(html, /Conferindo faturas e empresas/);
   const boletoApi = readFileSync(require.resolve('../api/faturamento/boleto.js'), 'utf8');
   assert.match(boletoApi, /hasSameOrigin\(req\)/);

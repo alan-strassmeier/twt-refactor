@@ -55,7 +55,24 @@
     dacteChoiceDescription: document.getElementById('dacteChoiceDescription'),
     bankSlipChoice: document.getElementById('bankSlipChoice'),
     bankSlipBankIcon: document.getElementById('bankSlipBankIcon'),
-    bankSlipChoiceDescription: document.getElementById('bankSlipChoiceDescription')
+    bankSlipChoiceDescription: document.getElementById('bankSlipChoiceDescription'),
+    nfseChoice: document.getElementById('nfseChoice'),
+    nfseChoiceTitle: document.getElementById('nfseChoiceTitle'),
+    nfseChoiceDescription: document.getElementById('nfseChoiceDescription'),
+    nfseConfirmModal: document.getElementById('nfseConfirmModal'),
+    nfseConfirmBackdrop: document.getElementById('nfseConfirmBackdrop'),
+    nfseConfirmClose: document.getElementById('nfseConfirmClose'),
+    nfseCancelButton: document.getElementById('nfseCancelButton'),
+    nfseIssueButton: document.getElementById('nfseIssueButton'),
+    nfsePreviewInvoice: document.getElementById('nfsePreviewInvoice'),
+    nfsePreviewCompetence: document.getElementById('nfsePreviewCompetence'),
+    nfsePreviewClient: document.getElementById('nfsePreviewClient'),
+    nfsePreviewDocument: document.getElementById('nfsePreviewDocument'),
+    nfsePreviewAmount: document.getElementById('nfsePreviewAmount'),
+    nfsePreviewService: document.getElementById('nfsePreviewService'),
+    nfsePreviewDescription: document.getElementById('nfsePreviewDescription'),
+    nfsePreviewTaxation: document.getElementById('nfsePreviewTaxation'),
+    nfseConfirmWarning: document.querySelector('.nfse-confirm-warning')
   };
 
   const state = {
@@ -200,8 +217,34 @@
   const bankSlipPdfUrl = (invoiceId) =>
     `/api/faturamento/boleto-pdf?id=${encodeURIComponent(invoiceId)}`;
 
+  const nfsePdfUrl = (invoiceId) =>
+    `/api/faturamento/nfse-pdf?id=${encodeURIComponent(invoiceId)}`;
+
+  const nfsePendingStates = new Set(['queued', 'agent_processing']);
+
   const closeDocumentModal = () => {
     if (elements.documentModal.hidden) return;
+    elements.documentModal.hidden = true;
+    document.body.classList.remove('modal-open');
+    modalPreviousFocus?.focus();
+    modalPreviousFocus = null;
+  };
+
+  const closeNfseConfirm = (returnToDocuments = true) => {
+    if (elements.nfseConfirmModal.hidden) return;
+    elements.nfseConfirmModal.hidden = true;
+    if (returnToDocuments) {
+      elements.documentModal.hidden = false;
+      elements.documentModalClose.focus();
+      return;
+    }
+    document.body.classList.remove('modal-open');
+    modalPreviousFocus?.focus();
+    modalPreviousFocus = null;
+  };
+
+  const closeAllDocumentModals = () => {
+    elements.nfseConfirmModal.hidden = true;
     elements.documentModal.hidden = true;
     document.body.classList.remove('modal-open');
     modalPreviousFocus?.focus();
@@ -226,6 +269,31 @@
     elements.bankSlipChoice.disabled = false;
     elements.bankSlipChoice.classList.remove('is-loading');
     elements.bankSlipChoiceDescription.textContent = `Cobrança emitida exclusivamente pelo ${bankLabel}`;
+    elements.nfseChoice.hidden = !options.nfseEligible;
+    elements.nfseChoice.dataset.invoiceId = options.nfseEligible ? invoiceId : '';
+    elements.nfseChoice.dataset.status = options.nfseStatus || 'not_issued';
+    elements.nfseChoice.disabled = false;
+    elements.nfseChoice.classList.remove('is-loading');
+    if (options.nfseStatus === 'issued') {
+      elements.nfseChoiceTitle.textContent = 'Visualizar NFS-e';
+      elements.nfseChoiceDescription.textContent = options.nfseNumber
+        ? `NFS-e nº ${options.nfseNumber} emitida para esta fatura`
+        : 'NFS-e emitida para esta fatura';
+    } else if (nfsePendingStates.has(options.nfseStatus)) {
+      elements.nfseChoiceTitle.textContent = 'Acompanhar emissão da NFS-e';
+      elements.nfseChoiceDescription.textContent = options.nfseStatus === 'agent_processing'
+        ? 'O agente A3 está assinando e transmitindo a DPS'
+        : 'A DPS está aguardando o computador com o certificado A3';
+    } else if (['processing', 'review'].includes(options.nfseStatus)) {
+      elements.nfseChoiceTitle.textContent = 'Conferir emissão da NFS-e';
+      elements.nfseChoiceDescription.textContent = 'Existe uma DPS em processamento ou revisão';
+    } else if (options.nfseStatus === 'failed') {
+      elements.nfseChoiceTitle.textContent = 'Tentar gerar NFS-e novamente';
+      elements.nfseChoiceDescription.textContent = 'A última tentativa não foi autorizada';
+    } else {
+      elements.nfseChoiceTitle.textContent = 'Gerar NFS-e';
+      elements.nfseChoiceDescription.textContent = 'Nota fiscal de serviço exclusiva da TWT';
+    }
     elements.documentModal.hidden = false;
     document.body.classList.add('modal-open');
     elements.documentModalClose.focus();
@@ -278,6 +346,150 @@
     }
   };
 
+  const showNfsePreview = (payload) => {
+    elements.nfsePreviewInvoice.textContent = payload.invoiceId || '—';
+    elements.nfsePreviewCompetence.textContent = formatDate(payload.competence);
+    elements.nfsePreviewClient.textContent = payload.client?.name || '—';
+    elements.nfsePreviewDocument.textContent = formatCnpj(payload.client?.document);
+    elements.nfsePreviewAmount.textContent = formatCurrency(Number(payload.amount));
+    elements.nfsePreviewService.textContent = [
+      payload.service?.code,
+      payload.service?.nbsCode
+    ].filter(Boolean).join(' / ') || '—';
+    elements.nfsePreviewDescription.textContent = payload.description || '—';
+    elements.nfsePreviewTaxation.textContent = [
+      `ISSQN ${payload.service?.issRetention || '—'}`,
+      `Simples Nacional (${payload.service?.totalTaxPercentage ?? '—'}% de tributos aproximados)`,
+      `${payload.service?.municipalityName || 'Porto Alegre'} / RS`
+    ].join(' • ');
+    elements.nfseConfirmWarning.textContent = nfsePendingStates.has(payload.status)
+      ? 'A solicitação está aguardando o computador da TWT com o certificado A3 conectado.'
+      : payload.status === 'review'
+        ? 'A transmissão anterior precisa ser consultada antes de qualquer nova emissão.'
+        : payload.message ||
+          'A emissão é exclusiva para a TWT e usa o padrão fiscal aprovado para a fatura.';
+    elements.nfseIssueButton.dataset.invoiceId = payload.invoiceId || '';
+    elements.nfseIssueButton.textContent = nfsePendingStates.has(payload.status)
+      ? 'Atualizar situação'
+      : ['processing', 'review'].includes(payload.status)
+        ? 'Conferir emissão'
+        : 'Confirmar e emitir';
+    elements.documentModal.hidden = true;
+    elements.nfseConfirmModal.hidden = false;
+    elements.nfseIssueButton.focus();
+  };
+
+  const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+  const followAgentNfse = async (invoiceId, initialPayload) => {
+    let payload = initialPayload;
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      if (payload.status === 'issued') return payload;
+      if (payload.status === 'failed') {
+        throw new Error(payload.message || 'A DPS não foi autorizada. Confira o agente A3.');
+      }
+      if (payload.status === 'review') {
+        elements.nfseConfirmWarning.textContent =
+          'A transmissão ficou inconclusiva. Use “Conferir emissão” para consultar a DPS sem duplicá-la.';
+        elements.nfseIssueButton.textContent = 'Conferir emissão';
+        return payload;
+      }
+      elements.nfseConfirmWarning.textContent = payload.status === 'agent_processing'
+        ? 'O agente A3 está assinando e transmitindo a DPS. Aguarde…'
+        : 'Aguardando o computador emissor com o token A3 conectado…';
+      if (elements.nfseConfirmModal.hidden) return payload;
+      await wait(3000);
+      payload = await requestJson(
+        `/api/faturamento/nfse?id=${encodeURIComponent(invoiceId)}&status=1`
+      );
+    }
+    elements.nfseConfirmWarning.textContent =
+      'A solicitação continua na fila. Você pode fechar esta janela e consultar novamente depois.';
+    return payload;
+  };
+
+  const prepareNfse = async () => {
+    const invoiceId = String(elements.nfseChoice.dataset.invoiceId || '');
+    if (!invoiceId || elements.nfseChoice.disabled) return;
+    if (elements.nfseChoice.dataset.status === 'issued') {
+      closeDocumentModal();
+      openPdfAfterCheck(nfsePdfUrl(invoiceId));
+      return;
+    }
+    elements.nfseChoice.disabled = true;
+    elements.nfseChoice.classList.add('is-loading');
+    elements.nfseChoice.setAttribute('aria-busy', 'true');
+    elements.nfseChoiceDescription.textContent = 'Carregando e validando os dados fiscais…';
+    elements.dashboardMessage.textContent = '';
+    try {
+      const payload = await requestJson(
+        `/api/faturamento/nfse?id=${encodeURIComponent(invoiceId)}`
+      );
+      if (payload.status === 'issued') {
+        closeDocumentModal();
+        openPdfAfterCheck(nfsePdfUrl(invoiceId));
+        return;
+      }
+      showNfsePreview(payload);
+    } catch (error) {
+      if (error.status === 401) {
+        closeAllDocumentModals();
+        showPanel('login');
+        elements.loginMessage.textContent = 'Sua sessão expirou. Entre novamente.';
+      } else {
+        elements.dashboardMessage.textContent = error.message;
+        elements.nfseChoiceDescription.textContent = error.message;
+      }
+    } finally {
+      elements.nfseChoice.disabled = false;
+      elements.nfseChoice.classList.remove('is-loading');
+      elements.nfseChoice.removeAttribute('aria-busy');
+    }
+  };
+
+  const issueNfse = async () => {
+    const invoiceId = String(elements.nfseIssueButton.dataset.invoiceId || '');
+    if (!invoiceId || elements.nfseIssueButton.disabled) return;
+    elements.nfseIssueButton.disabled = true;
+    elements.nfseCancelButton.disabled = true;
+    elements.nfseIssueButton.textContent = 'Emitindo…';
+    elements.nfseConfirmWarning.textContent =
+      'Aguarde. Não feche esta janela nem repita a solicitação enquanto a DPS é processada.';
+    try {
+      const payload = await requestJson('/api/faturamento/nfse', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: invoiceId, confirmed: true })
+      });
+      let result = payload;
+      if (nfsePendingStates.has(payload.status)) {
+        elements.nfseCancelButton.disabled = false;
+        result = await followAgentNfse(invoiceId, payload);
+      }
+      if (result.status === 'issued') {
+        closeNfseConfirm(false);
+        openPdfAfterCheck(result.pdfUrl || nfsePdfUrl(invoiceId));
+      }
+    } catch (error) {
+      if (error.status === 401) {
+        closeAllDocumentModals();
+        showPanel('login');
+        elements.loginMessage.textContent = 'Sua sessão expirou. Entre novamente.';
+      } else {
+        elements.nfseConfirmWarning.textContent = error.message;
+        elements.dashboardMessage.textContent = error.message;
+      }
+    } finally {
+      elements.nfseIssueButton.disabled = false;
+      elements.nfseCancelButton.disabled = false;
+      if (!elements.nfseConfirmModal.hidden) {
+        elements.nfseIssueButton.textContent = 'Atualizar situação';
+      } else {
+        elements.nfseIssueButton.textContent = 'Confirmar e emitir';
+      }
+    }
+  };
+
   const openInvoiceDocuments = async (invoiceId, trigger) => {
     if (trigger.disabled) return;
     const originalTitle = trigger.title;
@@ -290,12 +502,15 @@
       const payload = await requestJson(
         `/api/faturamento/documentos?id=${encodeURIComponent(invoiceId)}`
       );
-      if (payload.hasCte || payload.bankSlipEligible) {
+      if (payload.hasCte || payload.bankSlipEligible || payload.nfseEligible) {
         showDocumentModal(invoiceId, {
           hasCte: Boolean(payload.hasCte),
           cteCount: Number(payload.cteCount) || 0,
           bankSlipEligible: Boolean(payload.bankSlipEligible),
-          bankSlipBankLabel: payload.bankSlipBankLabel
+          bankSlipBankLabel: payload.bankSlipBankLabel,
+          nfseEligible: Boolean(payload.nfseEligible),
+          nfseStatus: payload.nfseStatus,
+          nfseNumber: payload.nfseNumber
         }, trigger);
       } else {
         openPdfAfterCheck(invoicePdfUrl(invoiceId));
@@ -690,7 +905,7 @@
   });
 
   elements.logoutButton.addEventListener('click', async () => {
-    closeDocumentModal();
+    closeAllDocumentModals();
     elements.logoutButton.disabled = true;
     try {
       await requestJson('/api/faturamento/logout', { method: 'POST' });
@@ -762,10 +977,17 @@
   elements.documentModalClose.addEventListener('click', closeDocumentModal);
   elements.documentModalBackdrop.addEventListener('click', closeDocumentModal);
   elements.bankSlipChoice.addEventListener('click', generateBankSlip);
+  elements.nfseChoice.addEventListener('click', prepareNfse);
+  elements.nfseIssueButton.addEventListener('click', issueNfse);
+  elements.nfseConfirmClose.addEventListener('click', () => closeNfseConfirm(true));
+  elements.nfseConfirmBackdrop.addEventListener('click', () => closeNfseConfirm(true));
+  elements.nfseCancelButton.addEventListener('click', () => closeNfseConfirm(true));
   elements.invoicePdfChoice.addEventListener('click', closeDocumentModal);
   elements.dactePdfChoice.addEventListener('click', closeDocumentModal);
   document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && !elements.documentModal.hidden) closeDocumentModal();
+    if (event.key !== 'Escape') return;
+    if (!elements.nfseConfirmModal.hidden) closeNfseConfirm(true);
+    else if (!elements.documentModal.hidden) closeDocumentModal();
   });
 
   const start = async () => {

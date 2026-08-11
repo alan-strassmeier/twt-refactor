@@ -11,8 +11,11 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1106.0",
     "@vercel/functions": "^3.7.5",
+    "@xmldom/xmldom": "^0.9.10",
     "bwip-js": "^4.11.2",
+    "node-forge": "^1.4.0",
     "pdfkit": "^0.19.1",
+    "xml-crypto": "^6.1.2",
     "zxing-wasm": "^3.1.1"
   }
 }
