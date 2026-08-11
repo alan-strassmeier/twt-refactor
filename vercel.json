@@ -47,6 +47,18 @@
     "api/faturamento/faturas.js": {
       "maxDuration": 60
     },
+    "api/faturamento/nfse.js": {
+      "maxDuration": 60
+    },
+    "api/faturamento/nfse-agent.js": {
+      "maxDuration": 30
+    },
+    "api/faturamento/nfse-pdf.js": {
+      "maxDuration": 60
+    },
+    "api/faturamento/nfse-xml.js": {
+      "maxDuration": 60
+    },
     "api/whatsapp.mjs": {
       "maxDuration": 60,
       "memory": 1024,
