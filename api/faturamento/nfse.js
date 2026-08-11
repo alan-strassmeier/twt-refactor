@@ -8,10 +8,22 @@ const {
 const {
   previewInvoiceNfse,
   getInvoiceNfseStatus,
-  issueInvoiceNfse
+  issueInvoiceNfse,
+  getIssuedNfseXml
 } = require('../../server/faturamento/nfse');
+const { nfseConfig } = require('../../server/faturamento/nfse-config');
+const {
+  authenticateNfseAgent,
+  claimAgentJob,
+  completeAgentJob
+} = require('../../server/faturamento/nfse-agent');
+const { buildDanfsePdf } = require('../../server/faturamento/danfse');
 
-module.exports = async (req, res) => {
+const safeNumber = (value, maxLength = 20) => String(value || '')
+  .replace(/\D/g, '')
+  .slice(0, maxLength);
+
+const handleIssuance = async (req, res) => {
   if (!['GET', 'POST'].includes(req.method)) {
     res.setHeader('Allow', 'GET, POST');
     sendJson(res, 405, { message: 'Método não permitido.' });
@@ -51,4 +63,133 @@ module.exports = async (req, res) => {
       ...(Array.isArray(error.upstreamMessages) ? { details: error.upstreamMessages } : {})
     });
   }
+};
+
+const handleAgent = async (req, res) => {
+  if (!['GET', 'POST'].includes(req.method)) {
+    res.setHeader('Allow', 'GET, POST');
+    sendJson(res, 405, { message: 'Método não permitido.' });
+    return;
+  }
+
+  try {
+    const agentConfig = authenticateNfseAgent(req);
+    const fiscalConfig = nfseConfig(process.env, { requireCertificate: false });
+    if (req.method === 'GET') {
+      sendJson(res, 200, {
+        ok: true,
+        certificateMode: fiscalConfig.certificateMode,
+        environment: fiscalConfig.environment,
+        serverTime: new Date().toISOString()
+      });
+      return;
+    }
+
+    const body = await parseJsonBody(req, 3 * 1024 * 1024);
+    if (body.action === 'claim') {
+      const job = await claimAgentJob({ agentId: body.agentId }, {
+        config: fiscalConfig,
+        agentConfig
+      });
+      sendJson(res, 200, { job });
+      return;
+    }
+    if (body.action === 'complete') {
+      const result = await completeAgentJob(body);
+      sendJson(res, 200, result);
+      return;
+    }
+    sendJson(res, 422, { message: 'Ação do agente inválida.' });
+  } catch (error) {
+    const statusCode = Number(error.statusCode) || 500;
+    if (statusCode >= 500) console.error('[faturamento:nfse-agent]', error);
+    sendJson(res, statusCode, {
+      message: statusCode >= 500 && !error.expose
+        ? 'Falha interna na comunicação com o agente de NFS-e.'
+        : error.message
+    });
+  }
+};
+
+const handlePdf = async (req, res) => {
+  if (req.method !== 'GET') {
+    res.setHeader('Allow', 'GET');
+    sendJson(res, 405, { message: 'Método não permitido.' });
+    return;
+  }
+  if (!sessionFromRequest(req)) {
+    sendJson(res, 401, { message: 'Faça login para visualizar a NFS-e.' });
+    return;
+  }
+  try {
+    const { id } = queryFromRequest(req);
+    const { record, xml } = await getIssuedNfseXml(id);
+    const pdf = await buildDanfsePdf(xml);
+    const number = safeNumber(record.nfseNumber || id);
+    res.statusCode = 200;
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="danfse-${number}.pdf"`);
+    res.setHeader('Content-Length', String(pdf.length));
+    res.setHeader('Cache-Control', 'private, no-store, max-age=0');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Referrer-Policy', 'same-origin');
+    res.end(pdf);
+  } catch (error) {
+    const statusCode = Number(error.statusCode) || 502;
+    if (statusCode >= 500) console.error('[faturamento:nfse-pdf]', error);
+    sendJson(res, statusCode, {
+      message: statusCode >= 500 ? 'Não foi possível gerar o DANFSe.' : error.message
+    });
+  }
+};
+
+const handleXml = async (req, res) => {
+  if (req.method !== 'GET') {
+    res.setHeader('Allow', 'GET');
+    sendJson(res, 405, { message: 'Método não permitido.' });
+    return;
+  }
+  if (!sessionFromRequest(req)) {
+    sendJson(res, 401, { message: 'Faça login para baixar o XML da NFS-e.' });
+    return;
+  }
+  try {
+    const { id } = queryFromRequest(req);
+    const { record, xml } = await getIssuedNfseXml(id);
+    const body = Buffer.from(xml, 'utf8');
+    res.statusCode = 200;
+    res.setHeader('Content-Type', 'application/xml; charset=utf-8');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="nfse-${safeNumber(record.accessKey || id, 50)}.xml"`
+    );
+    res.setHeader('Content-Length', String(body.length));
+    res.setHeader('Cache-Control', 'private, no-store, max-age=0');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.end(body);
+  } catch (error) {
+    const statusCode = Number(error.statusCode) || 502;
+    if (statusCode >= 500) console.error('[faturamento:nfse-xml]', error);
+    sendJson(res, statusCode, {
+      message: statusCode >= 500 ? 'Não foi possível recuperar o XML da NFS-e.' : error.message
+    });
+  }
+};
+
+module.exports = async (req, res) => {
+  let route;
+  try {
+    route = queryFromRequest(req).route || 'issuance';
+  } catch (error) {
+    sendJson(res, Number(error.statusCode) || 400, { message: error.message });
+    return;
+  }
+
+  if (route === 'issuance') return handleIssuance(req, res);
+  if (route === 'agent') return handleAgent(req, res);
+  if (route === 'pdf') return handlePdf(req, res);
+  if (route === 'xml') return handleXml(req, res);
+  sendJson(res, 404, { message: 'Rota de NFS-e não encontrada.' });
 };
