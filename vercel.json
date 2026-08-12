@@ -26,6 +26,32 @@
       ]
     }
   ],
+  "rewrites": [
+    {
+      "source": "/api/faturamento/login",
+      "destination": "/api/faturamento/auth?route=login"
+    },
+    {
+      "source": "/api/faturamento/logout",
+      "destination": "/api/faturamento/auth?route=logout"
+    },
+    {
+      "source": "/api/faturamento/session",
+      "destination": "/api/faturamento/auth?route=session"
+    },
+    {
+      "source": "/api/faturamento/nfse-agent",
+      "destination": "/api/faturamento/nfse?route=agent"
+    },
+    {
+      "source": "/api/faturamento/nfse-pdf",
+      "destination": "/api/faturamento/nfse?route=pdf"
+    },
+    {
+      "source": "/api/faturamento/nfse-xml",
+      "destination": "/api/faturamento/nfse?route=xml"
+    }
+  ],
   "functions": {
     "api/faturamento/fatura-pdf.js": {
       "maxDuration": 60,
@@ -45,6 +71,9 @@
       "maxDuration": 60
     },
     "api/faturamento/faturas.js": {
+      "maxDuration": 60
+    },
+    "api/faturamento/nfse.js": {
       "maxDuration": 60
     },
     "api/whatsapp.mjs": {

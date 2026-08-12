@@ -7,9 +7,9 @@
   <meta name="theme-color" content="#112a40">
   <title>Faturamento | TWT Airpack</title>
   <link rel="icon" href="/favicon.ico">
-  <link rel="stylesheet" href="/faturamento/styles.css?v=7">
+  <link rel="stylesheet" href="/faturamento/styles.css?v=8">
   <script src="/faturamento/sort.js?v=1" defer></script>
-  <script src="/faturamento/app.js?v=10" defer></script>
+  <script src="/faturamento/app.js?v=11" defer></script>
 </head>
 <body>
   <div class="page-shell">
@@ -256,6 +256,37 @@
           <span class="bank-slip-icon" id="bankSlipBankIcon" aria-hidden="true">Banco</span>
           <span><strong>Gerar boleto</strong><small id="bankSlipChoiceDescription">Cobrança emitida pelo banco do emitente</small></span>
         </button>
+        <button class="document-choice nfse-choice" id="nfseChoice" type="button" hidden>
+          <span class="nfse-icon" aria-hidden="true">NFS-e</span>
+          <span><strong id="nfseChoiceTitle">Gerar NFS-e</strong><small id="nfseChoiceDescription">Nota fiscal de serviço da TWT</small></span>
+        </button>
+      </div>
+    </section>
+  </div>
+  <div class="document-modal" id="nfseConfirmModal" hidden>
+    <button class="document-modal-backdrop" id="nfseConfirmBackdrop" type="button"
+      aria-label="Cancelar emissão da NFS-e"></button>
+    <section class="document-modal-panel nfse-confirm-panel" role="dialog" aria-modal="true"
+      aria-labelledby="nfseConfirmTitle" aria-describedby="nfseConfirmDescription">
+      <button class="document-modal-close" id="nfseConfirmClose" type="button"
+        aria-label="Cancelar emissão da NFS-e">×</button>
+      <span class="document-modal-eyebrow">Conferência fiscal</span>
+      <h2 id="nfseConfirmTitle">Emitir NFS-e</h2>
+      <p id="nfseConfirmDescription">Confira os dados abaixo. Após a autorização, a NFS-e somente poderá ser cancelada ou substituída.</p>
+      <dl class="nfse-confirm-grid">
+        <div><dt>Fatura</dt><dd id="nfsePreviewInvoice">—</dd></div>
+        <div><dt>Competência</dt><dd id="nfsePreviewCompetence">—</dd></div>
+        <div><dt>Tomador</dt><dd id="nfsePreviewClient">—</dd></div>
+        <div><dt>CNPJ</dt><dd id="nfsePreviewDocument">—</dd></div>
+        <div><dt>Valor do serviço</dt><dd id="nfsePreviewAmount">—</dd></div>
+        <div><dt>Código / NBS</dt><dd id="nfsePreviewService">—</dd></div>
+        <div class="nfse-confirm-wide"><dt>Descrição</dt><dd id="nfsePreviewDescription">—</dd></div>
+        <div class="nfse-confirm-wide"><dt>Tributação</dt><dd id="nfsePreviewTaxation">—</dd></div>
+      </dl>
+      <p class="nfse-confirm-warning">A emissão é exclusiva para a TWT e usa o padrão fiscal aprovado para a fatura.</p>
+      <div class="nfse-confirm-actions">
+        <button class="button" id="nfseCancelButton" type="button">Voltar</button>
+        <button class="button button-primary" id="nfseIssueButton" type="button">Confirmar e emitir</button>
       </div>
     </section>
   </div>

@@ -1021,9 +1021,104 @@ body.modal-open {
   animation: document-spin .72s linear infinite;
 }
 
+.nfse-icon {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 43px;
+  height: 39px;
+  border: 2px solid #238260;
+  border-radius: 10px;
+  color: #176b4d;
+  background: #ecf8f3;
+  font-size: .68rem;
+  font-weight: 900;
+}
+
+.nfse-choice:disabled {
+  cursor: wait;
+  opacity: .68;
+  transform: none;
+}
+
+.nfse-choice.is-loading .nfse-icon {
+  width: 39px;
+  border-color: rgb(35 130 96 / 20%);
+  border-top-color: #238260;
+  border-radius: 50%;
+  color: transparent;
+  background: transparent;
+  animation: document-spin .72s linear infinite;
+}
+
+.nfse-confirm-panel {
+  width: min(720px, 100%);
+}
+
+.nfse-confirm-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 22px 0 16px;
+}
+
+.nfse-confirm-grid > div {
+  min-width: 0;
+  padding: 11px 13px;
+  border: 1px solid #dce7ef;
+  border-radius: 12px;
+  background: #f8fbfd;
+}
+
+.nfse-confirm-grid .nfse-confirm-wide {
+  grid-column: 1 / -1;
+}
+
+.nfse-confirm-grid dt {
+  margin: 0 0 5px;
+  color: var(--muted);
+  font-size: .68rem;
+  font-weight: 800;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.nfse-confirm-grid dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--navy-900);
+  font-size: .88rem;
+  font-weight: 750;
+  line-height: 1.35;
+}
+
+.document-modal-panel .nfse-confirm-warning {
+  padding: 11px 13px;
+  border-radius: 12px;
+  color: #815716;
+  background: #fff5df;
+  font-size: .8rem;
+  line-height: 1.45;
+}
+
+.nfse-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.nfse-confirm-actions .button {
+  min-width: 145px;
+}
+
 @media (max-width: 520px) {
   .document-modal-panel { padding: 25px 20px 20px; }
   .document-modal-actions { grid-template-columns: 1fr; }
+  .nfse-confirm-grid { grid-template-columns: 1fr; }
+  .nfse-confirm-grid .nfse-confirm-wide { grid-column: auto; }
+  .nfse-confirm-actions { flex-direction: column-reverse; }
+  .nfse-confirm-actions .button { width: 100%; }
 }
 
 .status-badge {

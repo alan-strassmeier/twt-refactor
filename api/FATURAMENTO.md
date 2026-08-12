@@ -31,6 +31,25 @@ C6_MTLS_KEY_PASSPHRASE=
 C6_PARTNER_SOFTWARE_NAME=TWT Faturamento
 C6_PARTNER_SOFTWARE_VERSION=1.0.0
 
+NFSE_ENVIRONMENT=homologation
+NFSE_CERT_MODE=agent
+NFSE_API_BASE_URL=
+NFSE_DPS_SERIES=
+NFSE_DPS_INITIAL_NUMBER=0
+NFSE_APPLICATION_VERSION=TWT_1.0.0
+NFSE_REQUEST_TIMEOUT_MS=30000
+NFSE_PROVIDER_PHONE=5133424425
+NFSE_PROVIDER_EMAIL=faturamento@twt.com.br
+NFSE_CERT_PFX_BASE64=
+NFSE_CERT_PASSWORD=
+NFSE_AGENT_TOKEN=
+NFSE_AGENT_LEASE_MS=300000
+R2_NFSE_PREFIX=nfse
+R2_NFSE_ACCOUNT_ID=
+R2_NFSE_ACCESS_KEY_ID=
+R2_NFSE_SECRET_ACCESS_KEY=
+R2_NFSE_BUCKET_NAME=twt-brudam-documentos
+
 UPSTASH_REDIS_REST_URL=
 UPSTASH_REDIS_REST_TOKEN=
 ```
@@ -105,6 +124,74 @@ obtenha no Itaú:
 Enquanto esses dados não estiverem disponíveis, a tentativa de emissão de uma
 fatura DSL retorna uma mensagem explícita de integração Itaú pendente. Nenhum
 endpoint ou payload bancário é presumido pelo código.
+
+## NFS-e Nacional (TWT)
+
+A emissão de NFS-e está disponível somente para faturas cujo emitente confirmado
+no DOCCOB seja a TWT (`09.123.137/0001-08`). A competência é sempre a data de
+emissão da própria fatura. Antes de transmitir, a interface apresenta CNPJ e
+razão social do tomador, competência, valor, código do serviço e descrição para
+confirmação humana.
+
+O padrão fiscal confirmado para a TWT é aplicado no servidor: serviço nacional
+`15.06.03`, NBS `106081000`, prestação e incidência em Porto Alegre, Simples
+Nacional, ISSQN não retido, PIS/COFINS CST `00` e percentual aproximado de
+tributos de `5,97%`. O navegador não pode alterar esses campos.
+
+Use uma série de DPS exclusivamente reservada para esta integração. Não reutilize
+a série `70000` do exemplo emitido manualmente no Portal Nacional. Defina em
+`NFSE_DPS_INITIAL_NUMBER` o último número já utilizado na nova série; o Redis
+reserva o próximo número de maneira atômica e mantém o vínculo com a fatura para
+evitar emissões duplicadas.
+
+Para o certificado A3 físico, use `NFSE_CERT_MODE=agent` e configure
+`NFSE_AGENT_TOKEN` com pelo menos 32 caracteres aleatórios. O executável Windows,
+as instruções de instalação e o autoteste ficam em `nfse-a3-agent/`. O agente
+consulta a fila por HTTPS, assina dentro do token e faz também a conexão mTLS com
+o Ambiente Nacional. O PIN nunca é recebido pela Vercel.
+
+Para gerar um token compatível também com versões antigas do Windows PowerShell:
+
+```powershell
+$bytes = New-Object byte[] 48
+$rng = [Security.Cryptography.RandomNumberGenerator]::Create()
+$rng.GetBytes($bytes)
+$rng.Dispose()
+[Convert]::ToBase64String($bytes)
+```
+
+Como alternativa futura, `NFSE_CERT_MODE=a1` mantém a emissão direta na Vercel.
+Nesse modo, o certificado A1 deve ser convertido integralmente para Base64 e
+cadastrado em `NFSE_CERT_PFX_BASE64`, com a senha em `NFSE_CERT_PASSWORD`:
+
+```powershell
+[Convert]::ToBase64String([IO.File]::ReadAllBytes('caminho\certificado-twt.pfx'))
+```
+
+Mantenha `NFSE_ENVIRONMENT=homologation` durante a validação. O ambiente de
+produção só deve ser ativado depois dos testes, da definição da série exclusiva
+e da confirmação das permissões do certificado. A URL oficial é escolhida pelo
+ambiente; `NFSE_API_BASE_URL` normalmente permanece vazia.
+
+O token usado em `R2_NFSE_*` precisa da permissão `Object Read & Write` e deve
+ser limitado ao bucket escolhido. Recomenda-se criar um token separado do token
+somente leitura usado para os DOCCOBs. Se nenhuma variável dedicada for
+preenchida, a aplicação reutiliza `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`,
+`R2_SECRET_ACCESS_KEY` e `R2_BUCKET_NAME`; nesse caso, esse token geral também
+precisará de escrita.
+
+`POST /api/faturamento/nfse` cria a emissão. No modo A1, a própria função assina
+e transmite; no modo A3, ela enfileira a DPS e a interface acompanha o agente.
+`GET/POST /api/faturamento/nfse-agent` é exclusivo do executável e exige o bearer
+token. Se o agente perder uma concessão após uma possível transmissão, o próximo
+processamento consulta a DPS pelo identificador em vez de reenviá-la. O XML
+autorizado é preservado no R2 sob
+`<R2_NFSE_PREFIX>/<ano>/<fatura>/<chave>.xml` e o estado fica no Redis. Por isso,
+Redis e R2 são obrigatórios para emitir.
+
+`GET /api/faturamento/nfse-pdf?id=...` gera o DANFSe a partir do XML autorizado e
+`GET /api/faturamento/nfse-xml?id=...` entrega o XML original. Ambos exigem a
+sessão administrativa.
 
 ## Consulta
 

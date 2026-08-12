@@ -1,7 +1,11 @@
 const { sessionFromRequest } = require('../../server/faturamento/auth');
 const { queryFromRequest, sendJson } = require('../../server/faturamento/http');
 const { resolveInvoiceCteKeys } = require('../../server/faturamento/cte-documents');
-const { bankSlipBankForIssuer } = require('../../server/faturamento/billing-rules');
+const {
+  bankSlipBankForIssuer,
+  isTwtIssuer
+} = require('../../server/faturamento/billing-rules');
+const { getNfseRecord } = require('../../server/faturamento/nfse-store');
 
 module.exports = async (req, res) => {
   if (req.method !== 'GET') {
@@ -18,13 +22,28 @@ module.exports = async (req, res) => {
     const { id } = queryFromRequest(req);
     const documents = await resolveInvoiceCteKeys(id);
     const bank = bankSlipBankForIssuer(documents.issuerCnpj);
+    const nfseEligible = isTwtIssuer(documents.issuerCnpj);
+    let nfseRecord = null;
+    if (nfseEligible) {
+      try {
+        nfseRecord = await getNfseRecord(documents.invoiceId);
+      } catch (error) {
+        console.warn('[faturamento:documentos-nfse]', {
+          invoiceId: documents.invoiceId,
+          error: error.message
+        });
+      }
+    }
     sendJson(res, 200, {
       invoiceId: documents.invoiceId,
       hasCte: documents.cteKeys.length > 0,
       cteCount: documents.cteKeys.length,
       bankSlipEligible: Boolean(bank),
       bankSlipBank: bank?.id || null,
-      bankSlipBankLabel: bank?.label || null
+      bankSlipBankLabel: bank?.label || null,
+      nfseEligible,
+      nfseStatus: nfseRecord?.state || 'not_issued',
+      nfseNumber: nfseRecord?.nfseNumber || null
     });
   } catch (error) {
     const statusCode = Number(error.statusCode) || (error.name === 'AbortError' ? 504 : 502);
