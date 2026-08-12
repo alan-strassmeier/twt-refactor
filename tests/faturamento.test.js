@@ -142,7 +142,9 @@ test('coluna Visualizar oferece Fatura, DACTE, boleto e NFS-e conforme o emitent
   assert.match(source, /bankSlipBankLabel/);
   assert.match(source, /dataset\.bankLabel/);
   assert.match(source, /openPdfAfterCheck\(invoicePdfUrl/);
-  assert.match(source, /window\.location\.assign\(url\)/);
+  assert.doesNotMatch(source, /window\.location\.assign\(url\)/);
+  assert.match(source, /const nfseTab = reserveNfseTab\(\)/);
+  assert.match(source, /openPdfAfterCheck\([\s\S]*nfsePdfUrl\(invoiceId\),[\s\S]*nfseTab/);
   assert.doesNotMatch(source, /about:blank|prepareDocumentTab|pendingTab/);
   assert.match(source, /aria-busy/);
   assert.match(html, /id="invoicePdfChoice"[^>]*target="_blank"/);
