@@ -299,14 +299,32 @@
     elements.documentModalClose.focus();
   };
 
-  const openPdfAfterCheck = (url) => {
+  const openPdfAfterCheck = (url, reservedTab = null) => {
+    if (reservedTab && !reservedTab.closed) {
+      reservedTab.location.replace(url);
+      return true;
+    }
     const tab = window.open(url, '_blank');
     if (tab) {
       tab.opener = null;
-      return;
+      return true;
     }
-    // Garante a abertura mesmo quando o navegador bloqueia pop-ups após uma espera assíncrona.
-    window.location.assign(url);
+    elements.dashboardMessage.textContent =
+      'O PDF está pronto, mas o navegador bloqueou a nova guia. Permita pop-ups para este site e clique novamente em Visualizar.';
+    return false;
+  };
+
+  const reserveNfseTab = () => {
+    const tab = window.open('', '_blank');
+    if (!tab) return null;
+    tab.opener = null;
+    tab.document.title = 'Gerando NFS-e';
+    tab.document.body.style.cssText =
+      'margin:0;min-height:100vh;display:grid;place-items:center;font:600 16px system-ui,sans-serif;color:#15334a;background:#f4f8fb';
+    const message = tab.document.createElement('p');
+    message.textContent = 'Gerando NFS-e. Aguarde…';
+    tab.document.body.appendChild(message);
+    return tab;
   };
 
   const generateBankSlip = async () => {
@@ -450,6 +468,8 @@
   const issueNfse = async () => {
     const invoiceId = String(elements.nfseIssueButton.dataset.invoiceId || '');
     if (!invoiceId || elements.nfseIssueButton.disabled) return;
+    const nfseTab = reserveNfseTab();
+    let nfseTabUsed = false;
     elements.nfseIssueButton.disabled = true;
     elements.nfseCancelButton.disabled = true;
     elements.nfseIssueButton.textContent = 'Emitindo…';
@@ -468,7 +488,10 @@
       }
       if (result.status === 'issued') {
         closeNfseConfirm(false);
-        openPdfAfterCheck(result.pdfUrl || nfsePdfUrl(invoiceId));
+        nfseTabUsed = openPdfAfterCheck(
+          result.pdfUrl || nfsePdfUrl(invoiceId),
+          nfseTab
+        );
       }
     } catch (error) {
       if (error.status === 401) {
@@ -480,6 +503,7 @@
         elements.dashboardMessage.textContent = error.message;
       }
     } finally {
+      if (!nfseTabUsed && nfseTab && !nfseTab.closed) nfseTab.close();
       elements.nfseIssueButton.disabled = false;
       elements.nfseCancelButton.disabled = false;
       if (!elements.nfseConfirmModal.hidden) {
