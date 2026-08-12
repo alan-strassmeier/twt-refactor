@@ -1,0 +1,113 @@
+{
+  "version": "7.3",
+  "screens": [
+    {
+      "id": "DATA_HORA_ENTREGA",
+      "title": "Data e horário",
+      "terminal": true,
+      "success": true,
+      "data": {
+        "max_date": {
+          "type": "string",
+          "__example__": "2026-08-12"
+        }
+      },
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          {
+            "type": "TextHeading",
+            "text": "Quando foi a entrega?"
+          },
+          {
+            "type": "TextBody",
+            "text": "Informe a data e o horário em que a entrega foi realizada. Não é permitido informar um momento futuro."
+          },
+          {
+            "type": "Form",
+            "name": "data_hora_entrega",
+            "children": [
+              {
+                "type": "DatePicker",
+                "name": "data_entrega",
+                "label": "Data da entrega",
+                "required": true,
+                "max-date": "${data.max_date}"
+              },
+              {
+                "type": "Dropdown",
+                "name": "hora_entrega",
+                "label": "Hora",
+                "required": true,
+                "data-source": [
+                  { "id": "00", "title": "00" }, { "id": "01", "title": "01" },
+                  { "id": "02", "title": "02" }, { "id": "03", "title": "03" },
+                  { "id": "04", "title": "04" }, { "id": "05", "title": "05" },
+                  { "id": "06", "title": "06" }, { "id": "07", "title": "07" },
+                  { "id": "08", "title": "08" }, { "id": "09", "title": "09" },
+                  { "id": "10", "title": "10" }, { "id": "11", "title": "11" },
+                  { "id": "12", "title": "12" }, { "id": "13", "title": "13" },
+                  { "id": "14", "title": "14" }, { "id": "15", "title": "15" },
+                  { "id": "16", "title": "16" }, { "id": "17", "title": "17" },
+                  { "id": "18", "title": "18" }, { "id": "19", "title": "19" },
+                  { "id": "20", "title": "20" }, { "id": "21", "title": "21" },
+                  { "id": "22", "title": "22" }, { "id": "23", "title": "23" }
+                ]
+              },
+              {
+                "type": "Dropdown",
+                "name": "minuto_entrega",
+                "label": "Minuto",
+                "required": true,
+                "data-source": [
+                  { "id": "00", "title": "00" }, { "id": "01", "title": "01" },
+                  { "id": "02", "title": "02" }, { "id": "03", "title": "03" },
+                  { "id": "04", "title": "04" }, { "id": "05", "title": "05" },
+                  { "id": "06", "title": "06" }, { "id": "07", "title": "07" },
+                  { "id": "08", "title": "08" }, { "id": "09", "title": "09" },
+                  { "id": "10", "title": "10" }, { "id": "11", "title": "11" },
+                  { "id": "12", "title": "12" }, { "id": "13", "title": "13" },
+                  { "id": "14", "title": "14" }, { "id": "15", "title": "15" },
+                  { "id": "16", "title": "16" }, { "id": "17", "title": "17" },
+                  { "id": "18", "title": "18" }, { "id": "19", "title": "19" },
+                  { "id": "20", "title": "20" }, { "id": "21", "title": "21" },
+                  { "id": "22", "title": "22" }, { "id": "23", "title": "23" },
+                  { "id": "24", "title": "24" }, { "id": "25", "title": "25" },
+                  { "id": "26", "title": "26" }, { "id": "27", "title": "27" },
+                  { "id": "28", "title": "28" }, { "id": "29", "title": "29" },
+                  { "id": "30", "title": "30" }, { "id": "31", "title": "31" },
+                  { "id": "32", "title": "32" }, { "id": "33", "title": "33" },
+                  { "id": "34", "title": "34" }, { "id": "35", "title": "35" },
+                  { "id": "36", "title": "36" }, { "id": "37", "title": "37" },
+                  { "id": "38", "title": "38" }, { "id": "39", "title": "39" },
+                  { "id": "40", "title": "40" }, { "id": "41", "title": "41" },
+                  { "id": "42", "title": "42" }, { "id": "43", "title": "43" },
+                  { "id": "44", "title": "44" }, { "id": "45", "title": "45" },
+                  { "id": "46", "title": "46" }, { "id": "47", "title": "47" },
+                  { "id": "48", "title": "48" }, { "id": "49", "title": "49" },
+                  { "id": "50", "title": "50" }, { "id": "51", "title": "51" },
+                  { "id": "52", "title": "52" }, { "id": "53", "title": "53" },
+                  { "id": "54", "title": "54" }, { "id": "55", "title": "55" },
+                  { "id": "56", "title": "56" }, { "id": "57", "title": "57" },
+                  { "id": "58", "title": "58" }, { "id": "59", "title": "59" }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "Footer",
+            "label": "Confirmar horário",
+            "on-click-action": {
+              "name": "complete",
+              "payload": {
+                "data_entrega": "${form.data_entrega}",
+                "hora_entrega": "${form.hora_entrega}",
+                "minuto_entrega": "${form.minuto_entrega}"
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

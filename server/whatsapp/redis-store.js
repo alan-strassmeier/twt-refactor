@@ -48,6 +48,7 @@ const takeLocation = async (phone) => {
 
 const pendingKey = (phone) => `whatsapp:pending:${phone}`;
 const stateKey = (phone) => `whatsapp:state:${phone}`;
+const deliveryTimestampKey = (phone) => `whatsapp:delivery-timestamp:${phone}`;
 const messageKey = (messageId) => `whatsapp:message:${messageId}`;
 const deliveredMinutaKey = (minuta) => `whatsapp:delivered:minuta:${minuta}`;
 
@@ -59,6 +60,15 @@ const getConversationState = (phone) =>
 
 const clearConversationState = (phone) =>
   command('DEL', stateKey(phone));
+
+const saveDeliveryTimestamp = (phone, timestamp) =>
+  command('SET', deliveryTimestampKey(phone), timestamp, 'EX', 86400);
+
+const getDeliveryTimestamp = (phone) =>
+  command('GET', deliveryTimestampKey(phone));
+
+const clearDeliveryTimestamp = (phone) =>
+  command('DEL', deliveryTimestampKey(phone));
 
 const savePendingDelivery = (phone, delivery) =>
   command('SET', pendingKey(phone), JSON.stringify(delivery), 'EX', 1800);
@@ -85,10 +95,11 @@ const markDeliveredMinuta = (minuta) =>
 
 const completePendingDelivery = (phone, imageMessageId, textMessageId) => command(
   'EVAL',
-  "redis.call('DEL', KEYS[1]); redis.call('DEL', KEYS[2]); redis.call('SET', KEYS[3], 'done', 'EX', 7776000); redis.call('SET', KEYS[4], 'done', 'EX', 7776000); return 1",
-  '4',
+  "redis.call('DEL', KEYS[1]); redis.call('DEL', KEYS[2]); redis.call('DEL', KEYS[3]); redis.call('SET', KEYS[4], 'done', 'EX', 7776000); redis.call('SET', KEYS[5], 'done', 'EX', 7776000); return 1",
+  '5',
   pendingKey(phone),
   stateKey(phone),
+  deliveryTimestampKey(phone),
   messageKey(imageMessageId),
   messageKey(textMessageId)
 );
@@ -104,6 +115,9 @@ module.exports = {
   saveConversationState,
   getConversationState,
   clearConversationState,
+  saveDeliveryTimestamp,
+  getDeliveryTimestamp,
+  clearDeliveryTimestamp,
   clearPendingDelivery,
   hasDeliveredMinuta,
   markDeliveredMinuta,
