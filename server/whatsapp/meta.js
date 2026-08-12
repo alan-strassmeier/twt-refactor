@@ -66,7 +66,7 @@ const sendImage = (to, link, caption) => sendMessage(to, {
   image: { link, caption }
 });
 
-const sendFlow = (to, { flowId, flowToken, screen, body, cta }) => sendMessage(to, {
+const sendFlow = (to, { flowId, flowToken, screen, body, cta, data }) => sendMessage(to, {
   type: 'interactive',
   interactive: {
     type: 'flow',
@@ -79,7 +79,10 @@ const sendFlow = (to, { flowId, flowToken, screen, body, cta }) => sendMessage(t
         flow_token: flowToken,
         flow_id: flowId,
         flow_cta: cta,
-        flow_action_payload: { screen }
+        flow_action_payload: {
+          screen,
+          ...(data && Object.keys(data).length ? { data } : {})
+        }
       }
     }
   }

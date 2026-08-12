@@ -1,7 +1,13 @@
 const assert = require('node:assert/strict');
 const { createHmac } = require('node:crypto');
 const test = require('node:test');
-const { normalizeCteKey, selectCteBarcode } = require('../server/whatsapp/barcode');
+const sharp = require('sharp');
+const deliveryTimeFlow = require('../docs/whatsapp-flow-data-hora.json');
+const {
+  normalizeCteKey,
+  selectCteBarcode,
+  enhanceForBarcode
+} = require('../server/whatsapp/barcode');
 const {
   buildCostsQuery,
   isDuplicateOccurrence,
@@ -11,14 +17,18 @@ const {
 const { sendButtons, sendImage, sendFlow } = require('../server/whatsapp/meta');
 const {
   formatTimestamp,
+  timestampForPending,
   greetingFor,
   greetingMessage,
   humanContactUrl,
   parseWebhook,
   parseReceiverReply,
   parseReceiverFlowReply,
+  parseDeliveryTimeFlowReply,
   flowTokenFor,
+  deliveryTimeFlowTokenFor,
   exampleImageUrl,
+  processingFailureMessage,
   receiverInstructions
 } = require('../server/whatsapp/processor');
 const { verifySignature } = require('../server/whatsapp/signature');
@@ -101,6 +111,52 @@ test('interpreta os campos obrigatórios devolvidos pelo Flow', () => {
   assert.equal(flowTokenFor('wamid.123'), 'delivery:wamid.123');
 });
 
+test('interpreta data e horário anteriores ao momento atual', () => {
+  process.env.APP_TIMEZONE = 'America/Sao_Paulo';
+  const now = Date.parse('2026-08-12T18:00:00Z') / 1000;
+  assert.deepEqual(parseDeliveryTimeFlowReply(JSON.stringify({
+    data_entrega: '2026-08-12',
+    hora_entrega: '14',
+    minuto_entrega: '59',
+    flow_token: 'delivery-time:button-1'
+  }), now), {
+    deliveryTimestamp: '2026-08-12 14:59:00',
+    flowToken: 'delivery-time:button-1'
+  });
+  assert.equal(deliveryTimeFlowTokenFor('button-1'), 'delivery-time:button-1');
+});
+
+test('rejeita data ou horário futuro e valores inválidos', () => {
+  process.env.APP_TIMEZONE = 'America/Sao_Paulo';
+  const now = Date.parse('2026-08-12T18:00:00Z') / 1000;
+  assert.equal(parseDeliveryTimeFlowReply({
+    data_entrega: '2026-08-13', hora_entrega: '10', minuto_entrega: '00'
+  }, now).error, 'future');
+  assert.equal(parseDeliveryTimeFlowReply({
+    data_entrega: '2026-08-12', hora_entrega: '15', minuto_entrega: '01'
+  }, now).error, 'future');
+  assert.equal(parseDeliveryTimeFlowReply({
+    data_entrega: '2026-02-30', hora_entrega: '10', minuto_entrega: '00'
+  }, now), null);
+  assert.equal(parseDeliveryTimeFlowReply({
+    data_entrega: '2026-08-12', hora_entrega: '24', minuto_entrega: '00'
+  }, now), null);
+});
+
+test('Flow de data e horário usa calendário limitado e seletores completos', () => {
+  const screen = deliveryTimeFlow.screens[0];
+  const form = screen.layout.children.find((item) => item.type === 'Form');
+  const date = form.children.find((item) => item.name === 'data_entrega');
+  const hours = form.children.find((item) => item.name === 'hora_entrega');
+  const minutes = form.children.find((item) => item.name === 'minuto_entrega');
+  const footer = screen.layout.children.find((item) => item.type === 'Footer');
+  assert.equal(screen.id, 'DATA_HORA_ENTREGA');
+  assert.equal(date['max-date'], '${data.max_date}');
+  assert.equal(hours['data-source'].length, 24);
+  assert.equal(minutes['data-source'].length, 60);
+  assert.equal(footer['on-click-action'].payload.data_entrega, '${form.data_entrega}');
+});
+
 test('saudação usa o período do dia e o nome do WhatsApp', () => {
   process.env.APP_TIMEZONE = 'America/Sao_Paulo';
   assert.equal(greetingFor(Date.parse('2026-07-23T12:00:00Z') / 1000), 'Bom dia');
@@ -137,7 +193,8 @@ test('monta mensagens de botões e imagem no formato da Meta', async () => {
       flowToken: 'delivery:wamid.123',
       screen: 'DADOS_RECEBEDOR',
       body: 'Preencha os dados.',
-      cta: 'Informar recebedor'
+      cta: 'Informar recebedor',
+      data: { max_date: '2026-08-12' }
     });
   } finally {
     global.fetch = originalFetch;
@@ -150,11 +207,25 @@ test('monta mensagens de botões e imagem no formato da Meta', async () => {
   assert.equal(requests[2].body.interactive.action.parameters.flow_id, '28036008142734184');
   assert.equal(requests[2].body.interactive.action.parameters.flow_action_payload.screen, 'DADOS_RECEBEDOR');
   assert.equal(requests[2].body.interactive.action.parameters.flow_token, 'delivery:wamid.123');
+  assert.equal(
+    requests[2].body.interactive.action.parameters.flow_action_payload.data.max_date,
+    '2026-08-12'
+  );
 });
 
 test('converte horário do WhatsApp para São Paulo', () => {
   process.env.APP_TIMEZONE = 'America/Sao_Paulo';
   assert.equal(formatTimestamp(Date.parse('2026-07-14T16:31:11Z') / 1000), '2026-07-14 13:31:11');
+});
+
+test('usa o horário informado no Flow ou o horário normal da foto', () => {
+  process.env.APP_TIMEZONE = 'America/Sao_Paulo';
+  const timestamp = Date.parse('2026-08-12T18:00:00Z') / 1000;
+  assert.equal(timestampForPending({
+    timestamp,
+    deliveryTimestamp: '2026-08-11 09:42:00'
+  }), '2026-08-11 09:42:00');
+  assert.equal(timestampForPending({ timestamp }), '2026-08-12 15:00:00');
 });
 
 test('consulta custos pelo parâmetro simples do número do CT-e', () => {
@@ -187,6 +258,20 @@ test('troca automaticamente a URL antiga da imagem pela versão sem cache', () =
   assert.equal(
     exampleImageUrl('https://cdn.example.com/comprovante.jpeg'),
     'https://cdn.example.com/comprovante.jpeg'
+  );
+});
+
+test('informa instabilidade quando a Brudam está indisponível', () => {
+  const error = Object.assign(new Error('Falha no login Brudam'), {
+    code: 'BRUDAM_UNAVAILABLE'
+  });
+  assert.equal(
+    processingFailureMessage(error, 'Mensagem genérica'),
+    'O sistema da Brudam está com uma instabilidade momentânea. A baixa não foi confirmada; tente novamente em alguns minutos.'
+  );
+  assert.equal(
+    processingFailureMessage(new Error('Falha na foto'), 'Mensagem genérica'),
+    'Mensagem genérica'
   );
 });
 
@@ -272,4 +357,20 @@ test('seleciona somente uma chave CT-e válida retornada pelo leitor', () => {
   assert.equal(selectCteBarcode([
     { isValid: false, text: key, format: 'Code128' }
   ]), null);
+});
+
+test('amplia e normaliza uma foto antes da segunda tentativa', async () => {
+  const input = await sharp({
+    create: {
+      width: 40,
+      height: 20,
+      channels: 3,
+      background: '#d0d0d0'
+    }
+  }).jpeg().toBuffer();
+  const output = await enhanceForBarcode(input);
+  const metadata = await sharp(output).metadata();
+  assert.equal(metadata.format, 'png');
+  assert.equal(metadata.width, 80);
+  assert.equal(metadata.height, 40);
 });
