@@ -125,10 +125,17 @@ const decodeCteXmlPayload = (payload) => {
 };
 
 const accessKeyFromXml = (xml) => {
-  const protocol = String(xml || '').match(/<(?:\w+:)?chCTe\b[^>]*>\s*(\d{44})\s*<\/(?:\w+:)?chCTe>/i);
+  const source = String(xml || '');
+  // O XML pode conter chCTe de documentos anteriores em docAnt. O Id do
+  // infCte identifica inequivocamente o CT-e principal deste cteProc.
+  const identifier = source.match(/<(?:\w+:)?infCte\b[^>]*\bId=["']CTe(\d{44})["']/i);
+  if (identifier) return identifier[1];
+  const protocol = source.match(
+    /<(?:\w+:)?protCTe\b[^>]*>[\s\S]*?<(?:\w+:)?chCTe\b[^>]*>\s*(\d{44})\s*<\/(?:\w+:)?chCTe>/i
+  );
   if (protocol) return protocol[1];
-  const identifier = String(xml || '').match(/<(?:\w+:)?infCte\b[^>]*\bId=["']CTe(\d{44})["']/i);
-  return identifier?.[1] || '';
+  const fallback = source.match(/<(?:\w+:)?chCTe\b[^>]*>\s*(\d{44})\s*<\/(?:\w+:)?chCTe>/i);
+  return fallback?.[1] || '';
 };
 
 const fetchCteXmls = async (cteKeys, get = authenticatedGet) => {
