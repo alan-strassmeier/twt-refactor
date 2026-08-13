@@ -15,6 +15,7 @@ const {
 } = require('../server/whatsapp/brudam');
 const { sendButtons, sendImage, sendFlow } = require('../server/whatsapp/meta');
 const {
+  EXAMPLE_CAPTION,
   formatTimestamp,
   timestampForPending,
   greetingFor,
@@ -26,11 +27,20 @@ const {
   parseDeliveryTimeFlowReply,
   flowTokenFor,
   deliveryTimeFlowTokenFor,
+  isCancelCommand,
   exampleImageUrl,
   processingFailureMessage,
   receiverInstructions
 } = require('../server/whatsapp/processor');
 const { verifySignature } = require('../server/whatsapp/signature');
+const {
+  DELIVERY_ATTEMPT_TTL_SECONDS,
+  saveLocation,
+  saveConversationState,
+  saveDeliveryTimestamp,
+  savePendingDelivery,
+  clearDeliveryAttempt
+} = require('../server/whatsapp/redis-store');
 
 test('valida assinatura oficial do webhook', () => {
   const body = Buffer.from('{"object":"whatsapp_business_account"}');
@@ -169,6 +179,57 @@ test('link do atendimento humano abre com mensagem preenchida', () => {
   assert.equal(url.hostname, 'wa.me');
   assert.equal(url.pathname, '/555193162358');
   assert.equal(url.searchParams.get('text'), 'Olá, gostaria de falar sobre uma entrega');
+});
+
+test('orienta o cancelamento junto da foto de exemplo', () => {
+  assert.equal(
+    EXAMPLE_CAPTION,
+    [
+      'Por favor, envie uma foto igual ao exemplo acima.',
+      'Caso deseje cancelar a baixa, envie uma mensagem com *cancelar* e retorne ao início.'
+    ].join('\n\n')
+  );
+  assert.equal(isCancelCommand(' cancelar '), true);
+  assert.equal(isCancelCommand('CANCELAR'), true);
+  assert.equal(isCancelCommand('não cancelar'), false);
+});
+
+test('mantém os dados temporários da baixa por 15 minutos e permite limpá-los juntos', async () => {
+  const originalFetch = global.fetch;
+  const originalUrl = process.env.UPSTASH_REDIS_REST_URL;
+  const originalToken = process.env.UPSTASH_REDIS_REST_TOKEN;
+  const commands = [];
+  process.env.UPSTASH_REDIS_REST_URL = 'https://redis.example.com';
+  process.env.UPSTASH_REDIS_REST_TOKEN = 'token-de-teste';
+  global.fetch = async (_url, options) => {
+    commands.push(JSON.parse(options.body));
+    return new Response(JSON.stringify({ result: 'OK' }), { status: 200 });
+  };
+  try {
+    await saveLocation('5551999999999', { latitude: -29, longitude: -51 });
+    await saveConversationState('5551999999999', 'awaiting_photo');
+    await saveDeliveryTimestamp('5551999999999', '2026-08-13 10:00:00');
+    await savePendingDelivery('5551999999999', { imageMessageId: 'img-1' });
+    await clearDeliveryAttempt('5551999999999');
+  } finally {
+    global.fetch = originalFetch;
+    if (originalUrl === undefined) delete process.env.UPSTASH_REDIS_REST_URL;
+    else process.env.UPSTASH_REDIS_REST_URL = originalUrl;
+    if (originalToken === undefined) delete process.env.UPSTASH_REDIS_REST_TOKEN;
+    else process.env.UPSTASH_REDIS_REST_TOKEN = originalToken;
+  }
+
+  assert.equal(DELIVERY_ATTEMPT_TTL_SECONDS, 900);
+  for (const command of commands.slice(0, 4)) {
+    assert.deepEqual(command.slice(-2), ['EX', 900]);
+  }
+  assert.deepEqual(commands[4], [
+    'DEL',
+    'whatsapp:pending:5551999999999',
+    'whatsapp:state:5551999999999',
+    'whatsapp:delivery-timestamp:5551999999999',
+    'whatsapp:location:5551999999999'
+  ]);
 });
 
 test('monta mensagens de botões e imagem no formato da Meta', async () => {

@@ -3,6 +3,8 @@ const redisConfig = () => ({
   token: process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN || ''
 });
 
+const DELIVERY_ATTEMPT_TTL_SECONDS = 15 * 60;
+
 const command = async (...args) => {
   const { url, token } = redisConfig();
   if (!url || !token) {
@@ -34,7 +36,7 @@ const markMessageDone = (messageId) =>
 const releaseMessage = (messageId) => command('DEL', `whatsapp:message:${messageId}`);
 
 const saveLocation = (phone, location) =>
-  command('SET', `whatsapp:location:${phone}`, JSON.stringify(location), 'EX', 1800);
+  command('SET', `whatsapp:location:${phone}`, JSON.stringify(location), 'EX', DELIVERY_ATTEMPT_TTL_SECONDS);
 
 const takeLocation = async (phone) => {
   const value = await command('GETDEL', `whatsapp:location:${phone}`);
@@ -49,11 +51,12 @@ const takeLocation = async (phone) => {
 const pendingKey = (phone) => `whatsapp:pending:${phone}`;
 const stateKey = (phone) => `whatsapp:state:${phone}`;
 const deliveryTimestampKey = (phone) => `whatsapp:delivery-timestamp:${phone}`;
+const locationKey = (phone) => `whatsapp:location:${phone}`;
 const messageKey = (messageId) => `whatsapp:message:${messageId}`;
 const deliveredMinutaKey = (minuta) => `whatsapp:delivered:minuta:${minuta}`;
 
 const saveConversationState = (phone, state) =>
-  command('SET', stateKey(phone), state, 'EX', 86400);
+  command('SET', stateKey(phone), state, 'EX', DELIVERY_ATTEMPT_TTL_SECONDS);
 
 const getConversationState = (phone) =>
   command('GET', stateKey(phone));
@@ -62,7 +65,7 @@ const clearConversationState = (phone) =>
   command('DEL', stateKey(phone));
 
 const saveDeliveryTimestamp = (phone, timestamp) =>
-  command('SET', deliveryTimestampKey(phone), timestamp, 'EX', 86400);
+  command('SET', deliveryTimestampKey(phone), timestamp, 'EX', DELIVERY_ATTEMPT_TTL_SECONDS);
 
 const getDeliveryTimestamp = (phone) =>
   command('GET', deliveryTimestampKey(phone));
@@ -71,7 +74,7 @@ const clearDeliveryTimestamp = (phone) =>
   command('DEL', deliveryTimestampKey(phone));
 
 const savePendingDelivery = (phone, delivery) =>
-  command('SET', pendingKey(phone), JSON.stringify(delivery), 'EX', 1800);
+  command('SET', pendingKey(phone), JSON.stringify(delivery), 'EX', DELIVERY_ATTEMPT_TTL_SECONDS);
 
 const getPendingDelivery = async (phone) => {
   const value = await command('GET', pendingKey(phone));
@@ -86,6 +89,15 @@ const getPendingDelivery = async (phone) => {
 
 const clearPendingDelivery = (phone) =>
   command('DEL', pendingKey(phone), stateKey(phone));
+
+const clearDeliveryAttempt = (phone) =>
+  command(
+    'DEL',
+    pendingKey(phone),
+    stateKey(phone),
+    deliveryTimestampKey(phone),
+    locationKey(phone)
+  );
 
 const hasDeliveredMinuta = async (minuta) =>
   Boolean(await command('EXISTS', deliveredMinutaKey(minuta)));
@@ -105,6 +117,7 @@ const completePendingDelivery = (phone, imageMessageId, textMessageId) => comman
 );
 
 module.exports = {
+  DELIVERY_ATTEMPT_TTL_SECONDS,
   claimMessage,
   markMessageDone,
   releaseMessage,
@@ -119,6 +132,7 @@ module.exports = {
   getDeliveryTimestamp,
   clearDeliveryTimestamp,
   clearPendingDelivery,
+  clearDeliveryAttempt,
   hasDeliveredMinuta,
   markDeliveredMinuta,
   completePendingDelivery
