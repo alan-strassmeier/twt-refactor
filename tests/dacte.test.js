@@ -68,6 +68,28 @@ test('decodifica o XML base64 retornado por GET /dfe/cte', async () => {
   assert.deepEqual(xmls, [XML]);
 });
 
+test('prioriza a chave do CT-e principal quando existe CT-e anterior no XML', async () => {
+  const previousKey = '35260835640442000187570020000019371717614284';
+  const xmlWithPreviousCte = `<?xml version="1.0" encoding="utf-8"?>
+<cteProc xmlns="http://www.portalfiscal.inf.br/cte">
+  <CTe><infCte Id="CTe${KEY}"><infCTeNorm><docAnt><emiDocAnt>
+    <idDocAnt><idDocAntEle><chCTe>${previousKey}</chCTe></idDocAntEle></idDocAnt>
+  </emiDocAnt></docAnt></infCTeNorm></infCte></CTe>
+  <protCTe><infProt><chCTe>${KEY}</chCTe></infProt></protCTe>
+</cteProc>`;
+  const payload = {
+    status: 1,
+    data: [{ status: 1, chave: KEY, xml: Buffer.from(xmlWithPreviousCte).toString('base64') }]
+  };
+
+  assert.equal(accessKeyFromXml(xmlWithPreviousCte), KEY);
+  const xmls = await fetchCteXmls([KEY], async () => ({
+    response: { ok: true, status: 200 },
+    payload
+  }));
+  assert.deepEqual(xmls, [xmlWithPreviousCte]);
+});
+
 test('normaliza somente chaves CT-e válidas e limita duplicidades', () => {
   assert.deepEqual(normalizeCteKeys([KEY, KEY, '123']), [KEY]);
 });
