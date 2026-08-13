@@ -65,9 +65,10 @@ const createNfseStorage = (config) => {
   };
 };
 
-const objectKeyFor = ({ invoiceId, accessKey, processedAt, config }) => {
+const objectKeyFor = ({ invoiceId, accessKey, processedAt, environment, config }) => {
   const year = String(processedAt || '').match(/^(\d{4})/)?.[1] || 'sem-ano';
-  return [config.nfsePrefix, year, String(invoiceId), `${accessKey}.xml`]
+  const environmentPath = environment === 'production' ? 'production' : 'homologation';
+  return [config.nfsePrefix, environmentPath, year, String(invoiceId), `${accessKey}.xml`]
     .map(cleanPathPart)
     .filter(Boolean)
     .join('/');

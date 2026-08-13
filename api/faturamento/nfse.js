@@ -95,7 +95,7 @@ const handleAgent = async (req, res) => {
       return;
     }
     if (body.action === 'complete') {
-      const result = await completeAgentJob(body);
+      const result = await completeAgentJob(body, { config: fiscalConfig });
       sendJson(res, 200, result);
       return;
     }

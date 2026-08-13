@@ -16,6 +16,7 @@ const {
   FISCAL_STANDARD,
   resolveInvoiceNfseData,
   metadataFromAuthorizedXml,
+  finalizeAuthorizedDocument,
   issueInvoiceNfse
 } = require('../server/faturamento/nfse');
 const {
@@ -24,9 +25,21 @@ const {
 } = require('../server/faturamento/nfse-client');
 const {
   parseNfseXml,
+  consultationUrlFor,
   buildDanfsePdf
 } = require('../server/faturamento/danfse');
-const { nfseStorageConfig } = require('../server/faturamento/nfse-storage');
+const {
+  nfseStorageConfig,
+  objectKeyFor
+} = require('../server/faturamento/nfse-storage');
+const {
+  recordKeyFor,
+  legacyRecordKeyFor,
+  getNfseRecord,
+  claimNfse,
+  saveNfseRecord,
+  claimNextNfseJob
+} = require('../server/faturamento/nfse-store');
 const {
   agentConfigFromEnv,
   publicAgentJob,
@@ -58,6 +71,7 @@ const AUTHORIZED_XML = `<?xml version="1.0" encoding="utf-8"?>
     </infDPS></DPS>
   </infNFSe>
 </NFSe>`;
+const HOMOLOGATION_XML = AUTHORIZED_XML.replace('<tpAmb>1</tpAmb>', '<tpAmb>2</tpAmb>');
 
 const createCertificate = () => {
   const keys = forge.pki.rsa.generateKeyPair(2048);
@@ -199,6 +213,14 @@ test('modo agent dispensa o PFX na Vercel e exige token forte', () => {
     NFSE_AGENT_LEASE_MS: '600000'
   }).leaseMs, 600000);
   assert.throws(() => agentConfigFromEnv({ NFSE_AGENT_TOKEN: 'curto' }), /32 caracteres/);
+
+  const production = nfseConfig({
+    NFSE_CERT_MODE: 'agent',
+    NFSE_DPS_SERIES: '10001',
+    NFSE_ENVIRONMENT: 'production'
+  });
+  assert.equal(production.environmentType, '1');
+  assert.equal(production.baseUrl, 'https://sefin.nfse.gov.br/SefinNacional');
 });
 
 test('decodifica resposta autorizada, chave em infNFSe e gera DANFSe', async () => {
@@ -211,11 +233,18 @@ test('decodifica resposta autorizada, chave em infNFSe e gera DANFSe', async () 
     nfseNumber: '325',
     processedAt: '2026-07-24T15:36:30-03:00',
     dpsNumber: '62',
-    dpsSeries: '70000'
+    dpsSeries: '70000',
+    environmentType: '1'
   });
   const parsed = parseNfseXml(AUTHORIZED_XML);
   assert.equal(parsed.accessKey, ACCESS_KEY);
   assert.equal(parsed.competence, '16/07/2026');
+  assert.equal(parsed.environment, 'production');
+  assert.equal(parsed.consultationUrl, consultationUrlFor(ACCESS_KEY, 'production'));
+  assert.equal(
+    parseNfseXml(HOMOLOGATION_XML).consultationUrl,
+    `https://www.producaorestrita.nfse.gov.br/ConsultaPublica?tpc=1&chave=${ACCESS_KEY}`
+  );
   const pdf = await buildDanfsePdf(AUTHORIZED_XML);
   assert.equal(pdf.subarray(0, 4).toString(), '%PDF');
   assert.ok(pdf.length > 5000);
@@ -273,6 +302,93 @@ test('isola a escrita dos XMLs em credenciais R2 próprias quando configuradas',
   assert.equal(config.accessKeyId, 'escrita');
   assert.equal(config.bucket, 'notas-fiscais');
   assert.equal(config.nfsePrefix, 'autorizadas');
+  assert.equal(objectKeyFor({
+    invoiceId: '11518',
+    accessKey: ACCESS_KEY,
+    processedAt: '2026-07-24T15:36:30-03:00',
+    environment: 'production',
+    config
+  }), `autorizadas/production/2026/11518/${ACCESS_KEY}.xml`);
+});
+
+test('isola registros da mesma fatura por ambiente e migra legado somente na origem', async () => {
+  const values = new Map();
+  const command = async (operation, key, value, ...options) => {
+    if (operation === 'GET') return values.get(key) ?? null;
+    if (operation === 'DEL') return values.delete(key) ? 1 : 0;
+    if (operation === 'SET') {
+      if (options.includes('NX') && values.has(key)) return null;
+      values.set(key, value);
+      return 'OK';
+    }
+    throw new Error(`Comando inesperado: ${operation}`);
+  };
+
+  await saveNfseRecord('11518', {
+    invoiceId: '11518',
+    environment: 'homologation',
+    state: 'issued'
+  }, command);
+  assert.equal((await getNfseRecord('11518', 'homologation', command)).state, 'issued');
+  assert.equal(await getNfseRecord('11518', 'production', command), null);
+
+  assert.equal(await claimNfse('11518', {
+    invoiceId: '11518',
+    environment: 'production',
+    state: 'claimed'
+  }, command), true);
+  assert.equal((await getNfseRecord('11518', 'production', command)).state, 'claimed');
+  assert.notEqual(
+    recordKeyFor('11518', 'homologation'),
+    recordKeyFor('11518', 'production')
+  );
+
+  values.set(legacyRecordKeyFor('11636'), JSON.stringify({
+    invoiceId: '11636',
+    environment: 'homologation',
+    state: 'issued'
+  }));
+  assert.equal(await getNfseRecord('11636', 'production', command), null);
+  assert.equal((await getNfseRecord('11636', 'homologation', command)).state, 'issued');
+  assert.ok(values.has(recordKeyFor('11636', 'homologation')));
+});
+
+test('recusa XML autorizado por ambiente diferente da emissão', async () => {
+  await assert.rejects(
+    () => finalizeAuthorizedDocument({
+      record: {
+        invoiceId: '11518',
+        environment: 'production',
+        state: 'processing'
+      },
+      response: { chaveAcesso: ACCESS_KEY },
+      xml: HOMOLOGATION_XML
+    }, {
+      saveNfseXml: async () => assert.fail('Não deve guardar XML do ambiente incorreto.'),
+      saveNfseRecord: async () => assert.fail('Não deve salvar o vínculo incorreto.')
+    }),
+    /ambiente diferente/
+  );
+});
+
+test('agente A3 procura somente a fila e o registro do ambiente configurado', async () => {
+  let invocation = null;
+  const result = await claimNextNfseJob({
+    environment: 'production',
+    agentId: 'twt-fiscal-01',
+    leaseToken: 'd'.repeat(64),
+    now: 1_786_630_000_000,
+    leaseMs: 300_000
+  }, async (...args) => {
+    invocation = args;
+    return null;
+  });
+  assert.equal(result, null);
+  assert.equal(invocation[0], 'EVAL');
+  assert.match(invocation[1], /record\['leaseExpiresAtEpoch'\] = tonumber\(ARGV\[7\]\)/);
+  assert.equal(invocation[3], 'faturamento:nfse:agent:production:fila');
+  assert.equal(invocation[5], 'faturamento:nfse:production:twt:fatura:');
+  assert.equal(invocation[7], 'production');
 });
 
 test('emite uma vez, guarda o XML autorizado e reaproveita o vínculo da fatura', async () => {
@@ -309,7 +425,10 @@ test('emite uma vez, guarda o XML autorizado e reaproveita o vínculo da fatura'
       complemento: client.complement,
       bairro: client.district
     }),
-    getNfseRecord: async () => record,
+    getNfseRecord: async (_invoiceId, environment) => {
+      assert.equal(environment, 'homologation');
+      return record;
+    },
     claimNfse: async (_invoiceId, value) => {
       if (record) return false;
       record = value;
@@ -321,13 +440,14 @@ test('emite uma vez, guarda o XML autorizado e reaproveita o vínculo da fatura'
     postDps: async (signedXml) => {
       transmissions += 1;
       assert.match(signedXml, /<Signature/);
-      return { chaveAcesso: ACCESS_KEY, xml: AUTHORIZED_XML };
+      return { chaveAcesso: ACCESS_KEY, xml: HOMOLOGATION_XML };
     },
-    saveNfseXml: async ({ invoiceId, accessKey, xml }) => {
+    saveNfseXml: async ({ invoiceId, accessKey, environment, xml }) => {
       assert.equal(invoiceId, '11518');
       assert.equal(accessKey, ACCESS_KEY);
-      assert.equal(xml, AUTHORIZED_XML);
-      return `nfse/2026/${invoiceId}/${accessKey}.xml`;
+      assert.equal(environment, 'homologation');
+      assert.equal(xml, HOMOLOGATION_XML);
+      return `nfse/homologation/2026/${invoiceId}/${accessKey}.xml`;
     },
     now: new Date('2026-08-11T15:00:00Z')
   };
@@ -433,7 +553,10 @@ test('aceita do agente somente XML autorizado vinculado à concessão', async ()
     authorizedXmlGZipB64: gzipSync(Buffer.from(AUTHORIZED_XML)).toString('base64')
   }, {
     getNfseRecord: async () => record,
-    assertNfseJobLease: async () => record,
+    assertNfseJobLease: async (input) => {
+      assert.equal(input.environment, 'homologation');
+      return record;
+    },
     finalizeAuthorizedDocument: async ({ record: clean, xml }) => {
       assert.equal(clean.leaseToken, undefined);
       assert.equal(clean.unsignedDpsBase64, undefined);

@@ -6,6 +6,7 @@ const {
   isTwtIssuer
 } = require('../../server/faturamento/billing-rules');
 const { getNfseRecord } = require('../../server/faturamento/nfse-store');
+const { nfseConfig } = require('../../server/faturamento/nfse-config');
 
 module.exports = async (req, res) => {
   if (req.method !== 'GET') {
@@ -26,7 +27,8 @@ module.exports = async (req, res) => {
     let nfseRecord = null;
     if (nfseEligible) {
       try {
-        nfseRecord = await getNfseRecord(documents.invoiceId);
+        const fiscalConfig = nfseConfig(process.env, { requireCertificate: false });
+        nfseRecord = await getNfseRecord(documents.invoiceId, fiscalConfig.environment);
       } catch (error) {
         console.warn('[faturamento:documentos-nfse]', {
           invoiceId: documents.invoiceId,

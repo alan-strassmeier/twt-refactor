@@ -173,6 +173,14 @@ produção só deve ser ativado depois dos testes, da definição da série excl
 e da confirmação das permissões do certificado. A URL oficial é escolhida pelo
 ambiente; `NFSE_API_BASE_URL` normalmente permanece vazia.
 
+Os registros, filas, sequenciais e XMLs são isolados por ambiente. Assim, uma
+fatura testada em homologação pode ser emitida posteriormente em produção sem
+reaproveitar o documento de teste. O DANFSe de homologação exibe claramente
+`SEM VALOR FISCAL` e seu QR code aponta para a Consulta Pública de Produção
+Restrita. Para a emissão fiscal definitiva, configure na Vercel
+`NFSE_ENVIRONMENT=production`, mantenha `NFSE_API_BASE_URL` vazio e faça um novo
+deploy antes de solicitar a emissão.
+
 O token usado em `R2_NFSE_*` precisa da permissão `Object Read & Write` e deve
 ser limitado ao bucket escolhido. Recomenda-se criar um token separado do token
 somente leitura usado para os DOCCOBs. Se nenhuma variável dedicada for
@@ -186,7 +194,7 @@ e transmite; no modo A3, ela enfileira a DPS e a interface acompanha o agente.
 token. Se o agente perder uma concessão após uma possível transmissão, o próximo
 processamento consulta a DPS pelo identificador em vez de reenviá-la. O XML
 autorizado é preservado no R2 sob
-`<R2_NFSE_PREFIX>/<ano>/<fatura>/<chave>.xml` e o estado fica no Redis. Por isso,
+`<R2_NFSE_PREFIX>/<ambiente>/<ano>/<fatura>/<chave>.xml` e o estado fica no Redis. Por isso,
 Redis e R2 são obrigatórios para emitir.
 
 `GET /api/faturamento/nfse-pdf?id=...` gera o DANFSe a partir do XML autorizado e

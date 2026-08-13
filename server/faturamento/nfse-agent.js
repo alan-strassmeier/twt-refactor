@@ -135,11 +135,12 @@ const completeAgentJob = async (payload, dependencies = {}) => {
   const getRecord = dependencies.getNfseRecord || store.getNfseRecord;
   const removeQueue = dependencies.removeNfseJobFromQueue || store.removeNfseJobFromQueue;
   const saveRecord = dependencies.saveNfseRecord || store.saveNfseRecord;
-  const current = await getRecord(invoiceId);
+  const environment = dependencies.config?.environment || payload.environment || 'homologation';
+  const current = await getRecord(invoiceId, environment);
   if (current && ['issued', 'failed'].includes(current.state)) {
     return publicResult(current, false);
   }
-  const record = await assertLease({ invoiceId, leaseToken, agentId });
+  const record = await assertLease({ invoiceId, leaseToken, agentId, environment });
   const outcome = String(payload.outcome || '').toLowerCase();
 
   if (outcome === 'issued') {

@@ -380,7 +380,9 @@
       `Simples Nacional (${payload.service?.totalTaxPercentage ?? '—'}% de tributos aproximados)`,
       `${payload.service?.municipalityName || 'Porto Alegre'} / RS`
     ].join(' • ');
-    elements.nfseConfirmWarning.textContent = nfsePendingStates.has(payload.status)
+    elements.nfseConfirmWarning.textContent = payload.environment === 'homologation'
+      ? 'ATENÇÃO: ambiente de homologação. O documento gerado não possui valor fiscal.'
+      : nfsePendingStates.has(payload.status)
       ? 'A solicitação está aguardando o computador da TWT com o certificado A3 conectado.'
       : payload.status === 'review'
         ? 'A transmissão anterior precisa ser consultada antes de qualquer nova emissão.'
@@ -391,7 +393,9 @@
       ? 'Atualizar situação'
       : ['processing', 'review'].includes(payload.status)
         ? 'Conferir emissão'
-        : 'Confirmar e emitir';
+        : payload.environment === 'homologation'
+          ? 'Confirmar teste'
+          : 'Confirmar e emitir';
     elements.documentModal.hidden = true;
     elements.nfseConfirmModal.hidden = false;
     elements.nfseIssueButton.focus();

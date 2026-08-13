@@ -146,9 +146,10 @@ const publicPreview = (data, record = null) => ({
 
 const previewInvoiceNfse = async (invoiceId, dependencies = {}) => {
   const data = await resolveInvoiceNfseData(invoiceId, dependencies);
+  const config = dependencies.config || nfseConfig(process.env, { requireCertificate: false });
   const getRecord = dependencies.getNfseRecord || store.getNfseRecord;
-  const record = await getRecord(data.invoice.id);
-  return publicPreview(data, record);
+  const record = await getRecord(data.invoice.id, config.environment);
+  return { ...publicPreview(data, record), environment: config.environment };
 };
 
 const textFromElement = (document, name) => {
@@ -175,7 +176,8 @@ const metadataFromAuthorizedXml = (xml, fallback = {}) => {
     nfseNumber: textFromElement(document, 'nNFSe'),
     processedAt: textFromElement(document, 'dhProc') || new Date().toISOString(),
     dpsNumber: textFromElement(document, 'nDPS'),
-    dpsSeries: textFromElement(document, 'serie')
+    dpsSeries: textFromElement(document, 'serie'),
+    environmentType: textFromElement(document, 'tpAmb')
   };
 };
 
@@ -187,6 +189,7 @@ const publicResult = (record, created = false) => ({
   nfseNumber: record.nfseNumber || '',
   competence: record.competence,
   amount: record.amount,
+  environment: record.environment || '',
   message: record.lastError || '',
   pdfUrl: record.state === 'issued'
     ? `/api/faturamento/nfse-pdf?id=${encodeURIComponent(record.invoiceId)}`
@@ -198,26 +201,46 @@ const publicResult = (record, created = false) => ({
 
 const getInvoiceNfseStatus = async (invoiceId, dependencies = {}) => {
   if (!validInvoiceId(invoiceId)) throw validationError('Número da fatura inválido.');
+  const config = dependencies.config || nfseConfig(process.env, { requireCertificate: false });
   const getRecord = dependencies.getNfseRecord || store.getNfseRecord;
-  const record = await getRecord(String(invoiceId));
+  const record = await getRecord(String(invoiceId), config.environment);
   return record
     ? publicResult(record, false)
-    : { invoiceId: String(invoiceId), status: 'not_issued', created: false };
+    : {
+        invoiceId: String(invoiceId),
+        status: 'not_issued',
+        created: false,
+        environment: config.environment
+      };
 };
 
 const finalizeAuthorizedDocument = async ({ record, response, xml }, dependencies = {}) => {
   const saveXml = dependencies.saveNfseXml || storage.saveNfseXml;
   const saveRecord = dependencies.saveNfseRecord || store.saveNfseRecord;
   const metadata = metadataFromAuthorizedXml(xml, { accessKey: response?.chaveAcesso });
+  const authorizedEnvironment = metadata.environmentType === '1'
+    ? 'production'
+    : metadata.environmentType === '2' ? 'homologation' : '';
+  const expectedEnvironment = record.environment || authorizedEnvironment;
+  if (!authorizedEnvironment || authorizedEnvironment !== expectedEnvironment) {
+    throw Object.assign(new Error(
+      'O XML autorizado pertence a um ambiente diferente da emissão solicitada.'
+    ), {
+      statusCode: 502,
+      receivedResponse: true
+    });
+  }
+  const environmentRecord = { ...record, environment: expectedEnvironment };
   try {
     const xmlObjectKey = await saveXml({
-      invoiceId: record.invoiceId,
+      invoiceId: environmentRecord.invoiceId,
       accessKey: metadata.accessKey,
       processedAt: metadata.processedAt,
+      environment: expectedEnvironment,
       xml
     });
     const issuedRecord = {
-      ...record,
+      ...environmentRecord,
       ...metadata,
       state: 'issued',
       xmlObjectKey,
@@ -225,18 +248,20 @@ const finalizeAuthorizedDocument = async ({ record, response, xml }, dependencie
       issuedAt: new Date().toISOString()
     };
     delete issuedRecord.authorizedXmlBase64;
-    await saveRecord(record.invoiceId, issuedRecord);
+    await saveRecord(environmentRecord.invoiceId, issuedRecord);
     return issuedRecord;
   } catch (error) {
     const reviewRecord = {
-      ...record,
+      ...environmentRecord,
       ...metadata,
       state: 'review',
       authorizedXmlBase64: Buffer.from(xml, 'utf8').toString('base64'),
       reviewReason: 'storage',
       reviewedAt: new Date().toISOString()
     };
-    try { await saveRecord(record.invoiceId, reviewRecord); } catch { /* mantém o registro anterior */ }
+    try {
+      await saveRecord(environmentRecord.invoiceId, reviewRecord);
+    } catch { /* mantém o registro anterior */ }
     throw Object.assign(new Error('A NFS-e foi autorizada, mas o XML precisa ser armazenado antes da liberação.'), {
       statusCode: 503,
       expose: true,
@@ -276,7 +301,7 @@ const issueInvoiceNfse = async (invoiceId, dependencies = {}) => {
   const enqueueJob = dependencies.enqueueNfseJob || store.enqueueNfseJob;
   const submitDps = dependencies.postDps || postDps;
   const data = await resolveInvoiceNfseData(invoiceId, dependencies);
-  const existing = await getRecord(data.invoice.id);
+  const existing = await getRecord(data.invoice.id, config.environment);
   if (existing?.state === 'issued') return publicResult(existing, false);
   if (config.certificateMode === 'agent' &&
       existing && ['queued', 'agent_processing'].includes(existing.state)) {
@@ -303,12 +328,13 @@ const issueInvoiceNfse = async (invoiceId, dependencies = {}) => {
     throw generationConflict();
   }
   if (existing?.state === 'failed') {
-    await release(data.invoice.id);
+    await release(data.invoice.id, config.environment);
   }
 
   const claimRecord = {
     state: 'claimed',
     invoiceId: data.invoice.id,
+    environment: config.environment,
     issuerCnpj: data.issuerCnpj,
     competence: data.invoice.competence,
     amount: data.invoice.amount,
@@ -316,7 +342,7 @@ const issueInvoiceNfse = async (invoiceId, dependencies = {}) => {
   };
   const claimed = await claim(data.invoice.id, claimRecord);
   if (!claimed) {
-    const concurrent = await getRecord(data.invoice.id);
+    const concurrent = await getRecord(data.invoice.id, config.environment);
     if (concurrent?.state === 'issued') return publicResult(concurrent, false);
     throw generationConflict();
   }
@@ -389,7 +415,9 @@ const issueInvoiceNfse = async (invoiceId, dependencies = {}) => {
       try { await saveRecord(data.invoice.id, reviewRecord); } catch { /* mantém processing */ }
     } else if (['claimed', 'queued'].includes(processingRecord.state) ||
         error.receivedResponse === true) {
-      try { await release(data.invoice.id); } catch { /* o lock original expira */ }
+      try {
+        await release(data.invoice.id, config.environment);
+      } catch { /* o lock original expira */ }
     }
     throw error;
   }
@@ -397,9 +425,10 @@ const issueInvoiceNfse = async (invoiceId, dependencies = {}) => {
 
 const getIssuedNfseXml = async (invoiceId, dependencies = {}) => {
   if (!validInvoiceId(invoiceId)) throw validationError('Número da fatura inválido.');
+  const config = dependencies.config || nfseConfig(process.env, { requireCertificate: false });
   const getRecord = dependencies.getNfseRecord || store.getNfseRecord;
   const getXml = dependencies.getNfseXml || storage.getNfseXml;
-  const record = await getRecord(String(invoiceId));
+  const record = await getRecord(String(invoiceId), config.environment);
   if (!record || record.state !== 'issued') {
     throw Object.assign(new Error('Nenhuma NFS-e foi emitida para esta fatura.'), { statusCode: 404 });
   }
