@@ -30,7 +30,7 @@ APP_TIMEZONE                        # padrão: America/Sao_Paulo
 
 ## Redis obrigatório
 
-O Redis impede que uma repetição do webhook gere a mesma ocorrência duas vezes, mantém a localização e guarda por 30 minutos o comprovante que aguarda os dados digitados do recebedor.
+O Redis impede que uma repetição do webhook gere a mesma ocorrência duas vezes. Os dados temporários da tentativa de baixa (estado da conversa, localização, data/hora manual e comprovante aguardando o recebedor) expiram após 15 minutos de inatividade.
 
 No projeto da Vercel, abra **Storage/Marketplace**, conecte uma instância **Upstash Redis** e confirme a criação destas variáveis:
 
@@ -52,10 +52,12 @@ Também são aceitos os nomes antigos `KV_REST_API_URL` e `KV_REST_API_TOKEN`. H
 7. Se responder **Sim**, o horário continua sendo obtido da mensagem da foto. Se responder **Não**, recebe um Flow para selecionar data, hora e minuto.
 8. O calendário bloqueia dias futuros e o servidor rejeita também um horário futuro no dia atual.
 9. Depois da confirmação do horário, recebe a imagem de exemplo e o sistema passa a aguardar a foto do comprovante.
-10. Após identificar o CT-e, o motorista recebe o Flow do recebedor e preenche nome, documento e grau/relação. Os três campos são obrigatórios.
-11. A Brudam resolve dinamicamente minuta e CNPJ do tomador pelo CT-e.
-12. A ocorrência `codigo: 1` é enviada com foto, motorista, data/horário escolhido, localização e dados do recebedor.
-13. Os `messageId` da foto e das respostas ficam marcados como concluídos por 90 dias.
+10. Na legenda da imagem, o motorista é orientado a enviar `cancelar` caso queira abandonar a tentativa; o comando limpa os dados temporários e retorna ao menu inicial.
+11. Cada etapa ativa expira após 15 minutos de inatividade. Uma nova interação após o vencimento começa novamente pelo menu.
+12. Após identificar o CT-e, o motorista recebe o Flow do recebedor e preenche nome, documento e grau/relação. Os três campos são obrigatórios.
+13. A Brudam resolve dinamicamente minuta e CNPJ do tomador pelo CT-e.
+14. A ocorrência `codigo: 1` é enviada com foto, motorista, data/horário escolhido, localização e dados do recebedor.
+15. Os `messageId` da foto e das respostas ficam marcados como concluídos por 90 dias.
 
 ## Flow de data e horário
 
