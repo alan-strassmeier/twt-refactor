@@ -76,12 +76,14 @@ test('recusa uma resposta sem objeto de coleta', () => {
   );
 });
 
-test('restringe CORS a extensões ou origens explicitamente configuradas', () => {
+test('permite CORS por padrão e aplica allowlist quando configurada', () => {
   const previous = process.env.COLETA_ALLOWED_ORIGINS;
   delete process.env.COLETA_ALLOWED_ORIGINS;
   assert.equal(coletaHandler.allowedOrigin('chrome-extension://abc'), true);
   assert.equal(coletaHandler.allowedOrigin('moz-extension://abc'), true);
-  assert.equal(coletaHandler.allowedOrigin('https://site-malicioso.test'), false);
+  assert.equal(coletaHandler.allowedOrigin('null'), true);
+  assert.equal(coletaHandler.allowedOrigin(''), true);
+  assert.equal(coletaHandler.allowedOrigin('https://site-malicioso.test'), true);
 
   process.env.COLETA_ALLOWED_ORIGINS = 'chrome-extension://permitida';
   assert.equal(coletaHandler.allowedOrigin('chrome-extension://permitida'), true);
@@ -122,14 +124,19 @@ const invokeHandler = async ({ method = 'GET', origin, authorization, query = {}
   return { statusCode: res.statusCode, headers, body: body ? JSON.parse(body) : null };
 };
 
-test('endpoint rejeita sites comuns antes de consultar a Brudam', async () => {
+test('endpoint exige token mesmo quando CORS está aberto', async () => {
+  const previous = process.env.COLETA_EXTENSION_TOKEN;
+  process.env.COLETA_EXTENSION_TOKEN = 'a'.repeat(40);
   const result = await invokeHandler({
     origin: 'https://site-malicioso.test',
-    authorization: `Bearer ${'a'.repeat(40)}`,
+    authorization: `Bearer ${'b'.repeat(40)}`,
     query: { id: '7776' }
   });
-  assert.equal(result.statusCode, 403);
+  assert.equal(result.statusCode, 401);
   assert.equal(result.body.status, 0);
+  assert.equal(result.headers['Access-Control-Allow-Origin'], '*');
+  if (previous === undefined) delete process.env.COLETA_EXTENSION_TOKEN;
+  else process.env.COLETA_EXTENSION_TOKEN = previous;
 });
 
 test('endpoint rejeita token incorreto e número inválido', async () => {

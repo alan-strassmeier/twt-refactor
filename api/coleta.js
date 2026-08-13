@@ -21,14 +21,14 @@ const allowedOrigin = (origin) => {
     .split(',')
     .map((value) => value.trim())
     .filter(Boolean);
-  if (configured.length > 0) return configured.includes(origin);
-  return /^(chrome|moz)-extension:\/\//.test(origin);
+  return configured.length === 0 || configured.includes(origin);
 };
 
 const setCors = (req, res) => {
   const origin = String(req.headers.origin || '');
   if (!allowedOrigin(origin)) return false;
-  res.setHeader('Access-Control-Allow-Origin', origin);
+  const hasConfiguredOrigins = Boolean(String(process.env.COLETA_ALLOWED_ORIGINS || '').trim());
+  res.setHeader('Access-Control-Allow-Origin', hasConfiguredOrigins ? origin : '*');
   res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Vary', 'Origin');
@@ -72,6 +72,7 @@ module.exports = async (req, res) => {
     return;
   }
   if (!corsAllowed) {
+    console.warn('[collection:cors]', { origin: String(req.headers.origin || '(missing)') });
     sendJson(res, 403, { status: 0, message: 'Origem não autorizada.' });
     return;
   }
