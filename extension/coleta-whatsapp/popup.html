@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TWT - Envio de Coletas</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <p class="eyebrow">TWT Airpack</p>
+    <h1>Enviar coleta</h1>
+  </header>
+
+  <main>
+    <section aria-labelledby="send-title">
+      <h2 id="send-title" class="visually-hidden">Consulta e envio</h2>
+
+      <label for="collection-id">Número da coleta</label>
+      <div class="query-row">
+        <input id="collection-id" inputmode="numeric" autocomplete="off" maxlength="10" placeholder="Ex.: 7776">
+        <button id="query" class="button button-primary" type="button">Consultar</button>
+      </div>
+
+      <label for="contact">Contato do WhatsApp</label>
+      <select id="contact">
+        <option value="">Cadastre um contato abaixo</option>
+      </select>
+
+      <label for="message">Prévia da mensagem</label>
+      <textarea id="message" rows="18" placeholder="Consulte uma coleta para gerar a mensagem."></textarea>
+
+      <button id="open-whatsapp" class="button button-whatsapp" type="button" disabled>
+        Abrir no WhatsApp
+      </button>
+      <p class="hint">No WhatsApp, anexe manualmente o PDF da ordem antes de confirmar o envio.</p>
+      <p id="status" class="status" role="status" aria-live="polite"></p>
+    </section>
+
+    <details>
+      <summary>Contatos</summary>
+      <form id="contact-form">
+        <label for="contact-name">Nome</label>
+        <input id="contact-name" autocomplete="name" maxlength="60" required>
+        <label for="contact-phone">WhatsApp com DDD</label>
+        <input id="contact-phone" inputmode="tel" autocomplete="tel" maxlength="20" placeholder="(41) 99999-9999" required>
+        <button class="button button-secondary" type="submit">Adicionar contato</button>
+      </form>
+      <ul id="contact-list" class="contact-list"></ul>
+    </details>
+
+    <details>
+      <summary>Configuração</summary>
+      <form id="settings-form">
+        <label for="api-url">Endereço do sistema TWT</label>
+        <input id="api-url" type="url" placeholder="https://www.twt.com.br" required>
+        <label for="api-token">Token interno da extensão</label>
+        <input id="api-token" type="password" minlength="32" autocomplete="off" required>
+        <button class="button button-secondary" type="submit">Salvar configuração</button>
+      </form>
+    </details>
+  </main>
+
+  <script src="popup.js"></script>
+</body>
+</html>
