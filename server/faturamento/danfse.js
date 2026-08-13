@@ -60,6 +60,13 @@ const addressLine = (address) => [
   address.district
 ].filter((value) => value && value !== '-').join(', ') || '-';
 
+const consultationUrlFor = (accessKey, environment) => {
+  const baseUrl = environment === 'production'
+    ? 'https://www.nfse.gov.br/ConsultaPublica'
+    : 'https://www.producaorestrita.nfse.gov.br/ConsultaPublica';
+  return `${baseUrl}?tpc=1&chave=${encodeURIComponent(accessKey)}`;
+};
+
 const parseNfseXml = (xml) => {
   const document = new DOMParser().parseFromString(String(xml || ''), 'application/xml');
   const root = document.documentElement;
@@ -74,8 +81,16 @@ const parseNfseXml = (xml) => {
   const clientAddress = parseAddress(client);
   const accessKey = digits(String(info?.getAttribute('Id') || '').replace(/^NFS/i, ''));
   if (accessKey.length !== 50) throw new Error('Chave de acesso inválida no XML da NFS-e.');
+  const environmentType = text(dpsInfo, 'tpAmb', '');
+  if (!['1', '2'].includes(environmentType)) {
+    throw new Error('Tipo de ambiente inválido no XML da NFS-e.');
+  }
+  const environment = environmentType === '1' ? 'production' : 'homologation';
   return {
     accessKey,
+    environment,
+    environmentType,
+    consultationUrl: consultationUrlFor(accessKey, environment),
     nfseNumber: text(info, 'nNFSe'),
     competence: formatDate(text(dpsInfo, 'dCompet')),
     processedAt: formatDateTime(text(info, 'dhProc')),
@@ -163,7 +178,7 @@ const buildDanfsePdf = async (xml) => {
   const data = parseNfseXml(xml);
   const qr = await bwipjs.toBuffer({
     bcid: 'qrcode',
-    text: `https://www.nfse.gov.br/ConsultaPublica?tpc=1&chave=${data.accessKey}`,
+    text: data.consultationUrl,
     scale: 3,
     padding: 0
   });
@@ -175,7 +190,9 @@ const buildDanfsePdf = async (xml) => {
       info: {
         Title: `DANFSe ${data.nfseNumber}`,
         Author: data.issuer.name,
-        Subject: 'Documento Auxiliar da NFS-e'
+        Subject: data.environment === 'production'
+          ? 'Documento Auxiliar da NFS-e'
+          : 'DANFSe de homologação - sem valor fiscal'
       }
     });
     doc.on('data', (chunk) => chunks.push(chunk));
@@ -195,10 +212,24 @@ const buildDanfsePdf = async (xml) => {
       width: 220,
       align: 'center'
     });
-    doc.font('Helvetica').fontSize(7).text(`Município: ${data.emissionCity} - RS\nAmbiente gerador: Nacional`, PAGE.margin + 430, y + 10, {
+    if (data.environment !== 'production') {
+      doc.font('Helvetica-Bold').fontSize(6.8).fillColor('#b42318')
+        .text('HOMOLOGAÇÃO - SEM VALOR FISCAL', PAGE.margin + 170, y + 42, {
+          width: 220,
+          align: 'center'
+        });
+    }
+    const environmentHeader = data.environment === 'production'
+      ? `Município: ${data.emissionCity} - RS\nAmbiente: Produção`
+      : `Município: ${data.emissionCity} - RS\nProdução Restrita\nSEM VALOR FISCAL`;
+    doc.font(data.environment === 'production' ? 'Helvetica' : 'Helvetica-Bold')
+      .fontSize(7)
+      .fillColor(data.environment === 'production' ? '#111111' : '#b42318')
+      .text(environmentHeader, PAGE.margin + 430, y + 8, {
       width: 125,
-      lineGap: 2
-    });
+      lineGap: 1.4
+      });
+    doc.fillColor('#111111');
     y += 52;
     line(doc, PAGE.margin, y, PAGE.margin + WIDTH, y);
 
@@ -288,6 +319,7 @@ const buildDanfsePdf = async (xml) => {
 
 module.exports = {
   parseNfseXml,
+  consultationUrlFor,
   formatCnpj,
   formatCep,
   formatDate,
