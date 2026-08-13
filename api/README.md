@@ -21,9 +21,10 @@ necessários e devolve a mensagem pronta para revisão.
 
 Configure `COLETA_EXTENSION_TOKEN` com um valor aleatório de pelo menos 32
 caracteres. Opcionalmente, configure `COLETA_ALLOWED_ORIGINS` com as origens
-exatas das extensões Chrome e Firefox, separadas por vírgula. Sem essa variável,
-o endpoint ainda exige o token e aceita somente origens `chrome-extension://`
-ou `moz-extension://`.
+exatas que poderão chamar o endpoint, separadas por vírgula. Como alguns
+navegadores enviam a origem da extensão como `null` ou omitem o cabeçalho, sem
+essa variável o CORS fica aberto e a autorização é feita exclusivamente pelo
+token obrigatório. CORS não substitui autenticação.
 
 As instruções de instalação e uso ficam em
 `extension/coleta-whatsapp/README.md`.
