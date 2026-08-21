@@ -4,3 +4,5 @@
 .vercel
 node_modules
 README.md
+services/coletas-email/contacts.json
+services/coletas-email/data/

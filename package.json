@@ -6,10 +6,15 @@
     "node": ">=22"
   },
   "scripts": {
-    "test": "node --test tests/*.test.js"
+    "test": "node --test --experimental-test-isolation=none tests/*.test.js",
+    "coletas:start": "node services/coletas-email/index.js",
+    "coletas:inspect": "node services/coletas-email/inspect-eml.js"
   },
   "dependencies": {
     "@vercel/functions": "^3.7.5",
+    "imapflow": "^1.7.1",
+    "mailparser": "^3.9.15",
+    "nodemailer": "^9.0.5",
     "sharp": "^0.35.3",
     "zxing-wasm": "^3.1.1"
   }
