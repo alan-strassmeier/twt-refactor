@@ -7,14 +7,12 @@
   },
   "scripts": {
     "test": "node --test --experimental-test-isolation=none tests/*.test.js",
-    "coletas:start": "node services/coletas-email/index.js",
-    "coletas:inspect": "node services/coletas-email/inspect-eml.js"
+    "whatsapp:start": "node services/whatsapp-baixa/index.js",
+    "whatsapp:migrate": "node services/whatsapp-baixa/migrate.js"
   },
   "dependencies": {
     "@vercel/functions": "^3.7.5",
-    "imapflow": "^1.7.1",
-    "mailparser": "^3.9.15",
-    "nodemailer": "^9.0.5",
+    "pg": "^8.16.3",
     "sharp": "^0.35.3",
     "zxing-wasm": "^3.1.1"
   }

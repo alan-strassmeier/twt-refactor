@@ -1,3 +1,5 @@
+const { isDryRun } = require('./runtime');
+
 const BASE_URL = (process.env.BRUDAM_API_URL || 'https://twt.brudam.com.br/api/v1').replace(/\/$/, '');
 const TIMEOUT_MS = 20000;
 
@@ -182,6 +184,15 @@ const createDeliveryOccurrence = async (input) => {
     };
   }
   if (input.location) event.localizacao = input.location;
+
+  if (isDryRun()) {
+    console.log('[whatsapp:dry-run:brudam]', {
+      action: 'create-delivery-occurrence',
+      minuta: input.minuta,
+      eventCode: event.codigo
+    });
+    return { payload: null, alreadyRegistered: false, simulated: true };
+  }
 
   const body = {
     documentos: [{
