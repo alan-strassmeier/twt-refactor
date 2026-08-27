@@ -53,7 +53,7 @@ const stateKey = (phone) => `whatsapp:state:${phone}`;
 const deliveryTimestampKey = (phone) => `whatsapp:delivery-timestamp:${phone}`;
 const locationKey = (phone) => `whatsapp:location:${phone}`;
 const messageKey = (messageId) => `whatsapp:message:${messageId}`;
-const deliveredMinutaKey = (minuta) => `whatsapp:delivered:minuta:${minuta}`;
+const deliveredMinutaKey = (minuta) => `whatsapp:v2:delivered:minuta:${minuta}`;
 
 const saveConversationState = (phone, state) =>
   command('SET', stateKey(phone), state, 'EX', DELIVERY_ATTEMPT_TTL_SECONDS);

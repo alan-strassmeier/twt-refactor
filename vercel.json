@@ -1,5 +1,81 @@
 {
+  "headers": [
+    {
+      "source": "/faturamento/:path*",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-store, max-age=0"
+        },
+        {
+          "key": "Content-Security-Policy",
+          "value": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; form-action 'self'; base-uri 'self'; frame-ancestors 'none'"
+        },
+        {
+          "key": "Referrer-Policy",
+          "value": "no-referrer"
+        },
+        {
+          "key": "X-Content-Type-Options",
+          "value": "nosniff"
+        },
+        {
+          "key": "X-Frame-Options",
+          "value": "DENY"
+        }
+      ]
+    }
+  ],
+  "rewrites": [
+    {
+      "source": "/api/faturamento/login",
+      "destination": "/api/faturamento/auth?route=login"
+    },
+    {
+      "source": "/api/faturamento/logout",
+      "destination": "/api/faturamento/auth?route=logout"
+    },
+    {
+      "source": "/api/faturamento/session",
+      "destination": "/api/faturamento/auth?route=session"
+    },
+    {
+      "source": "/api/faturamento/nfse-agent",
+      "destination": "/api/faturamento/nfse?route=agent"
+    },
+    {
+      "source": "/api/faturamento/nfse-pdf",
+      "destination": "/api/faturamento/nfse?route=pdf"
+    },
+    {
+      "source": "/api/faturamento/nfse-xml",
+      "destination": "/api/faturamento/nfse?route=xml"
+    }
+  ],
   "functions": {
+    "api/faturamento/fatura-pdf.js": {
+      "maxDuration": 60,
+      "includeFiles": "assets/twtlogo.png"
+    },
+    "api/faturamento/dacte-pdf.js": {
+      "maxDuration": 60,
+      "includeFiles": "assets/twtlogo.png"
+    },
+    "api/faturamento/documentos.js": {
+      "maxDuration": 60
+    },
+    "api/faturamento/boleto.js": {
+      "maxDuration": 60
+    },
+    "api/faturamento/boleto-pdf.js": {
+      "maxDuration": 60
+    },
+    "api/faturamento/faturas.js": {
+      "maxDuration": 60
+    },
+    "api/faturamento/nfse.js": {
+      "maxDuration": 60
+    },
     "api/whatsapp.mjs": {
       "maxDuration": 60,
       "memory": 1024,

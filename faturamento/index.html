@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow, noarchive">
+  <meta name="theme-color" content="#112a40">
+  <title>Faturamento | TWT Airpack</title>
+  <link rel="icon" href="/favicon.ico">
+  <link rel="stylesheet" href="/faturamento/styles.css?v=8">
+  <script src="/faturamento/sort.js?v=1" defer></script>
+  <script src="/faturamento/app.js?v=11" defer></script>
+</head>
+<body>
+  <div class="page-shell">
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Voltar ao site da TWT">
+        <img src="/assets/twtlogosince.png" alt="TWT Airpack">
+      </a>
+      <div class="topbar-copy">
+        <span class="eyebrow">Área interna</span>
+        <strong>Controle de faturamento</strong>
+      </div>
+      <button class="button button-quiet" id="logoutButton" type="button" hidden>Sair</button>
+    </header>
+
+    <main>
+      <section class="loading-panel" id="loadingPanel" aria-live="polite">
+        <span class="spinner" aria-hidden="true"></span>
+        <p>Verificando acesso…</p>
+      </section>
+
+      <section class="login-layout" id="loginPanel" hidden>
+        <div class="login-intro">
+          <span class="eyebrow">Financeiro TWT</span>
+          <h1>Faturas organizadas em um só lugar.</h1>
+          <p>Consulte valores, vencimentos, pagamentos e saldos diretamente da operação.</p>
+        </div>
+        <form class="login-card" id="loginForm">
+          <div>
+            <span class="eyebrow">Acesso restrito</span>
+            <h2>Entrar no faturamento</h2>
+            <p>Use as credenciais administrativas da TWT.</p>
+          </div>
+          <label>
+            Usuário
+            <input name="username" type="text" autocomplete="username" required maxlength="80">
+          </label>
+          <label>
+            Senha
+            <input name="password" type="password" autocomplete="current-password" required maxlength="200">
+          </label>
+          <p class="form-message" id="loginMessage" role="alert" aria-live="assertive"></p>
+          <button class="button button-primary" type="submit">Entrar</button>
+        </form>
+      </section>
+
+      <section class="dashboard" id="dashboardPanel" hidden>
+        <div class="dashboard-heading">
+          <div>
+            <span class="eyebrow">Visão financeira</span>
+            <h1>Faturas</h1>
+            <p>Filtre os registros e acompanhe os valores retornados pela Brudam.</p>
+          </div>
+          <span class="connection-status"><span></span> Integração ativa</span>
+        </div>
+
+        <form class="filter-card" id="filterForm">
+          <div class="filter-heading">
+            <div>
+              <h2>Filtros de consulta</h2>
+              <p>Use um ou mais campos para refinar a lista.</p>
+            </div>
+            <button class="button button-quiet" id="clearFilters" type="button">Limpar</button>
+          </div>
+          <div class="filter-grid">
+            <label>
+              Emissão inicial
+              <input type="date" name="emissao[gte]">
+            </label>
+            <label>
+              Emissão final
+              <input type="date" name="emissao[lte]">
+            </label>
+            <label>
+              Vencimento inicial
+              <input type="date" name="vencimento[gte]">
+            </label>
+            <label>
+              Vencimento final
+              <input type="date" name="vencimento[lte]">
+            </label>
+            <label>
+              Status
+              <select name="status">
+                <option value="">Todos</option>
+                <option value="0">Em aberto</option>
+                <option value="1">Liquidada</option>
+                <option value="2">Cancelada</option>
+              </select>
+            </label>
+            <label>
+              CNPJ do cliente
+              <input type="text" name="cnpj" inputmode="numeric" autocomplete="off" maxlength="18" placeholder="00.000.000/0000-00">
+            </label>
+            <label>
+              Número da fatura
+              <input type="text" name="id" inputmode="numeric" autocomplete="off" maxlength="20" placeholder="Ex.: 133">
+            </label>
+            <button class="button button-primary filter-submit" type="submit">Buscar faturas</button>
+          </div>
+        </form>
+
+        <div class="view-toolbar">
+          <div>
+            <strong>Modo de visualização</strong>
+            <span>Os filtros acima são aplicados nas duas visualizações.</span>
+          </div>
+          <div class="view-switch" role="group" aria-label="Modo de visualização das faturas">
+            <button class="view-option is-active" type="button" data-view-mode="list" aria-pressed="true">
+              Lista
+            </button>
+            <button class="view-option" type="button" data-view-mode="debtors" aria-pressed="false">
+              Gráfico
+            </button>
+          </div>
+        </div>
+
+        <p class="dashboard-message" id="dashboardMessage" role="alert" aria-live="assertive"></p>
+
+        <section class="summary-grid" id="summaryGrid" aria-label="Resumo da página consultada">
+          <article>
+            <span id="invoiceCountLabel">Faturas na página</span>
+            <strong id="invoiceCount">0</strong>
+          </article>
+          <article>
+            <span id="totalAmountLabel">Valor total</span>
+            <strong id="totalAmount">R$ 0,00</strong>
+          </article>
+          <article>
+            <span id="paidAmountLabel">Valor pago</span>
+            <strong id="paidAmount">R$ 0,00</strong>
+          </article>
+          <article>
+            <span id="balanceAmountLabel">Saldo</span>
+            <strong id="balanceAmount">R$ 0,00</strong>
+          </article>
+        </section>
+
+        <section class="table-card" id="tableView" aria-labelledby="invoiceTableTitle">
+          <div class="table-heading">
+            <div>
+              <h2 id="invoiceTableTitle">Lista de faturas</h2>
+              <p id="resultRange">Até 100 resultados por página</p>
+            </div>
+            <div class="table-heading-actions">
+              <span id="tableLoading" class="table-loading" hidden><span class="spinner" aria-hidden="true"></span> Conferindo faturas e empresas</span>
+              <nav class="pagination pagination-top" aria-label="Paginação superior das faturas">
+                <button class="button button-quiet" type="button" data-page-action="previous" disabled>Anterior</button>
+                <span data-page-indicator>Página 1</span>
+                <button class="button button-quiet" type="button" data-page-action="next" disabled>Próxima</button>
+              </nav>
+            </div>
+          </div>
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col" aria-sort="none"><button class="sort-button" type="button" data-sort-key="id">Fatura <span class="sort-indicator" aria-hidden="true">↕</span></button></th>
+                  <th scope="col" aria-sort="descending"><button class="sort-button" type="button" data-sort-key="issuedAt">Emissão <span class="sort-indicator" aria-hidden="true">↓</span></button></th>
+                  <th scope="col" aria-sort="none"><button class="sort-button" type="button" data-sort-key="dueAt">Vencimento <span class="sort-indicator" aria-hidden="true">↕</span></button></th>
+                  <th scope="col" class="visualize-header">Visualizar</th>
+                  <th scope="col" aria-sort="none"><button class="sort-button" type="button" data-sort-key="client">Cliente / empresa <span class="sort-indicator" aria-hidden="true">↕</span></button></th>
+                  <th scope="col" class="numeric" aria-sort="none"><button class="sort-button" type="button" data-sort-key="total">Valor total <span class="sort-indicator" aria-hidden="true">↕</span></button></th>
+                  <th scope="col" class="numeric" aria-sort="none"><button class="sort-button" type="button" data-sort-key="paid">Valor pago <span class="sort-indicator" aria-hidden="true">↕</span></button></th>
+                  <th scope="col" class="numeric" aria-sort="none"><button class="sort-button" type="button" data-sort-key="balance">Saldo <span class="sort-indicator" aria-hidden="true">↕</span></button></th>
+                  <th scope="col" aria-sort="none"><button class="sort-button" type="button" data-sort-key="status">Status <span class="sort-indicator" aria-hidden="true">↕</span></button></th>
+                </tr>
+              </thead>
+              <tbody id="invoiceRows"></tbody>
+            </table>
+            <div class="empty-state" id="emptyState" hidden>
+              <strong>Nenhuma fatura encontrada</strong>
+              <p>Revise os filtros e faça uma nova consulta.</p>
+            </div>
+          </div>
+          <div class="pagination">
+            <button class="button button-quiet" id="previousPage" type="button" data-page-action="previous" disabled>Anterior</button>
+            <span id="pageIndicator" data-page-indicator>Página 1</span>
+            <button class="button button-quiet" id="nextPage" type="button" data-page-action="next" disabled>Próxima</button>
+          </div>
+        </section>
+
+        <section class="chart-card" id="chartView" aria-labelledby="debtorChartHeading" hidden>
+          <div class="chart-heading">
+            <div>
+              <h2 id="debtorChartHeading">Saldo pendente por empresa</h2>
+              <p id="chartResultDescription">Faça uma consulta para gerar o gráfico.</p>
+            </div>
+            <span id="chartLoading" class="table-loading" hidden>
+              <span class="spinner" aria-hidden="true"></span> Conferindo faturas e empresas
+            </span>
+          </div>
+          <div class="chart-content" id="chartContent" hidden>
+            <div class="donut-wrap" id="donutWrap">
+              <svg class="donut-chart" id="debtorChart" viewBox="0 0 240 240" role="img"
+                aria-labelledby="debtorChartTitle debtorChartDescription">
+                <title id="debtorChartTitle">Distribuição do saldo pendente por empresa</title>
+                <desc id="debtorChartDescription">Cada divisão representa uma empresa com faturas pendentes.</desc>
+                <circle class="donut-track" cx="120" cy="120" r="82" pathLength="100"></circle>
+                <g id="debtorChartSegments"></g>
+              </svg>
+              <div class="donut-center" aria-hidden="true">
+                <span>Total pendente</span>
+                <strong id="chartTotalPending">R$ 0,00</strong>
+              </div>
+              <div class="chart-tooltip" id="chartTooltip" role="status" hidden>
+                <strong id="chartTooltipName"></strong>
+                <span id="chartTooltipPercentage"></span>
+                <span id="chartTooltipValue"></span>
+              </div>
+            </div>
+            <div class="chart-legend-panel">
+              <h3>Empresas devedoras</h3>
+              <ol class="chart-legend" id="chartLegend"></ol>
+            </div>
+          </div>
+          <div class="chart-empty" id="chartEmptyState">
+            <strong>Nenhum saldo pendente para exibir</strong>
+            <p>Revise os filtros ou faça uma nova consulta.</p>
+          </div>
+        </section>
+      </section>
+    </main>
+  </div>
+  <div class="document-modal" id="documentModal" hidden>
+    <button class="document-modal-backdrop" id="documentModalBackdrop" type="button"
+      aria-label="Fechar opções de documentos"></button>
+    <section class="document-modal-panel" role="dialog" aria-modal="true"
+      aria-labelledby="documentModalTitle" aria-describedby="documentModalDescription">
+      <button class="document-modal-close" id="documentModalClose" type="button"
+        aria-label="Fechar opções de documentos">×</button>
+      <span class="document-modal-eyebrow">Documentos da entrega</span>
+      <h2 id="documentModalTitle">Visualizar fatura</h2>
+      <p id="documentModalDescription">Escolha qual documento deseja abrir em uma nova guia.</p>
+      <div class="document-modal-actions">
+        <a class="document-choice" id="invoicePdfChoice" target="_blank" rel="noopener noreferrer">
+          <span class="pdf-icon" aria-hidden="true">PDF</span>
+          <span><strong>Fatura</strong><small>Documento de cobrança</small></span>
+        </a>
+        <a class="document-choice" id="dactePdfChoice" target="_blank" rel="noopener noreferrer">
+          <span class="pdf-icon" aria-hidden="true">PDF</span>
+          <span><strong>DACTE</strong><small id="dacteChoiceDescription">Documento do CT-e</small></span>
+        </a>
+        <button class="document-choice bank-slip-choice" id="bankSlipChoice" type="button" hidden>
+          <span class="bank-slip-icon" id="bankSlipBankIcon" aria-hidden="true">Banco</span>
+          <span><strong>Gerar boleto</strong><small id="bankSlipChoiceDescription">Cobrança emitida pelo banco do emitente</small></span>
+        </button>
+        <button class="document-choice nfse-choice" id="nfseChoice" type="button" hidden>
+          <span class="nfse-icon" aria-hidden="true">NFS-e</span>
+          <span><strong id="nfseChoiceTitle">Gerar NFS-e</strong><small id="nfseChoiceDescription">Nota fiscal de serviço da TWT</small></span>
+        </button>
+      </div>
+    </section>
+  </div>
+  <div class="document-modal" id="nfseConfirmModal" hidden>
+    <button class="document-modal-backdrop" id="nfseConfirmBackdrop" type="button"
+      aria-label="Cancelar emissão da NFS-e"></button>
+    <section class="document-modal-panel nfse-confirm-panel" role="dialog" aria-modal="true"
+      aria-labelledby="nfseConfirmTitle" aria-describedby="nfseConfirmDescription">
+      <button class="document-modal-close" id="nfseConfirmClose" type="button"
+        aria-label="Cancelar emissão da NFS-e">×</button>
+      <span class="document-modal-eyebrow">Conferência fiscal</span>
+      <h2 id="nfseConfirmTitle">Emitir NFS-e</h2>
+      <p id="nfseConfirmDescription">Confira os dados abaixo. Após a autorização, a NFS-e somente poderá ser cancelada ou substituída.</p>
+      <dl class="nfse-confirm-grid">
+        <div><dt>Fatura</dt><dd id="nfsePreviewInvoice">—</dd></div>
+        <div><dt>Competência</dt><dd id="nfsePreviewCompetence">—</dd></div>
+        <div><dt>Tomador</dt><dd id="nfsePreviewClient">—</dd></div>
+        <div><dt>CNPJ</dt><dd id="nfsePreviewDocument">—</dd></div>
+        <div><dt>Valor do serviço</dt><dd id="nfsePreviewAmount">—</dd></div>
+        <div><dt>Código / NBS</dt><dd id="nfsePreviewService">—</dd></div>
+        <div class="nfse-confirm-wide"><dt>Descrição</dt><dd id="nfsePreviewDescription">—</dd></div>
+        <div class="nfse-confirm-wide"><dt>Tributação</dt><dd id="nfsePreviewTaxation">—</dd></div>
+      </dl>
+      <p class="nfse-confirm-warning">A emissão é exclusiva para a TWT e usa o padrão fiscal aprovado para a fatura.</p>
+      <div class="nfse-confirm-actions">
+        <button class="button" id="nfseCancelButton" type="button">Voltar</button>
+        <button class="button button-primary" id="nfseIssueButton" type="button">Confirmar e emitir</button>
+      </div>
+    </section>
+  </div>
+  <button class="back-to-top" id="backToTopButton" type="button"
+    aria-label="Voltar ao topo da página" title="Voltar ao topo" hidden>
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M12 19V5M6.5 10.5 12 5l5.5 5.5"></path>
+    </svg>
+  </button>
+</body>
+</html>

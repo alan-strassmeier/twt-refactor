@@ -1,0 +1,11 @@
+{
+  "ServerUrl": "https://www.twt.com.br/api/faturamento/nfse-agent",
+  "AgentId": "twt-fiscal-01",
+  "CertificateThumbprint": "COLE_AQUI_O_THUMBPRINT_SEM_ESPACOS",
+  "ExpectedIssuerCnpj": "09123137000108",
+  "PollIntervalSeconds": 5,
+  "AllowedNfseHosts": [
+    "sefin.producaorestrita.nfse.gov.br",
+    "sefin.nfse.gov.br"
+  ]
+}

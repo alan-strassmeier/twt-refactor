@@ -158,6 +158,25 @@ import { APP_EVENTS, createElement } from './dom-utils.js';
     return `${note.slice(0, privateDetailsStart).trim().replace(/\.$/, '')}.`;
   };
 
+  const normalizedText = (value) => String(value ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toUpperCase();
+
+  const eventCode = (eventData) => Number(eventData?.codigo ?? eventData?.status);
+
+  const eventUser = (eventData) => firstAvailableValue([eventData], [
+    'usuario', 'nome_usuario', 'usuario_nome', 'nomeUsuario'
+  ]);
+
+  const isCiaIntegrationDelivery = (eventData) =>
+    eventCode(eventData) === 1 &&
+    normalizedText(eventUser(eventData)) === 'INTEGRACAO CIA';
+
+  const isFinalizedMinuteStatus = (status) =>
+    ['6', 'FINALIZADA'].includes(normalizedText(status));
+
   const normalizeTracking = (payload, type, number) => {
     const documents = Array.isArray(payload.data) ? payload.data : [];
     const rawEvents = documents
@@ -171,31 +190,48 @@ import { APP_EVENTS, createElement } from './dom-utils.js';
       .filter((data) => data && typeof data === 'object');
     const metadataSources = [...rawEvents, ...nestedMinuteData, ...transportedData, ...documents, payload];
 
-    const events = rawEvents
-      .map((eventData) => ({
-        code: String(eventData.status ?? ''),
+    const events = rawEvents.map((eventData) => {
+      const ciaIntegrationDelivery = isCiaIntegrationDelivery(eventData);
+      const originalDescription = String(
+        eventData.descricao ?? eventData.message ?? 'Atualização de rastreamento'
+      );
+      return {
+        code: String(eventData.codigo ?? eventData.status ?? ''),
         date: String(eventData.data ?? ''),
-        description: String(eventData.descricao ?? eventData.message ?? 'Atualização de rastreamento'),
-        note: publicTrackingNote(eventData.obs)
-      }));
+        description: ciaIntegrationDelivery ? 'AWB RETIRADO NA CIA' : originalDescription,
+        note: publicTrackingNote(eventData.obs),
+        ciaIntegrationDelivery,
+        completesDelivery: !ciaIntegrationDelivery &&
+          normalizedText(originalDescription).includes('ENTREGA REALIZADA')
+      };
+    });
 
-    const completedDeliveryEvent = events.find((eventData) => eventData.description
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .toUpperCase()
-      .includes('ENTREGA REALIZADA'));
+    const completedDeliveryEvent = events.find((eventData) => eventData.completesDelivery);
 
     if (events.length === 0) throw new Error('Nenhuma ocorrência encontrada.');
     const deliveryDate = firstAvailableValue(metadataSources, [
       'previsao_entrega', 'previsaoEntrega', 'data_previsao_entrega', 'previsao'
     ]);
+    const minuteStatusKeys = [
+      'status_minuta', 'statusMinuta', 'situacao_minuta', 'situacaoMinuta'
+    ];
+    const reportedMinuteStatus = firstAvailableValue(metadataSources, minuteStatusKeys);
+    const previousMinuteStatus = rawEvents
+      .filter((eventData) => !isCiaIntegrationDelivery(eventData))
+      .map((eventData) => firstAvailableValue([eventData], minuteStatusKeys))
+      .find((status) => status && !isFinalizedMinuteStatus(status));
+    const ciaOnlyFinalization = events.some((eventData) => eventData.ciaIntegrationDelivery) &&
+      !completedDeliveryEvent &&
+      isFinalizedMinuteStatus(reportedMinuteStatus);
+    const effectiveMinuteStatus = ciaOnlyFinalization
+      ? previousMinuteStatus || 'EM ANDAMENTO'
+      : reportedMinuteStatus;
+
     return {
       type,
       document: number,
       deliveryForecast: deliveryDate,
-      minuteStatus: firstAvailableValue(metadataSources, [
-        'status_minuta', 'statusMinuta', 'situacao_minuta', 'situacaoMinuta'
-      ]),
+      minuteStatus: effectiveMinuteStatus,
       volumeCount: firstAvailableValue(metadataSources, [
         'volumes_transportado', 'volumes_transportados', 'volumesTransportado',
         'volumesTransportados', 'total_volumes', 'volumes', 'qtd_volumes', 'quantidade_volumes',

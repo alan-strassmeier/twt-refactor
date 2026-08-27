@@ -1,0 +1,5 @@
+agentsettings.json
+publish/
+bin/
+obj/
+!README.md
