@@ -1,3 +1,5 @@
+const { isDryRun, redactedPhone } = require('./runtime');
+
 const graphBase = () =>
   `https://graph.facebook.com/${process.env.WHATSAPP_GRAPH_VERSION || 'v25.0'}`;
 
@@ -30,6 +32,13 @@ const downloadMedia = async (mediaId) => {
 
 const sendMessage = async (to, message) => {
   if (String(process.env.WHATSAPP_SEND_REPLIES || 'true').toLowerCase() !== 'true') return;
+  if (isDryRun()) {
+    console.log('[whatsapp:dry-run:meta]', {
+      to: redactedPhone(to),
+      type: String(message?.type || 'unknown')
+    });
+    return { simulated: true };
+  }
   const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || '';
   if (!phoneNumberId) throw new Error('WHATSAPP_PHONE_NUMBER_ID não configurado.');
   const response = await fetch(`${graphBase()}/${phoneNumberId}/messages`, {

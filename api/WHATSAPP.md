@@ -73,3 +73,20 @@ O WhatsApp Flows não possui um componente único de seleção de horário. O Fl
 A aplicação envia a data atual para `max_date` sempre que abre o Flow. A validação no servidor continua obrigatória porque o limite visual do calendário não impede, sozinho, que se selecione no dia atual uma hora posterior à atual.
 
 Nunca coloque segredos em arquivos versionados ou no código do navegador.
+
+## Execução no servidor próprio
+
+O adaptador da Vercel permanece compatível e continua usando Redis quando
+`WHATSAPP_STATE_STORE` não é informado. A alternativa com webhook HTTP
+persistente, fila durável e estado no PostgreSQL está documentada em
+`services/whatsapp-baixa/README.md`.
+
+No servidor próprio, os comprovantes são mantidos em armazenamento privado por
+30 dias e removidos automaticamente. Na Vercel, `WHATSAPP_IMAGE_STORE` continua
+com o padrão `none`, portanto esse arquivamento não é feito pelo adaptador
+antigo.
+
+Ela deve ser implantada primeiro com `WHATSAPP_DRY_RUN=true`, allowlist de
+telefones de teste e sem trocar o callback de produção até que healthchecks,
+fila e logs tenham sido validados. A migração SQL não é executada
+automaticamente ao iniciar o container.

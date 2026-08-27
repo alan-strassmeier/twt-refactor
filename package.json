@@ -6,7 +6,9 @@
     "node": ">=22"
   },
   "scripts": {
-    "test": "node --test tests/*.test.js"
+    "test": "node --test --experimental-test-isolation=none tests/*.test.js",
+    "whatsapp:start": "node services/whatsapp-baixa/index.js",
+    "whatsapp:migrate": "node services/whatsapp-baixa/migrate.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1106.0",
@@ -15,6 +17,7 @@
     "bwip-js": "^4.11.2",
     "node-forge": "^1.4.0",
     "pdfkit": "^0.19.1",
+    "pg": "^8.16.3",
     "sharp": "^0.35.3",
     "xml-crypto": "^6.1.2",
     "zxing-wasm": "^3.1.1"

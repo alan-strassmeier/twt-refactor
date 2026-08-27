@@ -5,7 +5,9 @@ const {
   isDeliveryAlreadyRegistered
 } = require('./brudam');
 const { downloadMedia, sendText, sendButtons, sendImage, sendFlow } = require('./meta');
-const store = require('./redis-store');
+const { isSenderAllowed, redactedPhone } = require('./runtime');
+const store = require('./state-store');
+const imageStore = require('./image-store');
 
 const START_DELIVERY = 'start_delivery';
 const HUMAN_CONTACT = 'human_contact';
@@ -373,6 +375,11 @@ const processImage = async (image) => {
     }
 
     const media = await downloadMedia(image.mediaId);
+    await imageStore.saveProofImage({
+      messageId: image.messageId,
+      bytes: media.bytes,
+      mimeType: media.mimeType
+    });
     const barcode = await readBarcode(media.bytes);
     if (!barcode) {
       await store.markMessageDone(image.messageId);
@@ -448,7 +455,8 @@ const processReceiverText = async (text, pending) => {
 
   let occurrenceCreated = false;
   try {
-    const media = await downloadMedia(pending.mediaId);
+    const archivedMedia = await imageStore.loadProofImage(pending.imageMessageId);
+    const media = archivedMedia || await downloadMedia(pending.mediaId);
     const latestLocation = await store.takeLocation(text.senderPhone);
     const occurrence = await createDeliveryOccurrence({
       minuta: pending.resolved.minuta,
@@ -464,15 +472,19 @@ const processReceiverText = async (text, pending) => {
       location: latestLocation || pending.location
     });
     occurrenceCreated = true;
-    await store.markDeliveredMinuta(pending.resolved.minuta);
+    if (!occurrence.simulated) {
+      await store.markDeliveredMinuta(pending.resolved.minuta);
+    }
     await store.completePendingDelivery(
       text.senderPhone,
       pending.imageMessageId,
       text.messageId
     );
-    await safeReply(text.senderPhone, occurrence.alreadyRegistered
-      ? `A entrega da minuta ${pending.resolved.minuta} já estava baixada no sistema. A baixa já foi confirmada.`
-      : `Entrega registrada com sucesso. Minuta ${pending.resolved.minuta}.`);
+    await safeReply(text.senderPhone, occurrence.simulated
+      ? `Simulação concluída sem registrar a entrega. Minuta ${pending.resolved.minuta}.`
+      : occurrence.alreadyRegistered
+        ? `A entrega da minuta ${pending.resolved.minuta} já estava baixada no sistema. A baixa já foi confirmada.`
+        : `Entrega registrada com sucesso. Minuta ${pending.resolved.minuta}.`);
   } catch (error) {
     console.error('[whatsapp:receiver]', { messageId: text.messageId, error });
     if (!occurrenceCreated) await store.releaseMessage(text.messageId).catch(() => {});
@@ -638,7 +650,21 @@ const processText = async (text) => {
 };
 
 const processWebhook = async (payload) => {
-  const { images, locations, texts, actions, flowReplies } = parseWebhook(payload);
+  const parsed = parseWebhook(payload);
+  const rejectedSenders = new Set();
+  const allowed = (items) => items.filter((item) => {
+    if (isSenderAllowed(item.senderPhone)) return true;
+    rejectedSenders.add(redactedPhone(item.senderPhone));
+    return false;
+  });
+  const images = allowed(parsed.images);
+  const locations = allowed(parsed.locations);
+  const texts = allowed(parsed.texts);
+  const actions = allowed(parsed.actions);
+  const flowReplies = allowed(parsed.flowReplies);
+  for (const sender of rejectedSenders) {
+    console.warn('[whatsapp:allowlist]', { sender, status: 'ignored' });
+  }
   await Promise.all(locations.map((item) => store.saveLocation(item.senderPhone, item.location)));
   await Promise.all(actions.map(processAction));
   await Promise.all(images.map(processImage));
