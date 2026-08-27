@@ -35,3 +35,9 @@ test('instalador cria backup e não manipula containers, volumes ou segredos', (
   assert.doesNotMatch(installer, /docker\s+(?:compose\s+)?(?:down|rm|volume)/);
   assert.doesNotMatch(installer, /whatsapp-baixa\.env/);
 });
+
+test('lockfile preserva os binários Linux usados pelo leitor de imagens', () => {
+  const lockfile = JSON.parse(read('package-lock.json'));
+  assert.ok(lockfile.packages['node_modules/@img/sharp-linux-x64']);
+  assert.ok(lockfile.packages['node_modules/@img/sharp-libvips-linux-x64']);
+});
