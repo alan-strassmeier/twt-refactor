@@ -82,6 +82,22 @@ const authorizedRequest = async (path, options = {}) => {
 const buildCostsQuery = (cteIdentifier) =>
   new URLSearchParams({ numero: cteIdentifier, limit: '2' }).toString();
 
+const uniqueMinutaMatches = (items) => {
+  if (!Array.isArray(items)) return [];
+  const matches = new Map();
+  for (const item of items) {
+    const minuta = Number(item?.minuta?.id);
+    const clientDocument = String(item?.toma?.nDoc || '').replace(/\D/g, '');
+    if (!Number.isSafeInteger(minuta) || minuta <= 0 ||
+        ![11, 14].includes(clientDocument.length)) continue;
+    matches.set(`${minuta}:${clientDocument}`, {
+      minuta,
+      clientDocument
+    });
+  }
+  return [...matches.values()];
+};
+
 const resolveMinutaAndClient = async (cteIdentifier) => {
   if (!/^\d+$/.test(cteIdentifier)) return null;
   let minutaIdentifier = cteIdentifier;
@@ -109,13 +125,7 @@ const resolveMinutaAndClient = async (cteIdentifier) => {
     throw new Error(`Falha ao consultar dados da minuta: ${payload?.message || response.status}`);
   }
 
-  const matches = payload.data.flatMap((item) => {
-    const minuta = Number(item?.minuta?.id);
-    const clientCnpj = String(item?.toma?.nDoc || '').replace(/\D/g, '');
-    return Number.isSafeInteger(minuta) && minuta > 0 && clientCnpj.length === 14
-      ? [{ minuta, clientCnpj }]
-      : [];
-  });
+  const matches = uniqueMinutaMatches(payload.data);
   return matches.length === 1 ? matches[0] : null;
 };
 
@@ -209,7 +219,7 @@ const createDeliveryOccurrence = async (input) => {
 
   const body = {
     documentos: [{
-      cliente: input.clientCnpj,
+      cliente: input.clientDocument || input.clientCnpj,
       tipo: 'MINUTA',
       minuta: input.minuta,
       eventos: [event],
@@ -239,6 +249,7 @@ const createDeliveryOccurrence = async (input) => {
 
 module.exports = {
   buildCostsQuery,
+  uniqueMinutaMatches,
   isDuplicateOccurrence,
   isCiaIntegrationDelivery,
   hasDeliveryOccurrence,

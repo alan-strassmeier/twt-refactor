@@ -460,7 +460,7 @@ const processReceiverText = async (text, pending) => {
     const latestLocation = await store.takeLocation(text.senderPhone);
     const occurrence = await createDeliveryOccurrence({
       minuta: pending.resolved.minuta,
-      clientCnpj: pending.resolved.clientCnpj,
+      clientDocument: pending.resolved.clientDocument || pending.resolved.clientCnpj,
       timestamp: timestampForPending(pending),
       driverName: pending.driverName,
       senderPhone: text.senderPhone,

@@ -10,6 +10,7 @@ const {
 } = require('../server/whatsapp/barcode');
 const {
   buildCostsQuery,
+  uniqueMinutaMatches,
   isDuplicateOccurrence,
   isCiaIntegrationDelivery,
   hasDeliveryOccurrence
@@ -291,6 +292,34 @@ test('usa o horário informado no Flow ou o horário normal da foto', () => {
 
 test('consulta custos pelo parâmetro simples do número do CT-e', () => {
   assert.equal(buildCostsQuery('51057251'), 'numero=51057251&limit=2');
+});
+
+test('resolve a minuta quando o tomador é pessoa física ou jurídica', () => {
+  assert.deepEqual(uniqueMinutaMatches([{
+    minuta: { id: 25079 },
+    toma: { nDoc: '123.456.789-01' }
+  }]), [{ minuta: 25079, clientDocument: '12345678901' }]);
+  assert.deepEqual(uniqueMinutaMatches([{
+    minuta: { id: 25080 },
+    toma: { nDoc: '12.345.678/0001-90' }
+  }]), [{ minuta: 25080, clientDocument: '12345678000190' }]);
+});
+
+test('deduplica a mesma minuta sem esconder ambiguidades reais', () => {
+  const duplicate = {
+    minuta: { id: 25079 },
+    toma: { nDoc: '12345678901' }
+  };
+  assert.deepEqual(uniqueMinutaMatches([duplicate, duplicate]), [
+    { minuta: 25079, clientDocument: '12345678901' }
+  ]);
+  assert.equal(uniqueMinutaMatches([
+    duplicate,
+    { minuta: { id: 25081 }, toma: { nDoc: '12345678901' } }
+  ]).length, 2);
+  assert.deepEqual(uniqueMinutaMatches([
+    { minuta: { id: 25082 }, toma: { nDoc: '12345' } }
+  ]), []);
 });
 
 test('identifica ocorrência código 1 já inserida na minuta', () => {
