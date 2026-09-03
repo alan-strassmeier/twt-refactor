@@ -31,6 +31,15 @@ C6_MTLS_KEY_PASSPHRASE=
 C6_PARTNER_SOFTWARE_NAME=TWT Faturamento
 C6_PARTNER_SOFTWARE_VERSION=1.0.0
 
+ITAU_CLIENT_ID=
+ITAU_CLIENT_SECRET=
+ITAU_MTLS_CERT_BASE64=
+ITAU_MTLS_KEY_BASE64=
+ITAU_MTLS_KEY_PASSPHRASE=
+ITAU_TOKEN_URL=https://sts.itau.com.br/api/oauth/token
+ITAU_API_BASE_URL=https://secure.gateway.api.itau
+ITAU_API_KEY=
+
 NFSE_ENVIRONMENT=homologation
 NFSE_CERT_MODE=agent
 NFSE_API_BASE_URL=
@@ -121,9 +130,30 @@ obtenha no Itaú:
 - código do beneficiário, carteira/convênio e demais identificadores exigidos;
 - endpoints de emissão, consulta e obtenção do boleto/PDF.
 
-Enquanto esses dados não estiverem disponíveis, a tentativa de emissão de uma
-fatura DSL retorna uma mensagem explícita de integração Itaú pendente. Nenhum
-endpoint ou payload bancário é presumido pelo código.
+O cliente OAuth2/mTLS produtivo está implementado em `server/faturamento/itau.js`.
+Ele obtém o `access_token` no STS do Itaú, renova o token de 5 minutos e envia
+automaticamente o certificado, a chave privada, `x-itau-apikey`, correlation ID
+e flow ID nas chamadas bancárias. O código utiliza o novo domínio
+`secure.gateway.api.itau`, divulgado pelo Itaú para a migração de 2026.
+
+Converta o certificado e a chave privada para Base64 antes de cadastrá-los na
+Vercel. Execute em PowerShell, fora do repositório:
+
+```powershell
+[Convert]::ToBase64String([IO.File]::ReadAllBytes('C:\TWT\Itau-DSL\itau-dsl.crt'))
+[Convert]::ToBase64String([IO.File]::ReadAllBytes('C:\TWT\Itau-DSL\itau-dsl.key'))
+```
+
+Use a primeira saída em `ITAU_MTLS_CERT_BASE64` e a segunda em
+`ITAU_MTLS_KEY_BASE64`. `ITAU_CLIENT_ID` é a credencial fornecida na planilha e
+`ITAU_CLIENT_SECRET` é o conteúdo de `itau-client-secret.txt`. Como o Itaú usa o
+próprio client ID em `x-itau-apikey` neste fluxo, `ITAU_API_KEY` pode permanecer
+vazia; preencha-a somente se o contrato fornecer uma chave distinta.
+
+A emissão permanece bloqueada até serem confirmados e configurados o código do
+beneficiário (agência + conta + DAC), a carteira/convênio e o endpoint de emissão
+exato liberado para a conta DSL. Nenhum título é registrado apenas por configurar
+as credenciais.
 
 ## NFS-e Nacional (TWT)
 
