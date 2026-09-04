@@ -26,7 +26,9 @@ module.exports = async (req, res) => {
     const result = await generateInvoiceBankSlip(body.id);
     sendJson(res, result.created ? 201 : 200, {
       ...result,
-      pdfUrl: `/api/faturamento/boleto-pdf?id=${encodeURIComponent(result.invoiceId)}`
+      ...(result.status === 'ready'
+        ? { pdfUrl: `/api/faturamento/boleto-pdf?id=${encodeURIComponent(result.invoiceId)}` }
+        : {})
     });
   } catch (error) {
     const statusCode = Number(error.statusCode) || (error.name === 'AbortError' ? 504 : 502);
