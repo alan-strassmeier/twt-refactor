@@ -121,28 +121,89 @@ const itauBoletoConfig = (env = process.env) => {
   };
 };
 
+const cleanUpstreamText = (value) => typeof value === 'string'
+  ? value.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 240)
+  : '';
+
+const issueFromValue = (value, fieldHint = '') => {
+  if (typeof value === 'string') {
+    const message = cleanUpstreamText(value);
+    return message && fieldHint ? `${fieldHint}: ${message}` : message;
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return '';
+
+  const field = cleanUpstreamText(
+    value.field || value.campo || value.path || value.parametro || value.parameter ||
+    value.property || value.nome_campo || fieldHint
+  );
+  const message = cleanUpstreamText(
+    value.message || value.mensagem || value.detail || value.detalhe ||
+    value.description || value.descricao || value.reason || value.motivo || value.title
+  );
+  if (!message) return '';
+  return field && !message.toLowerCase().includes(field.toLowerCase())
+    ? `${field}: ${message}`
+    : message;
+};
+
+const validationIssues = (payload) => {
+  const containers = [
+    payload,
+    payload?.data,
+    payload?.value,
+    payload?.value?.data,
+    payload?.error
+  ].filter((value) => value && typeof value === 'object');
+  const keys = [
+    'errors', 'erros', 'violations', 'violacoes', 'campos', 'fields',
+    'details', 'detalhes', 'issues', 'problemas'
+  ];
+  const issues = [];
+
+  for (const container of containers) {
+    for (const key of keys) {
+      const collection = container[key];
+      if (Array.isArray(collection)) {
+        for (const value of collection) {
+          const issue = issueFromValue(value);
+          if (issue) issues.push(issue);
+        }
+      } else if (collection && typeof collection === 'object') {
+        for (const [field, value] of Object.entries(collection)) {
+          const values = Array.isArray(value) ? value : [value];
+          for (const item of values) {
+            const issue = issueFromValue(item, field);
+            if (issue) issues.push(issue);
+          }
+        }
+      } else {
+        const issue = issueFromValue(collection);
+        if (issue) issues.push(issue);
+      }
+    }
+  }
+
+  return [...new Set(issues)].slice(0, 5);
+};
+
 const safeUpstreamMessage = (payload, fallback) => {
-  const firstIssue = [
-    ...(Array.isArray(payload?.errors) ? payload.errors : []),
-    ...(Array.isArray(payload?.erros) ? payload.erros : []),
-    ...(Array.isArray(payload?.violacoes) ? payload.violacoes : []),
-    ...(Array.isArray(payload?.campos) ? payload.campos : [])
-  ].find((value) => value && typeof value === 'object');
-  const candidates = [
+  const generalCandidates = [
     payload?.message,
     payload?.mensagem,
     payload?.data?.message,
     payload?.data?.mensagem,
-    firstIssue?.message,
-    firstIssue?.mensagem,
-    firstIssue?.detail,
     payload?.error_description,
-    payload?.error,
+    typeof payload?.error === 'string' ? payload.error : '',
     payload?.detail,
     payload?.title
   ];
-  const message = candidates.find((value) => typeof value === 'string' && value.trim());
-  return String(message || fallback).replace(/[\r\n]+/g, ' ').slice(0, 300);
+  const general = generalCandidates.map(cleanUpstreamText).find(Boolean) || '';
+  const issues = validationIssues(payload);
+  const genericValidationMessage = /(?:erro|error).*(?:valida|validat).*(?:campo|field)/i.test(general);
+  const message = genericValidationMessage && issues.length
+    ? `${general}: ${issues.join('; ')}`
+    : (general || issues[0] || fallback);
+  return cleanUpstreamText(message).slice(0, 300);
 };
 
 const httpsRequest = ({
@@ -212,17 +273,18 @@ const jsonFromResponse = (result) => {
   }
 };
 
-const itauHttpError = (result, payload, fallback) => Object.assign(
-  new Error(safeUpstreamMessage(payload, fallback)),
-  {
+const itauHttpError = (result, payload, fallback) => {
+  const issues = validationIssues(payload);
+  return Object.assign(new Error(safeUpstreamMessage(payload, fallback)), {
     statusCode: [400, 404, 405, 422, 428].includes(result.statusCode)
       ? 422
       : (result.statusCode === 429 ? 503 : 502),
     upstreamStatus: result.statusCode,
     receivedResponse: true,
-    expose: [400, 404, 405, 422, 428].includes(result.statusCode)
-  }
-);
+    expose: [400, 404, 405, 422, 428].includes(result.statusCode),
+    ...(issues.length ? { validationDetails: issues } : {})
+  });
+};
 
 const requestAccessToken = async (config, request = httpsRequest) => {
   const body = new URLSearchParams({
