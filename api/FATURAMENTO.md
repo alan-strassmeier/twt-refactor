@@ -132,6 +132,10 @@ nosso número, linha digitável e código de barras. Como essa API não oferece 
 rota de PDF, o servidor gera localmente o recibo do pagador e a ficha de
 compensação a partir dos dados retornados pelo Itaú.
 
+Na integração produtiva, o recurso do boleto é enviado dentro do envelope
+`{"data": { ... }}` exigido pelo gateway Itaú. Os campos de beneficiário,
+pagador e título permanecem dentro desse objeto `data`.
+
 O cliente renova o token de acesso, envia automaticamente certificado, chave
 privada, `x-itau-apikey`, correlation ID e flow ID. A consulta documentada em
 `GET /cash_management/v2/boletos` também está implementada para conferência por
