@@ -13,6 +13,7 @@ const {
   resolveInvoiceBillingData,
   bankSlipPayload,
   itauOurNumberForInvoice,
+  itauAmountForPayload,
   itauBankSlipPayload,
   generateInvoiceBankSlip,
   getInvoiceBankSlipPdf
@@ -210,9 +211,11 @@ test('monta o boleto Itaú no contrato oficial e com nosso número determinísti
   assert.equal(payload.dado_boleto.pagador.pessoa.tipo_pessoa.codigo_tipo_pessoa, 'J');
   assert.equal(detail.numero_nosso_numero, '00011518');
   assert.equal(detail.texto_seu_numero, 'FAT11518');
-  assert.equal(detail.valor_titulo, '1844.00');
+  assert.equal(detail.valor_titulo, '00000000000184400');
   assert.equal(detail.data_vencimento, '2026-08-14');
+  assert.equal(payload.dado_boleto.desconto_expresso, false);
   assert.equal(itauOurNumberForInvoice('11518'), '00011518');
+  assert.equal(itauAmountForPayload(684.44), '00000000000068444');
 });
 
 test('efetiva boleto DSL no Itaú uma única vez e armazena dados para o PDF', async () => {

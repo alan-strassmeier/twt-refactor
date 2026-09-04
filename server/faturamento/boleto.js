@@ -190,6 +190,14 @@ const itauOurNumberForInvoice = (invoiceId) => {
   return (BigInt(`0x${hexadecimal}`) % 10000000000000000n).toString().padStart(16, '0');
 };
 
+const itauAmountForPayload = (value) => {
+  const cents = Math.round(Number(value) * 100);
+  if (!Number.isSafeInteger(cents) || cents <= 0 || String(cents).length > 17) {
+    throw validationError('Valor do boleto fora do limite aceito pelo Itaú.');
+  }
+  return String(cents).padStart(17, '0');
+};
+
 const itauBankSlipPayload = (billing, config) => {
   const payerTaxId = digits(billing.payer.tax_id);
   const personType = payerTaxId.length === 14
@@ -235,14 +243,15 @@ const itauBankSlipPayload = (billing, config) => {
       dados_individuais_boleto: [{
         numero_nosso_numero: ourNumber,
         data_vencimento: billing.dueAt,
-        valor_titulo: billing.amount.toFixed(2),
+        valor_titulo: itauAmountForPayload(billing.amount),
         texto_seu_numero: yourNumber,
         texto_uso_beneficiario: yourNumber
       }],
       codigo_especie: config.species,
       codigo_aceite: config.acceptance,
       ...(billing.issuedAt ? { data_emissao: billing.issuedAt } : {}),
-      pagamento_parcial: false
+      pagamento_parcial: false,
+      desconto_expresso: false
     }
   };
 };
@@ -431,6 +440,7 @@ module.exports = {
   resolveInvoiceBillingData,
   bankSlipPayload,
   itauOurNumberForInvoice,
+  itauAmountForPayload,
   itauBankSlipPayload,
   generateInvoiceBankSlip,
   getInvoiceBankSlipPdf
