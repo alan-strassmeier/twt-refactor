@@ -234,6 +234,38 @@ test('propaga de forma segura o erro de validação devolvido pelo Itaú', async
   );
 });
 
+test('prioriza os campos rejeitados quando o Itaú devolve mensagem genérica', async () => {
+  resetTokenCache();
+  const config = itauBoletoConfig(configEnvironment());
+  const request = async (options) => {
+    if (options.url === TOKEN_URL) {
+      return {
+        statusCode: 200,
+        headers: {},
+        body: Buffer.from(JSON.stringify({ access_token: 'token-itau', expires_in: 300 }))
+      };
+    }
+    return {
+      statusCode: 422,
+      headers: {},
+      body: Buffer.from(JSON.stringify({
+        message: 'Erro na validação de Campos',
+        fields: {
+          'dado_boleto.codigo_carteira': ['Carteira não contratada para o beneficiário.'],
+          'beneficiario.id_beneficiario': { mensagem: 'Identificador inválido.' }
+        }
+      }))
+    };
+  };
+
+  await assert.rejects(
+    createItauBankSlip({ etapa_processo_boleto: 'validacao' }, { config, request }),
+    (error) => error.statusCode === 422 &&
+      error.message.includes('dado_boleto.codigo_carteira: Carteira não contratada') &&
+      error.validationDetails.length === 2
+  );
+});
+
 test('distingue falha de autenticação de estado bancário incerto após o POST', async () => {
   const config = itauBoletoConfig({
     ...configEnvironment(),

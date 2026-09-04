@@ -36,7 +36,10 @@ module.exports = async (req, res) => {
     sendJson(res, statusCode, {
       message: statusCode >= 500
         ? (error.expose ? error.message : 'Não foi possível gerar o boleto no banco configurado.')
-        : error.message
+        : error.message,
+      ...(statusCode === 422 && Array.isArray(error.validationDetails)
+        ? { details: error.validationDetails }
+        : {})
     });
   }
 };
