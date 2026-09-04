@@ -346,6 +346,12 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: invoiceId })
       });
+      if (payload.status === 'validated') {
+        elements.dashboardMessage.textContent = payload.message ||
+          'Dados validados pelo Itaú. Nenhum boleto foi registrado.';
+        elements.bankSlipChoiceDescription.textContent = elements.dashboardMessage.textContent;
+        return;
+      }
       closeDocumentModal();
       openPdfAfterCheck(payload.pdfUrl || bankSlipPdfUrl(invoiceId));
     } catch (error) {

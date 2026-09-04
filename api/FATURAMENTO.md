@@ -37,8 +37,15 @@ ITAU_MTLS_CERT_BASE64=
 ITAU_MTLS_KEY_BASE64=
 ITAU_MTLS_KEY_PASSPHRASE=
 ITAU_TOKEN_URL=https://sts.itau.com.br/api/oauth/token
-ITAU_API_BASE_URL=https://secure.gateway.api.itau
+ITAU_API_BASE_URL=https://api.gateway.itau.com.br/cash_management/v2
 ITAU_API_KEY=
+ITAU_BENEFICIARY_ID=
+ITAU_BOLETO_WALLET=
+ITAU_BOLETO_STAGE=validacao
+ITAU_BOLETO_SPECIES=01
+ITAU_BOLETO_ACCEPTANCE=N
+ITAU_BENEFICIARY_NAME=DSL DO BRASIL TRANSPORTE E LOGISTICA LTDA
+ITAU_BENEFICIARY_CNPJ=97434690000129
 
 NFSE_ENVIRONMENT=homologation
 NFSE_CERT_MODE=agent
@@ -106,8 +113,9 @@ cidade, UF e CEP; se algum desses dados estiver ausente, a emissão é bloqueada
 com uma mensagem para correção do cadastro.
 
 `POST /api/faturamento/boleto` gera ou recupera de forma idempotente o boleto da
-fatura. `GET /api/faturamento/boleto-pdf?id=...` baixa o PDF diretamente do C6.
-Ambos exigem a sessão administrativa. O POST também exige mesma origem.
+fatura. `GET /api/faturamento/boleto-pdf?id=...` baixa o PDF do C6 ou gera a ficha
+de compensação Itaú com os dados bancários autorizados. Ambos exigem a sessão
+administrativa. O POST também exige mesma origem.
 
 O Redis é obrigatório para a emissão: ele mantém o vínculo entre a fatura e o
 identificador do C6 e impede boletos duplicados em cliques simultâneos ou novas
@@ -116,25 +124,18 @@ nova tentativa até conferência manual.
 
 ## Boletos Itaú (DSL)
 
-O sistema já reconhece o CNPJ da DSL e apresenta o Itaú como banco obrigatório.
-A fatura DSL é bloqueada antes de qualquer chamada ao C6.
+O sistema reconhece o CNPJ da DSL e apresenta o Itaú como banco obrigatório. A
+fatura DSL nunca é enviada ao C6. A implementação segue a especificação oficial
+`API Boletos - Emissão e Instrução 2.75.147`: autenticação OAuth2/mTLS no STS e
+emissão em `POST /cash_management/v2/boletos`. A resposta fornece `id_boleto`,
+nosso número, linha digitável e código de barras. Como essa API não oferece uma
+rota de PDF, o servidor gera localmente o recibo do pagador e a ficha de
+compensação a partir dos dados retornados pelo Itaú.
 
-A emissão efetiva depende da contratação/liberação da API de Cobrança para a
-conta Itaú da DSL. O contrato técnico detalhado fica disponível no portal Itaú
-da organização após essa liberação. Antes de implementar o adaptador bancário,
-obtenha no Itaú:
-
-- acesso da DSL à API de Cobrança em homologação e produção;
-- especificação OpenAPI ou coleção oficial liberada para a conta;
-- `client_id`, `client_secret`, certificado mTLS e chave privada;
-- código do beneficiário, carteira/convênio e demais identificadores exigidos;
-- endpoints de emissão, consulta e obtenção do boleto/PDF.
-
-O cliente OAuth2/mTLS produtivo está implementado em `server/faturamento/itau.js`.
-Ele obtém o `access_token` no STS do Itaú, renova o token de 5 minutos e envia
-automaticamente o certificado, a chave privada, `x-itau-apikey`, correlation ID
-e flow ID nas chamadas bancárias. O código utiliza o novo domínio
-`secure.gateway.api.itau`, divulgado pelo Itaú para a migração de 2026.
+O cliente renova o token de acesso, envia automaticamente certificado, chave
+privada, `x-itau-apikey`, correlation ID e flow ID. A consulta documentada em
+`GET /cash_management/v2/boletos` também está implementada para conferência por
+beneficiário, carteira, nosso número e data de inclusão.
 
 Converta o certificado e a chave privada para Base64 antes de cadastrá-los na
 Vercel. Execute em PowerShell, fora do repositório:
@@ -150,10 +151,21 @@ Use a primeira saída em `ITAU_MTLS_CERT_BASE64` e a segunda em
 próprio client ID em `x-itau-apikey` neste fluxo, `ITAU_API_KEY` pode permanecer
 vazia; preencha-a somente se o contrato fornecer uma chave distinta.
 
-A emissão permanece bloqueada até serem confirmados e configurados o código do
-beneficiário (agência + conta + DAC), a carteira/convênio e o endpoint de emissão
-exato liberado para a conta DSL. Nenhum título é registrado apenas por configurar
-as credenciais.
+`ITAU_BENEFICIARY_ID` contém exatamente 12 dígitos: agência (4), conta (7) e DAC
+(1). `ITAU_BOLETO_WALLET` contém os 3 dígitos da carteira contratada. Confirme
+esses dois valores com o Itaú; eles não podem ser deduzidos do certificado.
+
+Mantenha `ITAU_BOLETO_STAGE=validacao` no primeiro deployment. Nesse modo o Itaú
+valida o mesmo payload usado na produção, a interface informa o sucesso e nenhum
+título é registrado ou salvo como boleto emitido. Depois de homologar os dados,
+altere somente para `ITAU_BOLETO_STAGE=efetivacao`. Em efetivação, o Redis reserva
+a fatura antes do POST e mantém o vínculo com o `id_boleto`, impedindo emissão
+duplicada. Respostas incertas ficam bloqueadas para conferência manual.
+
+Os padrões iniciais são espécie `01` e aceite `N`. Se o contrato da carteira DSL
+determinar outros códigos, altere `ITAU_BOLETO_SPECIES` e
+`ITAU_BOLETO_ACCEPTANCE` antes da efetivação. Nome e CNPJ do beneficiário têm os
+valores da DSL como padrão e podem ser sobrescritos pelas variáveis indicadas.
 
 ## NFS-e Nacional (TWT)
 

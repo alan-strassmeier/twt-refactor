@@ -11,6 +11,11 @@ const {
   createC6BankSlip,
   getC6BankSlipPdf
 } = require('./c6');
+const {
+  itauBoletoConfig,
+  createItauBankSlip
+} = require('./itau');
+const { renderItauBankSlipPdf } = require('./itau-boleto-pdf');
 const store = require('./boleto-store');
 
 const digits = (value) => String(value || '').replace(/\D/g, '');
@@ -50,6 +55,7 @@ const payerFromCompany = (company, fallback = {}) => {
   const state = String(firstValue(company, ['uf', 'UF', 'estado']) || '').trim().toUpperCase();
   const zipCode = digits(firstValue(company, ['cep', 'CEP']));
   const city = String(firstValue(company, ['cidade', 'municipio', 'xMun']) || '').trim().slice(0, 40);
+  const district = String(firstValue(company, ['bairro', 'xBairro']) || '').trim().slice(0, 40);
   const numberLength = number === null ? 0 : String(number).length;
   const streetLimit = Math.max(1, Math.min(33, 40 - numberLength));
   const street = String(firstValue(company, ['endereco', 'logradouro', 'xLgr']) || '')
@@ -74,6 +80,7 @@ const payerFromCompany = (company, fallback = {}) => {
       street,
       number,
       ...(complement ? { complement } : {}),
+      ...(district ? { district } : {}),
       city,
       state,
       zip_code: zipCode
@@ -144,6 +151,7 @@ const resolveInvoiceBillingData = async (invoiceId, dependencies = {}) => {
     issuerCnpj,
     bank,
     amount: Number(amount.toFixed(2)),
+    issuedAt: dateOnly(normalized.issuedAt),
     dueAt,
     payer: payerFromCompany(company, {
       taxId: clientCnpj,
@@ -152,14 +160,92 @@ const resolveInvoiceBillingData = async (invoiceId, dependencies = {}) => {
   };
 };
 
+const c6Payer = (payer) => ({
+  name: payer.name,
+  tax_id: payer.tax_id,
+  ...(payer.email ? { email: payer.email } : {}),
+  address: {
+    street: payer.address.street,
+    number: payer.address.number,
+    ...(payer.address.complement ? { complement: payer.address.complement } : {}),
+    city: payer.address.city,
+    state: payer.address.state,
+    zip_code: payer.address.zip_code
+  }
+});
+
 const bankSlipPayload = (billing, config) => ({
   external_reference_id: externalReferenceForInvoice(billing.invoiceId),
   amount: billing.amount,
   due_date: billing.dueAt,
   instructions: [`Fatura ${billing.invoiceId} - TWT Airpack`],
   billing_scheme: config.billingScheme,
-  payer: billing.payer
+  payer: c6Payer(billing.payer)
 });
+
+const itauOurNumberForInvoice = (invoiceId) => {
+  const number = digits(invoiceId);
+  if (number.length <= 16) return number.padStart(8, '0');
+  const hexadecimal = createHash('sha256').update(number).digest('hex').slice(0, 13);
+  return (BigInt(`0x${hexadecimal}`) % 10000000000000000n).toString().padStart(16, '0');
+};
+
+const itauBankSlipPayload = (billing, config) => {
+  const payerTaxId = digits(billing.payer.tax_id);
+  const personType = payerTaxId.length === 14
+    ? {
+        codigo_tipo_pessoa: 'J',
+        numero_cadastro_nacional_pessoa_juridica: payerTaxId
+      }
+    : {
+        codigo_tipo_pessoa: 'F',
+        numero_cadastro_pessoa_fisica: payerTaxId
+      };
+  const payerAddress = billing.payer.address;
+  const street = [payerAddress.street, payerAddress.number, payerAddress.complement]
+    .filter((value) => value !== undefined && value !== null && String(value).trim())
+    .join(', ')
+    .slice(0, 100);
+  const ourNumber = itauOurNumberForInvoice(billing.invoiceId);
+  const yourNumber = `FAT${digits(billing.invoiceId)}`.slice(0, 20);
+
+  return {
+    etapa_processo_boleto: config.stage,
+    codigo_canal_operacao: 'API',
+    beneficiario: {
+      id_beneficiario: config.beneficiaryId
+    },
+    dado_boleto: {
+      descricao_instrumento_cobranca: 'boleto',
+      pagador: {
+        pessoa: {
+          nome_pessoa: billing.payer.name,
+          tipo_pessoa: personType
+        },
+        endereco: {
+          nome_logradouro: street,
+          nome_bairro: payerAddress.district || '',
+          nome_cidade: payerAddress.city,
+          sigla_UF: payerAddress.state,
+          numero_CEP: payerAddress.zip_code
+        },
+        ...(billing.payer.email ? { texto_endereco_email: billing.payer.email } : {})
+      },
+      codigo_carteira: config.wallet,
+      dados_individuais_boleto: [{
+        numero_nosso_numero: ourNumber,
+        data_vencimento: billing.dueAt,
+        valor_titulo: billing.amount.toFixed(2),
+        texto_seu_numero: yourNumber,
+        texto_uso_beneficiario: yourNumber
+      }],
+      codigo_especie: config.species,
+      codigo_aceite: config.acceptance,
+      ...(billing.issuedAt ? { data_emissao: billing.issuedAt } : {}),
+      pagamento_parcial: false
+    }
+  };
+};
 
 const publicRecord = (record, created = false) => ({
   invoiceId: record.invoiceId,
@@ -169,7 +255,10 @@ const publicRecord = (record, created = false) => ({
   dueAt: record.dueAt,
   bank: record.bank || 'c6',
   digitableLine: record.digitableLine || '',
-  barCode: record.barCode || ''
+  barCode: record.barCode || '',
+  ...(record.state === 'validated'
+    ? { message: 'Dados validados pelo Itaú. Nenhum boleto foi registrado.' }
+    : {})
 });
 
 const generationConflict = (state) => Object.assign(
@@ -179,21 +268,12 @@ const generationConflict = (state) => Object.assign(
   { statusCode: 409 }
 );
 
-const itauContractRequired = () => Object.assign(new Error(
-  'A fatura é da DSL e deve gerar boleto no Itaú. A integração aguarda as credenciais e a especificação de Cobrança liberadas pelo Itaú para a conta da DSL.'
-), {
-  statusCode: 503,
-  expose: true
-});
-
 const generateInvoiceBankSlip = async (invoiceId, dependencies = {}) => {
   if (!validInvoiceId(invoiceId)) throw validationError('Número da fatura inválido.');
   const getRecord = dependencies.getBankSlipRecord || store.getBankSlipRecord;
   const claim = dependencies.claimBankSlip || store.claimBankSlip;
   const save = dependencies.saveBankSlipRecord || store.saveBankSlipRecord;
   const release = dependencies.releaseBankSlipClaim || store.releaseBankSlipClaim;
-  const create = dependencies.createC6BankSlip || createC6BankSlip;
-  const getConfig = dependencies.c6Config || c6Config;
   const now = dependencies.now || new Date();
   const normalizedInvoiceId = String(invoiceId);
   const billing = await resolveInvoiceBillingData(normalizedInvoiceId, dependencies);
@@ -209,8 +289,39 @@ const generateInvoiceBankSlip = async (invoiceId, dependencies = {}) => {
     throw generationConflict(existing.state);
   }
 
-  if (billing.bank.id === 'itau') throw itauContractRequired();
+  const isItau = billing.bank.id === 'itau';
+  const getConfig = isItau
+    ? (dependencies.itauBoletoConfig || itauBoletoConfig)
+    : (dependencies.c6Config || c6Config);
+  const create = isItau
+    ? (dependencies.createItauBankSlip || createItauBankSlip)
+    : (dependencies.createC6BankSlip || createC6BankSlip);
   const config = getConfig();
+  const payload = isItau
+    ? itauBankSlipPayload(billing, config)
+    : bankSlipPayload(billing, config);
+
+  if (isItau && config.stage === 'validacao') {
+    const validation = await create(payload, { config });
+    if (validation.registered) {
+      throw Object.assign(new Error(
+        'O Itaú informou efetivação durante uma chamada de validação. Confira o título antes de tentar novamente.'
+      ), {
+        statusCode: 409,
+        ambiguousBankState: true
+      });
+    }
+    return publicRecord({
+      state: 'validated',
+      invoiceId: billing.invoiceId,
+      bank: billing.bank.id,
+      amount: billing.amount,
+      dueAt: billing.dueAt,
+      digitableLine: validation.digitableLine,
+      barCode: validation.barCode
+    }, false);
+  }
+
   const processingRecord = {
     state: 'processing',
     invoiceId: billing.invoiceId,
@@ -227,27 +338,57 @@ const generateInvoiceBankSlip = async (invoiceId, dependencies = {}) => {
 
   let bankResponse = null;
   try {
-    const payload = bankSlipPayload(billing, config);
     bankResponse = await create(payload, { config });
     const bankSlipId = String(bankResponse?.id || '').trim();
     if (!bankSlipId) {
-      throw Object.assign(new Error('O C6 não retornou o identificador do boleto.'), {
+      throw Object.assign(new Error(`O ${billing.bank.label} não retornou o identificador do boleto.`), {
         statusCode: 502,
         receivedResponse: true,
         ambiguousBankState: true
       });
     }
+    if (isItau && (
+      !bankResponse.registered ||
+      digits(bankResponse.digitableLine).length < 47 ||
+      digits(bankResponse.barCode).length !== 44
+    )) {
+      throw Object.assign(new Error(
+        'O Itaú recebeu a efetivação, mas não retornou a linha digitável e o código de barras completos.'
+      ), {
+        statusCode: 502,
+        receivedResponse: true,
+        ambiguousBankState: true
+      });
+    }
+    const itauDetail = payload?.dado_boleto?.dados_individuais_boleto?.[0] || {};
+    const responseAmount = Number(bankResponse.amount);
     const readyRecord = {
       state: 'ready',
       invoiceId: billing.invoiceId,
       issuerCnpj: billing.issuerCnpj,
       bank: billing.bank.id,
       bankSlipId,
-      externalReferenceId: payload.external_reference_id,
-      amount: Number(bankResponse.amount ?? billing.amount),
-      dueAt: dateOnly(bankResponse.due_date) || billing.dueAt,
-      digitableLine: String(bankResponse.digitable_line || ''),
-      barCode: String(bankResponse.bar_code || ''),
+      externalReferenceId: payload.external_reference_id || itauDetail.texto_seu_numero || '',
+      amount: Number.isFinite(responseAmount) && responseAmount > 0
+        ? responseAmount
+        : billing.amount,
+      issuedAt: billing.issuedAt,
+      dueAt: dateOnly(bankResponse.dueDate || bankResponse.due_date) || billing.dueAt,
+      digitableLine: String(bankResponse.digitableLine || bankResponse.digitable_line || ''),
+      barCode: String(bankResponse.barCode || bankResponse.bar_code || ''),
+      payer: billing.payer,
+      ...(isItau ? {
+        beneficiaryId: config.beneficiaryId,
+        beneficiaryName: config.beneficiaryName,
+        beneficiaryTaxId: config.beneficiaryTaxId,
+        wallet: bankResponse.wallet || config.wallet,
+        ourNumber: bankResponse.ourNumber || itauDetail.numero_nosso_numero,
+        yourNumber: bankResponse.yourNumber || itauDetail.texto_seu_numero,
+        acceptance: config.acceptance,
+        species: config.species,
+        speciesLabel: 'DS',
+        instructions: `Referente à fatura ${billing.invoiceId}. Não aceitar pagamento após o vencimento.`
+      } : {}),
       createdAt: now.toISOString()
     };
     await save(billing.invoiceId, readyRecord);
@@ -270,12 +411,15 @@ const generateInvoiceBankSlip = async (invoiceId, dependencies = {}) => {
 const getInvoiceBankSlipPdf = async (invoiceId, dependencies = {}) => {
   if (!validInvoiceId(invoiceId)) throw validationError('Número da fatura inválido.');
   const getRecord = dependencies.getBankSlipRecord || store.getBankSlipRecord;
-  const download = dependencies.getC6BankSlipPdf || getC6BankSlipPdf;
   const record = await getRecord(String(invoiceId));
   if (!record || record.state !== 'ready' || !record.bankSlipId) {
     throw Object.assign(new Error('Nenhum boleto foi gerado para esta fatura.'), { statusCode: 404 });
   }
-  if ((record.bank || 'c6') !== 'c6') throw itauContractRequired();
+  if (record.bank === 'itau') {
+    const render = dependencies.renderItauBankSlipPdf || renderItauBankSlipPdf;
+    return render(record);
+  }
+  const download = dependencies.getC6BankSlipPdf || getC6BankSlipPdf;
   const config = (dependencies.c6Config || c6Config)();
   return download(record.bankSlipId, { config });
 };
@@ -286,7 +430,8 @@ module.exports = {
   issuerFromInvoice,
   resolveInvoiceBillingData,
   bankSlipPayload,
-  itauContractRequired,
+  itauOurNumberForInvoice,
+  itauBankSlipPayload,
   generateInvoiceBankSlip,
   getInvoiceBankSlipPdf
 };
