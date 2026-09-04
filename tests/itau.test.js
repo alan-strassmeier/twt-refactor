@@ -202,6 +202,13 @@ test('emite boleto pelo endpoint oficial usando OAuth2 e mTLS', async () => {
   assert.equal(requests[1].url, 'https://api.gateway.itau.com.br/cash_management/v2/boletos');
   assert.equal(requests[1].method, 'POST');
   assert.equal(requests[1].headers.Authorization, 'Bearer token-itau');
+  assert.deepEqual(JSON.parse(requests[1].body), {
+    data: {
+      etapa_processo_boleto: 'efetivacao',
+      beneficiario: { id_beneficiario: '150000052061' },
+      dado_boleto: { dados_individuais_boleto: [{ valor_titulo: '501.87' }] }
+    }
+  });
   assert.equal(result.id, 'boleto-id');
   assert.equal(result.registered, true);
   assert.equal(result.amount, 501.87);

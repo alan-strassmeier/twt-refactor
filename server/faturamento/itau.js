@@ -433,7 +433,7 @@ const createItauBankSlip = async (payload, options = {}) => {
         Accept: 'application/json',
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ data: payload }),
       ...options,
       config
     });
