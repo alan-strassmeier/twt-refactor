@@ -32,7 +32,12 @@ const XML = `<?xml version="1.0" encoding="utf-8"?>
 test('localiza os CT-es da fatura pelo DOCCOB sem depender da empresa', async () => {
   const result = await resolveInvoiceCteKeys('11532', {
     requestExactInvoice: async () => ({
-      invoice: { fatura: 11532, cnpj_cliente: '41.870.054/0002-76' }
+      invoice: {
+        fatura: 11532,
+        cnpj_cliente: '41.870.054/0002-76',
+        cliente_nome: 'JIMI BRASIL LTDA',
+        forma_pagamento: 'BOLETO'
+      }
     }),
     findDoccobForInvoice: async (input) => {
       assert.deepEqual(input, { invoiceId: 11532, clientCnpj: '41870054000276' });
@@ -41,6 +46,9 @@ test('localiza os CT-es da fatura pelo DOCCOB sem depender da empresa', async ()
   });
   assert.deepEqual(result.cteKeys, [KEY]);
   assert.equal(result.source, 'doccob');
+  assert.equal(result.clientCnpj, '41870054000276');
+  assert.equal(result.clientName, 'JIMI BRASIL LTDA');
+  assert.equal(result.paymentMethod, 'BOLETO');
 });
 
 test('fatura sem chave de CT-e não oferece DACTE', async () => {

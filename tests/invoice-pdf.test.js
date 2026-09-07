@@ -9,6 +9,7 @@ const {
   exactInvoiceRecord,
   companyFromPayload,
   normalizedCompany,
+  invoiceTedDocPayment,
   linkedDocumentsFromInvoice,
   linkedDocumentsFromDoccob,
   detailIdentifiers,
@@ -100,6 +101,39 @@ test('seleciona e normaliza o cadastro exato do cliente para o PDF', () => {
     city: 'PORTO ALEGRE',
     state: 'RS',
     cep: '90010-260'
+  });
+});
+
+test('monta o quadro TED/DOC com o lançamento e a parcela da Brudam', () => {
+  const payment = invoiceTedDocPayment({
+    invoice: { id: 21283, parcela: 1, nparcela: 1 },
+    normalizedInvoice: {
+      internalId: 21283,
+      client: 'BL INDUSTRIA OTICA LTDA',
+      clientDocument: '27011022000103',
+      dueAt: '2026-11-06',
+      total: 2193.61
+    },
+    client: {
+      name: 'BL INDUSTRIA OTICA LTDA',
+      tradeName: 'BL INDUSTRIA OTICA LTDA POA',
+      document: '27011022000103'
+    },
+    issuerDocument: '97434690000129'
+  });
+  assert.deepEqual(payment, {
+    type: 'ted_doc',
+    number: 21283,
+    dueAt: '2026-11-06',
+    installment: '1/1',
+    value: 2193.61,
+    method: 'TRANSFERENCIA TED/DOC',
+    account: {
+      method: 'TRANSFERENCIA TED/DOC',
+      label: 'ITAU- DSL',
+      agency: '0602-0',
+      account: '16666-2'
+    }
   });
 });
 
@@ -331,7 +365,20 @@ test('gera somente a página principal da fatura em PDF A4', async () => {
       total: 677.10,
       surcharge: 0,
       discount: 0,
-      nfs: ''
+      nfs: '',
+      payment: {
+        type: 'ted_doc',
+        number: 20822,
+        dueAt: '2026-07-24',
+        installment: '1/1',
+        value: 677.10,
+        method: 'TRANSFERENCIA TED/DOC',
+        account: {
+          label: 'ITAU - DSL',
+          agency: '0602-0',
+          account: '16666-2'
+        }
+      }
     },
     client: {
       name: 'KRALIK DESPACHANTES ADUANEIROS',

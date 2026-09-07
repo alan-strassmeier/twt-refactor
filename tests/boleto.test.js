@@ -22,7 +22,10 @@ const {
 } = require('../server/faturamento/boleto');
 const {
   BILLING_BANKS,
-  bankSlipBankForIssuer
+  WHITE_MARTINS_TED_DOC_CNPJS,
+  ELECNOR_TED_DOC_CNPJS,
+  bankSlipBankForIssuer,
+  requiresTedDocPayment
 } = require('../server/faturamento/billing-rules');
 
 const twtInvoice = {
@@ -138,6 +141,41 @@ test('roteia TWT para C6 e DSL para Itaú usando o emitente confirmado no DOCCOB
   await assert.rejects(
     resolveInvoiceBillingData('11518', billingDependencies('00000000000000')),
     (error) => error.statusCode === 403 && /não possui banco de cobrança/.test(error.message)
+  );
+});
+
+test('identifica clientes e forma de pagamento exclusivos de TED/DOC', () => {
+  assert.equal(requiresTedDocPayment({
+    clientNames: ['THE WHITE MARTINS GASES INDUSTRIAIS DO NORDESTE LTDA.']
+  }), true);
+  assert.equal(requiresTedDocPayment({
+    clientNames: ['RS WHITE MARTINS GASES INDUSTRIAIS LTDA 0063']
+  }), true);
+  assert.equal(requiresTedDocPayment({ clientNames: ['ELECNOR DO BRASIL LTDA'] }), true);
+  assert.equal(requiresTedDocPayment({ clientNames: ['BL INDUSTRIA OTICA LTDA POA'] }), true);
+  assert.equal(requiresTedDocPayment({ clientDocument: '27.011.022/0001-03' }), true);
+  for (const cnpj of [
+    ...WHITE_MARTINS_TED_DOC_CNPJS,
+    ...ELECNOR_TED_DOC_CNPJS
+  ]) {
+    assert.equal(requiresTedDocPayment({ clientDocument: cnpj }), true, cnpj);
+  }
+  assert.equal(requiresTedDocPayment({ clientDocument: '309286' }), false);
+  assert.equal(requiresTedDocPayment({ clientDocument: '309311' }), false);
+  assert.equal(requiresTedDocPayment({ paymentMethod: 'Transferência TED/DOC' }), true);
+  assert.equal(requiresTedDocPayment({ clientNames: ['OUTRO CLIENTE LTDA'] }), false);
+});
+
+test('bloqueia geração de boleto para cliente com pagamento por TED/DOC', async () => {
+  await assert.rejects(
+    resolveInvoiceBillingData('11518', {
+      ...billingDependencies('97434690000129'),
+      fetchCompany: async () => ({
+        ...payerCompany,
+        fantasia: 'THE WHITE MARTINS GASES INDUSTRIAIS DO NORDESTE LTDA.'
+      })
+    }),
+    (error) => error.statusCode === 422 && /TED\/DOC/.test(error.message)
   );
 });
 
@@ -334,7 +372,7 @@ test('expõe o status e a mensagem segura quando a consulta Itaú falha', () => 
       receivedResponse: true
     })
   );
-  assert.equal(error.statusCode, 503);
+  assert.equal(error.statusCode, 403);
   assert.equal(error.expose, true);
   assert.match(error.message, /HTTP 403/);
   assert.match(error.message, /Acesso não autorizado/);
