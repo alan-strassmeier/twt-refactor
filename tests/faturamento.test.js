@@ -125,6 +125,17 @@ test('coleta os filtros do formulário antes de desabilitar os campos', () => {
   assert.match(loadInvoices, /faturas\?\$\{params\}/);
 });
 
+test('usa datas brasileiras nos filtros e converte para ISO antes da API', () => {
+  const html = readFileSync(require.resolve('../faturamento/index.html'), 'utf8');
+  const source = readFileSync(require.resolve('../faturamento/app.js'), 'utf8');
+  assert.doesNotMatch(html, /type="date"/);
+  assert.equal((html.match(/data-date-filter/g) || []).length, 4);
+  assert.equal((html.match(/placeholder="dd\/mm\/aaaa"/g) || []).length, 4);
+  assert.match(source, /const dateFilterToIso/);
+  assert.match(source, /return `\$\{year\}-\$\{month\}-\$\{day\}`/);
+  assert.match(source, /Informe uma data válida no formato dd\/mm\/aaaa/);
+});
+
 test('coluna Visualizar oferece Fatura, DACTE, boleto e NFS-e conforme o emitente', () => {
   const html = readFileSync(require.resolve('../faturamento/index.html'), 'utf8');
   const source = readFileSync(require.resolve('../faturamento/app.js'), 'utf8');

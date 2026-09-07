@@ -258,7 +258,8 @@ test('efetiva boleto DSL no Itaú uma única vez e armazena dados para o PDF', a
         digitableLine: '34191234567890123456789012345678901234567890123',
         barCode: '34191234567890123456789012345678901234567890'
       };
-    }
+    },
+    queryItauBankSlips: async () => []
   };
   const first = await generateInvoiceBankSlip('11518', dependencies);
   const second = await generateInvoiceBankSlip('11518', dependencies);
@@ -320,6 +321,58 @@ test('reconcilia uma efetivação Itaú em revisão sem repetir o POST', async (
   assert.equal(result.created, false);
   assert.equal(record.bankSlipId, '15000005206110900011518');
   assert.equal(queryCalls, 1);
+  assert.equal(createCalls, 0);
+});
+
+test('reaproveita boleto Itaú já emitido pela Brudam sem executar o POST', async () => {
+  let record = null;
+  let createCalls = 0;
+  let broadQueryCalls = 0;
+  const dependencies = {
+    ...billingDependencies('97434690000129'),
+    now: new Date('2026-08-08T12:00:00Z'),
+    getBankSlipRecord: async () => record,
+    saveBankSlipRecord: async (_invoiceId, value) => { record = value; },
+    claimBankSlip: async () => {
+      throw new Error('Não deve criar lock quando o boleto já existe');
+    },
+    itauBoletoConfig: () => ({
+      stage: 'efetivacao',
+      beneficiaryId: '150000052061',
+      beneficiaryName: 'DSL DO BRASIL TRANSPORTE E LOGISTICA LTDA',
+      beneficiaryTaxId: '97434690000129',
+      wallet: '109',
+      species: '01',
+      acceptance: 'N'
+    }),
+    createItauBankSlip: async () => {
+      createCalls += 1;
+      throw new Error('POST não deveria ser executado');
+    },
+    queryItauBankSlips: async (criteria) => {
+      if (criteria.ourNumber) return [];
+      broadQueryCalls += 1;
+      if (criteria.inclusionDate !== '2026-08-03') return [];
+      return [{
+        id: 'boleto-criado-na-brudam',
+        amount: 1844,
+        dueDate: '2026-08-14',
+        wallet: '109',
+        ourNumber: '98765432',
+        yourNumber: 'FAT11518',
+        payerTaxId: '28759933000186',
+        digitableLine: '34191234567890123456789012345678901234567890123',
+        barCode: '34191234567890123456789012345678901234567890'
+      }];
+    }
+  };
+
+  const result = await generateInvoiceBankSlip('11518', dependencies);
+  assert.equal(result.status, 'ready');
+  assert.equal(result.created, false);
+  assert.equal(record.bankSlipId, 'boleto-criado-na-brudam');
+  assert.equal(record.ourNumber, '98765432');
+  assert.equal(broadQueryCalls > 0, true);
   assert.equal(createCalls, 0);
 });
 

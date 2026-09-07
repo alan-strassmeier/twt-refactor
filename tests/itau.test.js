@@ -342,3 +342,57 @@ test('consulta boletos pelos parâmetros documentados pelo Itaú', async () => {
   assert.equal(url.searchParams.get('view'), 'specific');
   assert.equal(list[0].ourNumber, '00011532');
 });
+
+test('segue o redirecionamento 303 e aceita a lista direta documentada pelo Itaú', async () => {
+  resetTokenCache();
+  const config = itauBoletoConfig(configEnvironment());
+  const requests = [];
+  const request = async (options) => {
+    requests.push(options);
+    if (options.url === TOKEN_URL) {
+      return {
+        statusCode: 200,
+        headers: {},
+        body: Buffer.from(JSON.stringify({ access_token: 'token-itau', expires_in: 300 }))
+      };
+    }
+    if (requests.length === 2) {
+      return {
+        statusCode: 303,
+        headers: { location: '/cash_management/v2/boletos/consulta-processada' },
+        body: Buffer.alloc(0)
+      };
+    }
+    return {
+      statusCode: 200,
+      headers: {},
+      body: Buffer.from(JSON.stringify([{
+        id_boleto: 'boleto-redirecionado',
+        dado_boleto: {
+          pagador: {
+            pessoa: {
+              tipo_pessoa: { numero_cadastro_nacional_pessoa_juridica: '28759933000186' }
+            }
+          },
+          dados_individuais_boleto: [{
+            numero_nosso_numero: '00011532',
+            numero_linha_digitavel: '34191234567890123456789012345678901234567890123',
+            codigo_barras: '34191234567890123456789012345678901234567890'
+          }]
+        }
+      }]))
+    };
+  };
+
+  const list = await queryItauBankSlips({
+    wallet: '109',
+    ourNumber: '00011532',
+    inclusionDate: '2026-09-04',
+    view: 'specific'
+  }, { config, request });
+
+  assert.equal(requests.length, 3);
+  assert.equal(requests[2].url, 'https://api.gateway.itau.com.br/cash_management/v2/boletos/consulta-processada');
+  assert.equal(list[0].id, 'boleto-redirecionado');
+  assert.equal(list[0].payerTaxId, '28759933000186');
+});

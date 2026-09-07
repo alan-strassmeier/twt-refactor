@@ -351,6 +351,112 @@ const validRegisteredItauResponse = (bankResponse) => Boolean(
   digits(bankResponse.barCode).length === 44
 );
 
+const sameMoney = (left, right) => (
+  Number.isFinite(Number(left)) &&
+  Math.round(Number(left) * 100) === Math.round(Number(right) * 100)
+);
+
+const itauBankSlipMatchesInvoice = (bankResponse, billing, payload, allowFinancialMatch = false) => {
+  const expected = payload?.dado_boleto?.dados_individuais_boleto?.[0] || {};
+  const invoiceId = digits(billing.invoiceId);
+  const ourNumberMatches = digits(bankResponse.ourNumber) === digits(expected.numero_nosso_numero);
+  const yourNumber = digits(bankResponse.yourNumber);
+  const invoiceReferenceMatches = Boolean(yourNumber) && (
+    yourNumber === invoiceId || yourNumber.endsWith(invoiceId)
+  );
+  if (ourNumberMatches || invoiceReferenceMatches) return true;
+  if (!allowFinancialMatch) return false;
+
+  return (
+    digits(bankResponse.payerTaxId) === digits(billing.payer.tax_id) &&
+    dateOnly(bankResponse.dueDate) === billing.dueAt &&
+    sameMoney(bankResponse.amount, billing.amount)
+  );
+};
+
+const findExistingItauBankSlip = async ({
+  billing,
+  config,
+  payload,
+  query,
+  attemptedAt = ''
+}) => {
+  const detail = payload.dado_boleto.dados_individuais_boleto[0];
+  const dates = [...new Set([
+    attemptedAt ? saoPauloDate(attemptedAt) : '',
+    attemptedAt ? dateOnly(attemptedAt) : '',
+    billing.issuedAt
+  ].filter(Boolean))];
+  const searches = [
+    ...dates.map((inclusionDate) => ({
+      criteria: {
+        beneficiaryId: config.beneficiaryId,
+        wallet: config.wallet,
+        ourNumber: detail.numero_nosso_numero,
+        inclusionDate,
+        view: 'specific'
+      },
+      allowFinancialMatch: false
+    })),
+    {
+      criteria: {
+        beneficiaryId: config.beneficiaryId,
+        wallet: config.wallet,
+        ourNumber: detail.numero_nosso_numero,
+        view: 'full'
+      },
+      allowFinancialMatch: false
+    },
+    ...dates.map((inclusionDate) => ({
+      criteria: {
+        beneficiaryId: config.beneficiaryId,
+        wallet: config.wallet,
+        inclusionDate,
+        view: 'full'
+      },
+      allowFinancialMatch: true
+    }))
+  ];
+  const errors = [];
+  let successfulSearches = 0;
+  let successfulFinancialSearches = 0;
+
+  for (const search of searches) {
+    let matches;
+    try {
+      matches = await query(search.criteria, { config });
+      successfulSearches += 1;
+      if (search.allowFinancialMatch) successfulFinancialSearches += 1;
+    } catch (error) {
+      errors.push(error);
+      continue;
+    }
+    const candidates = (matches || [])
+      .map((match) => normalizeRegisteredItauResponse(match, payload, config))
+      .filter((match) => (
+        validRegisteredItauResponse(match) &&
+        itauBankSlipMatchesInvoice(match, billing, payload, search.allowFinancialMatch)
+      ));
+    if (candidates.length === 1) return candidates[0];
+    if (candidates.length > 1) {
+      const references = candidates.filter((match) => (
+        itauBankSlipMatchesInvoice(match, billing, payload, false)
+      ));
+      if (references.length === 1) return references[0];
+      throw Object.assign(new Error(
+        'O Itaú retornou mais de um boleto compatível com esta fatura. Confira os títulos no Bankline.'
+      ), { statusCode: 409 });
+    }
+  }
+
+  if (dates.length && !successfulFinancialSearches) {
+    const financialError = errors.find((error) => error);
+    if (financialError) throw financialError;
+  }
+  if (!successfulSearches && errors.length) throw errors[0];
+  return null;
+};
+
 const generateInvoiceBankSlip = async (invoiceId, dependencies = {}) => {
   if (!validInvoiceId(invoiceId)) throw validationError('Número da fatura inválido.');
   const getRecord = dependencies.getBankSlipRecord || store.getBankSlipRecord;
@@ -383,33 +489,29 @@ const generateInvoiceBankSlip = async (invoiceId, dependencies = {}) => {
 
   if (existing?.state === 'review' && isItau) {
     const query = dependencies.queryItauBankSlips || queryItauBankSlips;
-    const detail = payload.dado_boleto.dados_individuais_boleto[0];
     const attemptedAt = existing.startedAt || existing.reviewedAt || now.toISOString();
-    const inclusionDates = [...new Set([
-      saoPauloDate(attemptedAt),
-      dateOnly(attemptedAt)
-    ].filter(Boolean))];
-    let matches = [];
+    let recovered;
     try {
-      for (const inclusionDate of inclusionDates) {
-        matches = await query({
-          beneficiaryId: config.beneficiaryId,
-          wallet: config.wallet,
-          ourNumber: detail.numero_nosso_numero,
-          inclusionDate,
-          view: 'specific'
-        }, { config });
-        if (matches.length) break;
-      }
+      recovered = await findExistingItauBankSlip({
+        billing,
+        config,
+        payload,
+        query,
+        attemptedAt
+      });
     } catch (error) {
-      throw Object.assign(new Error('Não foi possível conferir no Itaú a tentativa anterior de emissão.'), {
-        statusCode: 503,
+      if (error.statusCode === 409) throw error;
+      const reason = error.expose && error.message ? `: ${error.message}` : '';
+      throw Object.assign(new Error(`Não foi possível conferir no Itaú a tentativa anterior de emissão${reason}`), {
+        statusCode: error.statusCode === 422 ? 422 : 503,
         expose: true,
-        cause: error
+        cause: error,
+        ...(Array.isArray(error.validationDetails)
+          ? { validationDetails: error.validationDetails }
+          : {})
       });
     }
-    const recovered = normalizeRegisteredItauResponse(matches?.[0], payload, config);
-    if (validRegisteredItauResponse(recovered)) {
+    if (recovered) {
       const readyRecord = readyRecordFromBankResponse({
         billing,
         config,
@@ -448,6 +550,43 @@ const generateInvoiceBankSlip = async (invoiceId, dependencies = {}) => {
       digitableLine: validation.digitableLine,
       barCode: validation.barCode
     }, false);
+  }
+
+  if (isItau) {
+    const query = dependencies.queryItauBankSlips || queryItauBankSlips;
+    let recovered;
+    try {
+      recovered = await findExistingItauBankSlip({
+        billing,
+        config,
+        payload,
+        query,
+        attemptedAt: now.toISOString()
+      });
+    } catch (error) {
+      if (error.statusCode === 409) throw error;
+      const reason = error.expose && error.message ? `: ${error.message}` : '';
+      throw Object.assign(new Error(`Não foi possível verificar se a fatura já possui boleto no Itaú${reason}`), {
+        statusCode: error.statusCode === 422 ? 422 : 503,
+        expose: true,
+        cause: error,
+        ...(Array.isArray(error.validationDetails)
+          ? { validationDetails: error.validationDetails }
+          : {})
+      });
+    }
+    if (recovered) {
+      const readyRecord = readyRecordFromBankResponse({
+        billing,
+        config,
+        payload,
+        bankResponse: recovered,
+        now,
+        isItau
+      });
+      await save(billing.invoiceId, readyRecord);
+      return publicRecord(readyRecord, false);
+    }
   }
 
   const processingRecord = {
