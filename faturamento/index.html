@@ -7,9 +7,9 @@
   <meta name="theme-color" content="#112a40">
   <title>Faturamento | TWT Airpack</title>
   <link rel="icon" href="/favicon.ico">
-  <link rel="stylesheet" href="/faturamento/styles.css?v=8">
+  <link rel="stylesheet" href="/faturamento/styles.css?v=9">
   <script src="/faturamento/sort.js?v=1" defer></script>
-  <script src="/faturamento/app.js?v=12" defer></script>
+  <script src="/faturamento/app.js?v=13" defer></script>
 </head>
 <body>
   <div class="page-shell">
@@ -76,19 +76,35 @@
           <div class="filter-grid">
             <label>
               Emissão inicial
-              <input type="text" name="emissao[gte]" data-date-filter inputmode="numeric" autocomplete="off" maxlength="10" placeholder="dd/mm/aaaa">
+              <span class="date-filter-control">
+                <input type="text" name="emissao[gte]" data-date-filter inputmode="numeric" autocomplete="off" maxlength="10" placeholder="dd/mm/aaaa">
+                <span class="date-filter-icon" aria-hidden="true"></span>
+                <input class="date-filter-picker" type="date" data-date-picker aria-label="Abrir calendário da emissão inicial">
+              </span>
             </label>
             <label>
               Emissão final
-              <input type="text" name="emissao[lte]" data-date-filter inputmode="numeric" autocomplete="off" maxlength="10" placeholder="dd/mm/aaaa">
+              <span class="date-filter-control">
+                <input type="text" name="emissao[lte]" data-date-filter inputmode="numeric" autocomplete="off" maxlength="10" placeholder="dd/mm/aaaa">
+                <span class="date-filter-icon" aria-hidden="true"></span>
+                <input class="date-filter-picker" type="date" data-date-picker aria-label="Abrir calendário da emissão final">
+              </span>
             </label>
             <label>
               Vencimento inicial
-              <input type="text" name="vencimento[gte]" data-date-filter inputmode="numeric" autocomplete="off" maxlength="10" placeholder="dd/mm/aaaa">
+              <span class="date-filter-control">
+                <input type="text" name="vencimento[gte]" data-date-filter inputmode="numeric" autocomplete="off" maxlength="10" placeholder="dd/mm/aaaa">
+                <span class="date-filter-icon" aria-hidden="true"></span>
+                <input class="date-filter-picker" type="date" data-date-picker aria-label="Abrir calendário do vencimento inicial">
+              </span>
             </label>
             <label>
               Vencimento final
-              <input type="text" name="vencimento[lte]" data-date-filter inputmode="numeric" autocomplete="off" maxlength="10" placeholder="dd/mm/aaaa">
+              <span class="date-filter-control">
+                <input type="text" name="vencimento[lte]" data-date-filter inputmode="numeric" autocomplete="off" maxlength="10" placeholder="dd/mm/aaaa">
+                <span class="date-filter-icon" aria-hidden="true"></span>
+                <input class="date-filter-picker" type="date" data-date-picker aria-label="Abrir calendário do vencimento final">
+              </span>
             </label>
             <label>
               Status

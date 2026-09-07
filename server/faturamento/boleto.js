@@ -457,6 +457,36 @@ const findExistingItauBankSlip = async ({
   return null;
 };
 
+const itauLookupError = (prefix, error) => {
+  const upstreamStatus = Number(error?.upstreamStatus);
+  const safeMessage = String(error?.message || '')
+    .replace(/[\r\n]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 240);
+  let detail = '';
+  if (Number.isInteger(upstreamStatus) && upstreamStatus > 0) {
+    detail = ` O Itaú respondeu HTTP ${upstreamStatus}${safeMessage ? `: ${safeMessage}` : '.'}`;
+  } else if (error?.expose && safeMessage) {
+    detail = ` ${safeMessage}`;
+  } else if (error?.name === 'AbortError' || error?.statusCode === 504) {
+    detail = ' A consulta ao Itaú excedeu o tempo limite.';
+  } else if (/^[A-Z][A-Z0-9_]+$/.test(String(error?.code || ''))) {
+    detail = ` Falha de comunicação com o Itaú (${error.code}).`;
+  } else {
+    detail = ' A consulta falhou antes de receber uma resposta HTTP.';
+  }
+  return Object.assign(new Error(`${prefix}.${detail}`.trim()), {
+    statusCode: error?.statusCode === 422 ? 422 : 503,
+    expose: true,
+    cause: error,
+    ...(Number.isInteger(upstreamStatus) ? { upstreamStatus } : {}),
+    ...(Array.isArray(error?.validationDetails)
+      ? { validationDetails: error.validationDetails }
+      : {})
+  });
+};
+
 const generateInvoiceBankSlip = async (invoiceId, dependencies = {}) => {
   if (!validInvoiceId(invoiceId)) throw validationError('Número da fatura inválido.');
   const getRecord = dependencies.getBankSlipRecord || store.getBankSlipRecord;
@@ -501,15 +531,10 @@ const generateInvoiceBankSlip = async (invoiceId, dependencies = {}) => {
       });
     } catch (error) {
       if (error.statusCode === 409) throw error;
-      const reason = error.expose && error.message ? `: ${error.message}` : '';
-      throw Object.assign(new Error(`Não foi possível conferir no Itaú a tentativa anterior de emissão${reason}`), {
-        statusCode: error.statusCode === 422 ? 422 : 503,
-        expose: true,
-        cause: error,
-        ...(Array.isArray(error.validationDetails)
-          ? { validationDetails: error.validationDetails }
-          : {})
-      });
+      throw itauLookupError(
+        'Não foi possível conferir no Itaú a tentativa anterior de emissão',
+        error
+      );
     }
     if (recovered) {
       const readyRecord = readyRecordFromBankResponse({
@@ -565,15 +590,10 @@ const generateInvoiceBankSlip = async (invoiceId, dependencies = {}) => {
       });
     } catch (error) {
       if (error.statusCode === 409) throw error;
-      const reason = error.expose && error.message ? `: ${error.message}` : '';
-      throw Object.assign(new Error(`Não foi possível verificar se a fatura já possui boleto no Itaú${reason}`), {
-        statusCode: error.statusCode === 422 ? 422 : 503,
-        expose: true,
-        cause: error,
-        ...(Array.isArray(error.validationDetails)
-          ? { validationDetails: error.validationDetails }
-          : {})
-      });
+      throw itauLookupError(
+        'Não foi possível verificar se a fatura já possui boleto no Itaú',
+        error
+      );
     }
     if (recovered) {
       const readyRecord = readyRecordFromBankResponse({
@@ -675,6 +695,7 @@ module.exports = {
   itauAmountForPayload,
   itauBankSlipPayload,
   itauBankSlipId,
+  itauLookupError,
   generateInvoiceBankSlip,
   getInvoiceBankSlipPdf
 };

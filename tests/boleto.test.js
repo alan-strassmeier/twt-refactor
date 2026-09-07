@@ -16,6 +16,7 @@ const {
   itauAmountForPayload,
   itauBankSlipPayload,
   itauBankSlipId,
+  itauLookupError,
   generateInvoiceBankSlip,
   getInvoiceBankSlipPdf
 } = require('../server/faturamento/boleto');
@@ -322,6 +323,21 @@ test('reconcilia uma efetivação Itaú em revisão sem repetir o POST', async (
   assert.equal(record.bankSlipId, '15000005206110900011518');
   assert.equal(queryCalls, 1);
   assert.equal(createCalls, 0);
+});
+
+test('expõe o status e a mensagem segura quando a consulta Itaú falha', () => {
+  const error = itauLookupError(
+    'Não foi possível conferir no Itaú a tentativa anterior de emissão',
+    Object.assign(new Error('Acesso não autorizado para esta operação'), {
+      statusCode: 502,
+      upstreamStatus: 403,
+      receivedResponse: true
+    })
+  );
+  assert.equal(error.statusCode, 503);
+  assert.equal(error.expose, true);
+  assert.match(error.message, /HTTP 403/);
+  assert.match(error.message, /Acesso não autorizado/);
 });
 
 test('reaproveita boleto Itaú já emitido pela Brudam sem executar o POST', async () => {
