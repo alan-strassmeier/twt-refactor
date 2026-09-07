@@ -13,7 +13,8 @@ const {
 } = require('./c6');
 const {
   itauBoletoConfig,
-  createItauBankSlip
+  createItauBankSlip,
+  queryItauBankSlips
 } = require('./itau');
 const { renderItauBankSlipPdf } = require('./itau-boleto-pdf');
 const store = require('./boleto-store');
@@ -40,6 +41,20 @@ const externalReferenceForInvoice = (invoiceId, prefix = 'TWT') => {
 const dateOnly = (value) => {
   const match = String(value || '').match(/^(\d{4}-\d{2}-\d{2})/);
   return match?.[1] || '';
+};
+
+const saoPauloDate = (value) => {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/Sao_Paulo',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    }).formatToParts(date).map(({ type, value: part }) => [type, part])
+  );
+  return `${parts.year}-${parts.month}-${parts.day}`;
 };
 
 const validationError = (message) => Object.assign(new Error(message), { statusCode: 422 });
@@ -277,6 +292,65 @@ const generationConflict = (state) => Object.assign(
   { statusCode: 409 }
 );
 
+const itauBankSlipId = (bankResponse, payload, config) => {
+  const detail = payload?.dado_boleto?.dados_individuais_boleto?.[0] || {};
+  const beneficiaryId = digits(bankResponse?.beneficiaryId || config?.beneficiaryId);
+  const wallet = digits(bankResponse?.wallet || config?.wallet);
+  const ourNumber = digits(bankResponse?.ourNumber || detail.numero_nosso_numero);
+  if (
+    beneficiaryId.length !== 12 ||
+    wallet.length !== 3 ||
+    ourNumber.length < 8 ||
+    ourNumber.length > 16
+  ) return '';
+  return `${beneficiaryId}${wallet}${ourNumber}`;
+};
+
+const normalizeRegisteredItauResponse = (bankResponse, payload, config) => ({
+  ...bankResponse,
+  id: String(bankResponse?.id || itauBankSlipId(bankResponse, payload, config)).trim()
+});
+
+const readyRecordFromBankResponse = ({ billing, config, payload, bankResponse, now, isItau }) => {
+  const itauDetail = payload?.dado_boleto?.dados_individuais_boleto?.[0] || {};
+  const responseAmount = Number(bankResponse.amount);
+  return {
+    state: 'ready',
+    invoiceId: billing.invoiceId,
+    issuerCnpj: billing.issuerCnpj,
+    bank: billing.bank.id,
+    bankSlipId: bankResponse.id,
+    externalReferenceId: payload.external_reference_id || itauDetail.texto_seu_numero || '',
+    amount: Number.isFinite(responseAmount) && responseAmount > 0
+      ? responseAmount
+      : billing.amount,
+    issuedAt: billing.issuedAt,
+    dueAt: dateOnly(bankResponse.dueDate || bankResponse.due_date) || billing.dueAt,
+    digitableLine: String(bankResponse.digitableLine || bankResponse.digitable_line || ''),
+    barCode: String(bankResponse.barCode || bankResponse.bar_code || ''),
+    payer: billing.payer,
+    ...(isItau ? {
+      beneficiaryId: config.beneficiaryId,
+      beneficiaryName: config.beneficiaryName,
+      beneficiaryTaxId: config.beneficiaryTaxId,
+      wallet: bankResponse.wallet || config.wallet,
+      ourNumber: bankResponse.ourNumber || itauDetail.numero_nosso_numero,
+      yourNumber: bankResponse.yourNumber || itauDetail.texto_seu_numero,
+      acceptance: config.acceptance,
+      species: config.species,
+      speciesLabel: 'DS',
+      instructions: `Referente à fatura ${billing.invoiceId}. Não aceitar pagamento após o vencimento.`
+    } : {}),
+    createdAt: now.toISOString()
+  };
+};
+
+const validRegisteredItauResponse = (bankResponse) => Boolean(
+  bankResponse?.id &&
+  digits(bankResponse.digitableLine).length >= 47 &&
+  digits(bankResponse.barCode).length === 44
+);
+
 const generateInvoiceBankSlip = async (invoiceId, dependencies = {}) => {
   if (!validInvoiceId(invoiceId)) throw validationError('Número da fatura inválido.');
   const getRecord = dependencies.getBankSlipRecord || store.getBankSlipRecord;
@@ -294,9 +368,6 @@ const generateInvoiceBankSlip = async (invoiceId, dependencies = {}) => {
     });
   }
   if (existing?.state === 'ready') return publicRecord(existing, false);
-  if (existing?.state === 'processing' || existing?.state === 'review') {
-    throw generationConflict(existing.state);
-  }
 
   const isItau = billing.bank.id === 'itau';
   const getConfig = isItau
@@ -309,6 +380,54 @@ const generateInvoiceBankSlip = async (invoiceId, dependencies = {}) => {
   const payload = isItau
     ? itauBankSlipPayload(billing, config)
     : bankSlipPayload(billing, config);
+
+  if (existing?.state === 'review' && isItau) {
+    const query = dependencies.queryItauBankSlips || queryItauBankSlips;
+    const detail = payload.dado_boleto.dados_individuais_boleto[0];
+    const attemptedAt = existing.startedAt || existing.reviewedAt || now.toISOString();
+    const inclusionDates = [...new Set([
+      saoPauloDate(attemptedAt),
+      dateOnly(attemptedAt)
+    ].filter(Boolean))];
+    let matches = [];
+    try {
+      for (const inclusionDate of inclusionDates) {
+        matches = await query({
+          beneficiaryId: config.beneficiaryId,
+          wallet: config.wallet,
+          ourNumber: detail.numero_nosso_numero,
+          inclusionDate,
+          view: 'specific'
+        }, { config });
+        if (matches.length) break;
+      }
+    } catch (error) {
+      throw Object.assign(new Error('Não foi possível conferir no Itaú a tentativa anterior de emissão.'), {
+        statusCode: 503,
+        expose: true,
+        cause: error
+      });
+    }
+    const recovered = normalizeRegisteredItauResponse(matches?.[0], payload, config);
+    if (validRegisteredItauResponse(recovered)) {
+      const readyRecord = readyRecordFromBankResponse({
+        billing,
+        config,
+        payload,
+        bankResponse: recovered,
+        now,
+        isItau
+      });
+      await save(billing.invoiceId, readyRecord);
+      return publicRecord(readyRecord, false);
+    }
+    throw Object.assign(new Error(
+      'A tentativa anterior ainda não apareceu na consulta do Itaú. Confira o Bankline antes de emitir novamente.'
+    ), { statusCode: 409 });
+  }
+  if (existing?.state === 'processing' || existing?.state === 'review') {
+    throw generationConflict(existing.state);
+  }
 
   if (isItau && config.stage === 'validacao') {
     const validation = await create(payload, { config });
@@ -348,6 +467,7 @@ const generateInvoiceBankSlip = async (invoiceId, dependencies = {}) => {
   let bankResponse = null;
   try {
     bankResponse = await create(payload, { config });
+    if (isItau) bankResponse = normalizeRegisteredItauResponse(bankResponse, payload, config);
     const bankSlipId = String(bankResponse?.id || '').trim();
     if (!bankSlipId) {
       throw Object.assign(new Error(`O ${billing.bank.label} não retornou o identificador do boleto.`), {
@@ -356,11 +476,7 @@ const generateInvoiceBankSlip = async (invoiceId, dependencies = {}) => {
         ambiguousBankState: true
       });
     }
-    if (isItau && (
-      !bankResponse.registered ||
-      digits(bankResponse.digitableLine).length < 47 ||
-      digits(bankResponse.barCode).length !== 44
-    )) {
+    if (isItau && (!bankResponse.registered || !validRegisteredItauResponse(bankResponse))) {
       throw Object.assign(new Error(
         'O Itaú recebeu a efetivação, mas não retornou a linha digitável e o código de barras completos.'
       ), {
@@ -369,37 +485,14 @@ const generateInvoiceBankSlip = async (invoiceId, dependencies = {}) => {
         ambiguousBankState: true
       });
     }
-    const itauDetail = payload?.dado_boleto?.dados_individuais_boleto?.[0] || {};
-    const responseAmount = Number(bankResponse.amount);
-    const readyRecord = {
-      state: 'ready',
-      invoiceId: billing.invoiceId,
-      issuerCnpj: billing.issuerCnpj,
-      bank: billing.bank.id,
-      bankSlipId,
-      externalReferenceId: payload.external_reference_id || itauDetail.texto_seu_numero || '',
-      amount: Number.isFinite(responseAmount) && responseAmount > 0
-        ? responseAmount
-        : billing.amount,
-      issuedAt: billing.issuedAt,
-      dueAt: dateOnly(bankResponse.dueDate || bankResponse.due_date) || billing.dueAt,
-      digitableLine: String(bankResponse.digitableLine || bankResponse.digitable_line || ''),
-      barCode: String(bankResponse.barCode || bankResponse.bar_code || ''),
-      payer: billing.payer,
-      ...(isItau ? {
-        beneficiaryId: config.beneficiaryId,
-        beneficiaryName: config.beneficiaryName,
-        beneficiaryTaxId: config.beneficiaryTaxId,
-        wallet: bankResponse.wallet || config.wallet,
-        ourNumber: bankResponse.ourNumber || itauDetail.numero_nosso_numero,
-        yourNumber: bankResponse.yourNumber || itauDetail.texto_seu_numero,
-        acceptance: config.acceptance,
-        species: config.species,
-        speciesLabel: 'DS',
-        instructions: `Referente à fatura ${billing.invoiceId}. Não aceitar pagamento após o vencimento.`
-      } : {}),
-      createdAt: now.toISOString()
-    };
+    const readyRecord = readyRecordFromBankResponse({
+      billing,
+      config,
+      payload,
+      bankResponse: { ...bankResponse, id: bankSlipId },
+      now,
+      isItau
+    });
     await save(billing.invoiceId, readyRecord);
     return publicRecord(readyRecord, true);
   } catch (error) {
@@ -442,6 +535,7 @@ module.exports = {
   itauOurNumberForInvoice,
   itauAmountForPayload,
   itauBankSlipPayload,
+  itauBankSlipId,
   generateInvoiceBankSlip,
   getInvoiceBankSlipPdf
 };

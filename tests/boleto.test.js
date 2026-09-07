@@ -15,6 +15,7 @@ const {
   itauOurNumberForInvoice,
   itauAmountForPayload,
   itauBankSlipPayload,
+  itauBankSlipId,
   generateInvoiceBankSlip,
   getInvoiceBankSlipPdf
 } = require('../server/faturamento/boleto');
@@ -216,6 +217,10 @@ test('monta o boleto Itaú no contrato oficial e com nosso número determinísti
   assert.equal(payload.dado_boleto.desconto_expresso, false);
   assert.equal(itauOurNumberForInvoice('11518'), '00011518');
   assert.equal(itauAmountForPayload(684.44), '00000000000068444');
+  assert.equal(
+    itauBankSlipId({}, payload, { beneficiaryId: '060200166662', wallet: '109' }),
+    '06020016666210900011518'
+  );
 });
 
 test('efetiva boleto DSL no Itaú uma única vez e armazena dados para o PDF', async () => {
@@ -243,7 +248,7 @@ test('efetiva boleto DSL no Itaú uma única vez e armazena dados para o PDF', a
     createItauBankSlip: async () => {
       itauCalls += 1;
       return {
-        id: 'boleto-itau-11518',
+        id: '',
         registered: true,
         amount: 1844,
         dueDate: '2026-08-14',
@@ -261,8 +266,61 @@ test('efetiva boleto DSL no Itaú uma única vez e armazena dados para o PDF', a
   assert.equal(second.created, false);
   assert.equal(first.bank, 'itau');
   assert.equal(record.beneficiaryId, '150000052061');
+  assert.equal(record.bankSlipId, '15000005206110900011518');
   assert.equal(record.payer.tax_id, '28759933000186');
   assert.equal(itauCalls, 1);
+});
+
+test('reconcilia uma efetivação Itaú em revisão sem repetir o POST', async () => {
+  let record = {
+    state: 'review',
+    invoiceId: '11518',
+    issuerCnpj: '97434690000129',
+    bank: 'itau',
+    startedAt: '2026-08-09T02:00:00.000Z'
+  };
+  let createCalls = 0;
+  let queryCalls = 0;
+  const dependencies = {
+    ...billingDependencies('97434690000129'),
+    getBankSlipRecord: async () => record,
+    saveBankSlipRecord: async (_invoiceId, value) => { record = value; },
+    itauBoletoConfig: () => ({
+      stage: 'efetivacao',
+      beneficiaryId: '150000052061',
+      beneficiaryName: 'DSL DO BRASIL TRANSPORTE E LOGISTICA LTDA',
+      beneficiaryTaxId: '97434690000129',
+      wallet: '109',
+      species: '01',
+      acceptance: 'N'
+    }),
+    createItauBankSlip: async () => {
+      createCalls += 1;
+      throw new Error('POST não deveria ser repetido');
+    },
+    queryItauBankSlips: async (criteria) => {
+      queryCalls += 1;
+      assert.equal(criteria.ourNumber, '00011518');
+      assert.equal(criteria.inclusionDate, '2026-08-08');
+      return [{
+        id: '',
+        amount: 1844,
+        dueDate: '2026-08-14',
+        wallet: '109',
+        ourNumber: '00011518',
+        yourNumber: 'FAT11518',
+        digitableLine: '34191234567890123456789012345678901234567890123',
+        barCode: '34191234567890123456789012345678901234567890'
+      }];
+    }
+  };
+
+  const result = await generateInvoiceBankSlip('11518', dependencies);
+  assert.equal(result.status, 'ready');
+  assert.equal(result.created, false);
+  assert.equal(record.bankSlipId, '15000005206110900011518');
+  assert.equal(queryCalls, 1);
+  assert.equal(createCalls, 0);
 });
 
 test('PDF do Itaú é gerado localmente e o PDF do C6 continua vindo do banco', async () => {
