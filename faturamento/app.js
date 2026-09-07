@@ -10,6 +10,7 @@
     loginMessage: document.getElementById('loginMessage'),
     logoutButton: document.getElementById('logoutButton'),
     filterForm: document.getElementById('filterForm'),
+    dateFilterInputs: [...document.querySelectorAll('[data-date-filter]')],
     clearFilters: document.getElementById('clearFilters'),
     dashboardMessage: document.getElementById('dashboardMessage'),
     invoiceRows: document.getElementById('invoiceRows'),
@@ -152,6 +153,32 @@
   const formatDate = (value) => {
     const match = String(value || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
     return match ? `${match[3]}/${match[2]}/${match[1]}` : value || '—';
+  };
+
+  const maskBrazilianDate = (value) => {
+    const digits = String(value || '').replace(/\D/g, '').slice(0, 8);
+    return [digits.slice(0, 2), digits.slice(2, 4), digits.slice(4, 8)]
+      .filter(Boolean)
+      .join('/');
+  };
+
+  const dateFilterToIso = (value) => {
+    const match = String(value || '').match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (!match) return '';
+    const [, day, month, year] = match;
+    const date = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
+    if (
+      date.getUTCFullYear() !== Number(year) ||
+      date.getUTCMonth() !== Number(month) - 1 ||
+      date.getUTCDate() !== Number(day)
+    ) return '';
+    return `${year}-${month}-${day}`;
+  };
+
+  const validateDateFilter = (input) => {
+    const valid = !input.value || Boolean(dateFilterToIso(input.value));
+    input.setCustomValidity(valid ? '' : 'Informe uma data válida no formato dd/mm/aaaa.');
+    return valid;
   };
 
   const formatCurrency = (value) =>
@@ -852,7 +879,14 @@
     if (exactInvoiceId) state.skip = 0;
     for (const [key, rawValue] of data.entries()) {
       const value = String(rawValue).trim();
-      if (value) params.set(key, key === 'cnpj' ? value.replace(/\D/g, '') : value);
+      if (!value) continue;
+      const dateInput = elements.dateFilterInputs.find((input) => input.name === key);
+      params.set(
+        key,
+        key === 'cnpj'
+          ? value.replace(/\D/g, '')
+          : (dateInput ? dateFilterToIso(value) : value)
+      );
     }
     params.set('limit', String(LIMIT));
     params.set('skip', String(state.skip));
@@ -895,6 +929,10 @@
 
   const loadInvoices = async () => {
     if (state.loading) return;
+    if (!elements.dateFilterInputs.every(validateDateFilter)) {
+      elements.filterForm.reportValidity();
+      return;
+    }
     const params = filterParams();
     setLoading(true);
     elements.dashboardMessage.textContent = '';
@@ -955,6 +993,10 @@
 
   elements.filterForm.addEventListener('submit', (event) => {
     event.preventDefault();
+    if (!elements.dateFilterInputs.every(validateDateFilter)) {
+      elements.filterForm.reportValidity();
+      return;
+    }
     state.skip = 0;
     state.hasSearched = true;
     loadInvoices();
@@ -962,7 +1004,16 @@
 
   elements.clearFilters.addEventListener('click', () => {
     elements.filterForm.reset();
+    elements.dateFilterInputs.forEach((input) => input.setCustomValidity(''));
     resetResults();
+  });
+
+  elements.dateFilterInputs.forEach((input) => {
+    input.addEventListener('input', () => {
+      input.value = maskBrazilianDate(input.value);
+      validateDateFilter(input);
+    });
+    input.addEventListener('blur', () => validateDateFilter(input));
   });
 
   elements.viewButtons.forEach((button) => {

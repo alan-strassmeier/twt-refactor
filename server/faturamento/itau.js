@@ -405,6 +405,7 @@ const normalizeItauBankSlip = (payload, requestedStage = '') => {
   const details = Array.isArray(boleto?.dado_boleto?.dados_individuais_boleto)
     ? boleto.dado_boleto.dados_individuais_boleto[0]
     : null;
+  const payerType = boleto?.dado_boleto?.pagador?.pessoa?.tipo_pessoa || {};
   const stage = String(boleto.etapa_processo_boleto || requestedStage || '').toLowerCase();
   return {
     id: String(boleto.id_boleto || '').trim(),
@@ -414,6 +415,10 @@ const normalizeItauBankSlip = (payload, requestedStage = '') => {
     wallet: String(boleto?.dado_boleto?.codigo_carteira || '').trim(),
     ourNumber: String(details?.numero_nosso_numero || '').trim(),
     yourNumber: String(details?.texto_seu_numero || '').trim(),
+    payerTaxId: digits(
+      payerType.numero_cadastro_nacional_pessoa_juridica ||
+      payerType.numero_cadastro_pessoa_fisica
+    ),
     amount: itauAmount(details?.valor_titulo || boleto?.dado_boleto?.valor_total_titulo),
     dueDate: String(details?.data_vencimento || '').trim(),
     digitableLine: String(details?.numero_linha_digitavel || '').trim(),
@@ -490,25 +495,51 @@ const queryItauBankSlips = async (criteria = {}, options = {}) => {
   if (inclusionDate) params.set('data_inclusao', inclusionDate);
   params.set('view', view);
 
-  const result = await authenticatedRequest({
-    method: 'GET',
-    path: `${BOLETO_PATH}?${params}`,
-    headers: { Accept: 'application/json' },
-    ...options,
-    config
-  });
+  let path = `${BOLETO_PATH}?${params}`;
+  let result;
+  for (let redirects = 0; redirects <= 3; redirects += 1) {
+    result = await authenticatedRequest({
+      method: 'GET',
+      path,
+      headers: { Accept: 'application/json' },
+      ...options,
+      config
+    });
+    if (result.statusCode !== 303) break;
+
+    const location = String(result.headers?.location || '').trim();
+    if (!location || redirects === 3) {
+      throw Object.assign(new Error('O Itaú redirecionou a consulta sem informar um destino válido.'), {
+        statusCode: 502,
+        receivedResponse: true,
+        upstreamStatus: 303
+      });
+    }
+    const redirectUrl = new URL(location, `${config.apiBaseUrl}/`);
+    if (redirectUrl.protocol !== 'https:' || redirectUrl.origin !== new URL(config.apiBaseUrl).origin) {
+      throw Object.assign(new Error('O Itaú retornou um redirecionamento de consulta inválido.'), {
+        statusCode: 502,
+        receivedResponse: true,
+        upstreamStatus: 303
+      });
+    }
+    path = redirectUrl.toString();
+  }
   if (result.statusCode === 204) return [];
   const response = jsonFromResponse(result);
   if (result.statusCode < 200 || result.statusCode >= 300) {
     throw itauHttpError(result, response, 'Não foi possível consultar o boleto no Itaú.');
   }
   const candidates = [
+    response,
     response?.data,
     response?.value?.data,
     response?.value?.value?.data
   ];
-  const list = candidates.find(Array.isArray) || [];
-  return list.map((item) => normalizeItauBankSlip({ data: item })).filter(Boolean);
+  const list = candidates.find(Array.isArray);
+  if (list) return list.map((item) => normalizeItauBankSlip({ data: item })).filter(Boolean);
+  const single = normalizeItauBankSlip(response);
+  return single ? [single] : [];
 };
 
 const resetTokenCache = () => {

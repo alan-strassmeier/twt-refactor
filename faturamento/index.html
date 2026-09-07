@@ -9,7 +9,7 @@
   <link rel="icon" href="/favicon.ico">
   <link rel="stylesheet" href="/faturamento/styles.css?v=8">
   <script src="/faturamento/sort.js?v=1" defer></script>
-  <script src="/faturamento/app.js?v=11" defer></script>
+  <script src="/faturamento/app.js?v=12" defer></script>
 </head>
 <body>
   <div class="page-shell">
@@ -76,19 +76,19 @@
           <div class="filter-grid">
             <label>
               Emissão inicial
-              <input type="date" name="emissao[gte]">
+              <input type="text" name="emissao[gte]" data-date-filter inputmode="numeric" autocomplete="off" maxlength="10" placeholder="dd/mm/aaaa">
             </label>
             <label>
               Emissão final
-              <input type="date" name="emissao[lte]">
+              <input type="text" name="emissao[lte]" data-date-filter inputmode="numeric" autocomplete="off" maxlength="10" placeholder="dd/mm/aaaa">
             </label>
             <label>
               Vencimento inicial
-              <input type="date" name="vencimento[gte]">
+              <input type="text" name="vencimento[gte]" data-date-filter inputmode="numeric" autocomplete="off" maxlength="10" placeholder="dd/mm/aaaa">
             </label>
             <label>
               Vencimento final
-              <input type="date" name="vencimento[lte]">
+              <input type="text" name="vencimento[lte]" data-date-filter inputmode="numeric" autocomplete="off" maxlength="10" placeholder="dd/mm/aaaa">
             </label>
             <label>
               Status
