@@ -169,6 +169,12 @@ altere somente para `ITAU_BOLETO_STAGE=efetivacao`. Em efetivação, o Redis res
 a fatura antes do POST e mantém o vínculo com o `id_boleto`, impedindo emissão
 duplicada. Respostas incertas ficam bloqueadas para conferência manual.
 
+Se a efetivação retornar linha digitável e código de barras sem `id_boleto`, o
+identificador é formado conforme o contrato Itaú: beneficiário (12) + carteira
+(3) + nosso número (8 a 16). Uma fatura marcada para revisão é consultada por
+esses mesmos dados antes de qualquer nova emissão; a consulta nunca repete o
+POST do boleto.
+
 Os padrões iniciais são espécie `01` e aceite `N`. Se o contrato da carteira DSL
 determinar outros códigos, altere `ITAU_BOLETO_SPECIES` e
 `ITAU_BOLETO_ACCEPTANCE` antes da efetivação. Nome e CNPJ do beneficiário têm os
