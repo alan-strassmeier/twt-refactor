@@ -3,8 +3,10 @@ const { queryFromRequest, sendJson } = require('../../server/faturamento/http');
 const { resolveInvoiceCteKeys } = require('../../server/faturamento/cte-documents');
 const {
   bankSlipBankForIssuer,
-  isTwtIssuer
+  isTwtIssuer,
+  requiresTedDocPayment
 } = require('../../server/faturamento/billing-rules');
+const { fetchCompany } = require('../../server/faturamento/invoice-pdf');
 const { getNfseRecord } = require('../../server/faturamento/nfse-store');
 const { nfseConfig } = require('../../server/faturamento/nfse-config');
 
@@ -23,6 +25,31 @@ module.exports = async (req, res) => {
     const { id } = queryFromRequest(req);
     const documents = await resolveInvoiceCteKeys(id);
     const bank = bankSlipBankForIssuer(documents.issuerCnpj);
+    let company = null;
+    if (bank && documents.clientCnpj) {
+      try {
+        company = await fetchCompany(documents.clientCnpj);
+      } catch (error) {
+        console.warn('[faturamento:documentos-cliente]', {
+          invoiceId: documents.invoiceId,
+          clientCnpj: documents.clientCnpj,
+          error: error.message
+        });
+      }
+    }
+    const tedDocPayment = requiresTedDocPayment({
+      clientNames: [
+        documents.clientName,
+        company?.fantasia,
+        company?.xFant,
+        company?.razao,
+        company?.razao_social,
+        company?.nome,
+        company?.xNome
+      ],
+      clientDocument: documents.clientCnpj,
+      paymentMethod: documents.paymentMethod
+    });
     const nfseEligible = isTwtIssuer(documents.issuerCnpj);
     let nfseRecord = null;
     if (nfseEligible) {
@@ -40,9 +67,10 @@ module.exports = async (req, res) => {
       invoiceId: documents.invoiceId,
       hasCte: documents.cteKeys.length > 0,
       cteCount: documents.cteKeys.length,
-      bankSlipEligible: Boolean(bank),
-      bankSlipBank: bank?.id || null,
-      bankSlipBankLabel: bank?.label || null,
+      bankSlipEligible: Boolean(bank) && !tedDocPayment,
+      bankSlipBank: bank && !tedDocPayment ? bank.id : null,
+      bankSlipBankLabel: bank && !tedDocPayment ? bank.label : null,
+      paymentMethod: tedDocPayment ? 'ted_doc' : 'bank_slip',
       nfseEligible,
       nfseStatus: nfseRecord?.state || 'not_issued',
       nfseNumber: nfseRecord?.nfseNumber || null

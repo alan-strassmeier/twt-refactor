@@ -8,6 +8,11 @@ const {
   normalizeInvoice
 } = require('./brudam');
 const { findDoccobForInvoice } = require('./r2-doccob');
+const {
+  DSL_TED_DOC_ACCOUNT,
+  isDslIssuer,
+  requiresTedDocPayment
+} = require('./billing-rules');
 
 const COMPANY = {
   name: 'DSL DO BRASIL TRANSPORTE E LOGISTICA LTDA',
@@ -143,6 +148,33 @@ const normalizedCompany = (company, fallback = {}) => {
     city: safeText(city, ''),
     state: safeText(state, ''),
     cep: cep ? formatCep(cep) : ''
+  };
+};
+
+const invoicePaymentMethod = (invoice) => firstValue(invoice, [
+  'forma_pagamento', 'forma_pgto', 'forma_pagto', 'meio_pagamento',
+  'descricao_forma_pagamento', 'tipo_pagamento'
+]);
+
+const invoiceTedDocPayment = ({ invoice, normalizedInvoice, client, issuerDocument }) => {
+  const paymentMethod = invoicePaymentMethod(invoice);
+  const tedDoc = requiresTedDocPayment({
+    clientNames: [normalizedInvoice?.client, client?.name, client?.tradeName],
+    clientDocument: client?.document || normalizedInvoice?.clientDocument,
+    paymentMethod
+  });
+  if (!tedDoc || !isDslIssuer(issuerDocument)) return null;
+
+  const installment = firstValue(invoice, ['parcela', 'numero_parcela']) || 1;
+  const installmentCount = firstValue(invoice, ['nparcela', 'quantidade_parcelas', 'total_parcelas']) || 1;
+  return {
+    type: 'ted_doc',
+    number: normalizedInvoice?.internalId || firstValue(invoice, ['id', 'numero_lancamento']) || '-',
+    dueAt: normalizedInvoice?.dueAt,
+    installment: `${installment}/${installmentCount}`,
+    value: normalizedInvoice?.total,
+    method: DSL_TED_DOC_ACCOUNT.method,
+    account: DSL_TED_DOC_ACCOUNT
   };
 };
 
@@ -545,6 +577,12 @@ const fetchInvoicePdfData = async (invoiceId) => {
     ...COMPANY,
     document: issuerDocument || COMPANY.document
   });
+  const payment = invoiceTedDocPayment({
+    invoice,
+    normalizedInvoice,
+    client,
+    issuerDocument
+  });
 
   const doccobDocuments = linkedDocumentsFromDoccob(doccob);
   const linkedDocuments = doccobDocuments.length
@@ -586,7 +624,8 @@ const fetchInvoicePdfData = async (invoiceId) => {
       total: normalizedInvoice.total ?? doccob?.invoice?.total,
       surcharge: numberValue(firstValue(invoice, ['acrescimo', 'valor_acrescimo', 'vAcre'])) || 0,
       discount: numberValue(firstValue(invoice, ['desconto', 'valor_desconto', 'vDesc'])) || 0,
-      nfs: safeText(firstValue(invoice, ['nfs', 'numero_nfs']), '')
+      nfs: safeText(firstValue(invoice, ['nfs', 'numero_nfs']), ''),
+      payment
     },
     client,
     issuer,
@@ -735,6 +774,44 @@ const drawClientBlock = (doc, data) => {
       lineGap: 1
     });
   });
+};
+
+const drawPaymentBlock = (doc, data, y) => {
+  const payment = data?.invoice?.payment;
+  if (!payment || payment.type !== 'ted_doc') return y;
+  const account = payment.account || DSL_TED_DOC_ACCOUNT;
+  const columns = [
+    ['Número', 80, safeText(payment.number)],
+    ['Vencimento', 90, formatDate(payment.dueAt)],
+    ['Parcela', 70, safeText(payment.installment, '1/1')],
+    ['Valor', 90, formatNumber(payment.value)],
+    ['Forma Pagto.', 125, safeText(payment.method, DSL_TED_DOC_ACCOUNT.method)],
+    ['Conta', CONTENT_WIDTH - 455,
+      `${safeText(account.label, 'ITAU- DSL')}\nAg.:${safeText(account.agency, '0602-0')} / C.c.:${safeText(account.account, '16666-2')}`]
+  ];
+  const height = 34;
+  const headerHeight = 13;
+  let x = PAGE.margin;
+  columns.forEach(([label, width, value]) => {
+    drawBox(doc, x, y, width, height);
+    doc.moveTo(x, y + headerHeight).lineTo(x + width, y + headerHeight).stroke();
+    drawCellText(doc, label, x, y, width, {
+      bold: true,
+      size: 6,
+      align: 'center',
+      topPadding: 3,
+      height: headerHeight - 3
+    });
+    drawCellText(doc, value, x, y + headerHeight, width, {
+      size: label === 'Forma Pagto.' ? 5.5 : 6,
+      align: 'center',
+      topPadding: 4,
+      height: height - headerHeight - 4,
+      lineGap: 0.5
+    });
+    x += width;
+  });
+  return y + height;
 };
 
 const TABLE_COLUMNS = [
@@ -951,7 +1028,8 @@ const drawDetailPages = (doc, data, barcode) => {
     doc.addPage({ size: 'A4', margin: 0 });
     drawInvoiceHeader(doc, data, barcode);
     drawClientBlock(doc, data);
-    y = drawTableHeader(doc, 143);
+    const paymentEnd = drawPaymentBlock(doc, data, 143);
+    y = drawTableHeader(doc, paymentEnd + (paymentEnd > 143 ? 5 : 0));
     pageShipments = [];
   };
 
@@ -1016,6 +1094,8 @@ module.exports = {
   exactInvoiceRecord,
   companyFromPayload,
   normalizedCompany,
+  invoicePaymentMethod,
+  invoiceTedDocPayment,
   fetchCompany,
   linkedDocumentsFromInvoice,
   linkedDocumentsFromDoccob,

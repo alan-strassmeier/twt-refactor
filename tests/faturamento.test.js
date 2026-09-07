@@ -179,8 +179,11 @@ test('coluna Visualizar oferece Fatura, DACTE, boleto e NFS-e conforme o emitent
   assert.match(html, />Gerar NFS-e<\/strong>/);
   assert.match(html, /Conferindo faturas e empresas/);
   const boletoApi = readFileSync(require.resolve('../api/faturamento/boleto.js'), 'utf8');
+  const documentosApi = readFileSync(require.resolve('../api/faturamento/documentos.js'), 'utf8');
   assert.match(boletoApi, /hasSameOrigin\(req\)/);
   assert.match(boletoApi, /sessionFromRequest\(req\)/);
+  assert.match(documentosApi, /requiresTedDocPayment/);
+  assert.match(documentosApi, /bankSlipEligible: Boolean\(bank\) && !tedDocPayment/);
 });
 
 test('centraliza o X dentro do botão de fechar o modal', () => {

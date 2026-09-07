@@ -5,7 +5,10 @@ const {
   fetchCompany
 } = require('./invoice-pdf');
 const { findDoccobForInvoice } = require('./r2-doccob');
-const { bankSlipBankForIssuer } = require('./billing-rules');
+const {
+  bankSlipBankForIssuer,
+  requiresTedDocPayment
+} = require('./billing-rules');
 const {
   c6Config,
   createC6BankSlip,
@@ -160,6 +163,23 @@ const resolveInvoiceBillingData = async (invoiceId, dependencies = {}) => {
 
   const company = await getCompany(clientCnpj);
   if (!company) throw validationError('Cadastro do pagador não encontrado na Brudam.');
+  const paymentMethod = firstValue(invoice, [
+    'forma_pagamento', 'forma_pgto', 'forma_pagto', 'meio_pagamento',
+    'descricao_forma_pagamento', 'tipo_pagamento'
+  ]);
+  if (requiresTedDocPayment({
+    clientNames: [
+      normalized.client,
+      firstValue(company, ['fantasia', 'xFant']),
+      firstValue(company, ['razao', 'razao_social', 'nome', 'xNome'])
+    ],
+    clientDocument: clientCnpj,
+    paymentMethod
+  })) {
+    throw validationError(
+      'Esta fatura utiliza transferência TED/DOC e não deve gerar boleto.'
+    );
+  }
 
   return {
     invoiceId: normalizedInvoiceId,
@@ -459,6 +479,9 @@ const findExistingItauBankSlip = async ({
 
 const itauLookupError = (prefix, error) => {
   const upstreamStatus = Number(error?.upstreamStatus);
+  const statusCode = upstreamStatus === 403
+    ? 403
+    : (error?.statusCode === 422 ? 422 : 503);
   const safeMessage = String(error?.message || '')
     .replace(/[\r\n]+/g, ' ')
     .replace(/\s+/g, ' ')
@@ -477,7 +500,7 @@ const itauLookupError = (prefix, error) => {
     detail = ' A consulta falhou antes de receber uma resposta HTTP.';
   }
   return Object.assign(new Error(`${prefix}.${detail}`.trim()), {
-    statusCode: error?.statusCode === 422 ? 422 : 503,
+    statusCode,
     expose: true,
     cause: error,
     ...(Number.isInteger(upstreamStatus) ? { upstreamStatus } : {}),
@@ -577,7 +600,7 @@ const generateInvoiceBankSlip = async (invoiceId, dependencies = {}) => {
     }, false);
   }
 
-  if (isItau) {
+  if (isItau && !config.skipPrecheck) {
     const query = dependencies.queryItauBankSlips || queryItauBankSlips;
     let recovered;
     try {

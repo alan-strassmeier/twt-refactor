@@ -82,6 +82,9 @@ const itauConfig = (env = process.env) => {
 };
 
 const digits = (value) => String(value || '').replace(/\D/g, '');
+const enabledFlag = (value) => ['1', 'true', 'yes', 'sim'].includes(
+  String(value || '').trim().toLowerCase()
+);
 
 const itauBoletoConfig = (env = process.env) => {
   const config = itauConfig(env);
@@ -116,6 +119,7 @@ const itauBoletoConfig = (env = process.env) => {
     beneficiaryTaxId: digits(env.ITAU_BENEFICIARY_CNPJ || ITAU_ISSUER_CNPJ),
     wallet,
     stage,
+    skipPrecheck: enabledFlag(env.ITAU_BOLETO_SKIP_PRECHECK),
     species,
     acceptance
   };

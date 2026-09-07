@@ -22,7 +22,10 @@ const {
 } = require('../server/faturamento/boleto');
 const {
   BILLING_BANKS,
-  bankSlipBankForIssuer
+  WHITE_MARTINS_TED_DOC_CNPJS,
+  ELECNOR_TED_DOC_CNPJS,
+  bankSlipBankForIssuer,
+  requiresTedDocPayment
 } = require('../server/faturamento/billing-rules');
 
 const twtInvoice = {
@@ -138,6 +141,41 @@ test('roteia TWT para C6 e DSL para Itaú usando o emitente confirmado no DOCCOB
   await assert.rejects(
     resolveInvoiceBillingData('11518', billingDependencies('00000000000000')),
     (error) => error.statusCode === 403 && /não possui banco de cobrança/.test(error.message)
+  );
+});
+
+test('identifica clientes e forma de pagamento exclusivos de TED/DOC', () => {
+  assert.equal(requiresTedDocPayment({
+    clientNames: ['THE WHITE MARTINS GASES INDUSTRIAIS DO NORDESTE LTDA.']
+  }), true);
+  assert.equal(requiresTedDocPayment({
+    clientNames: ['RS WHITE MARTINS GASES INDUSTRIAIS LTDA 0063']
+  }), true);
+  assert.equal(requiresTedDocPayment({ clientNames: ['ELECNOR DO BRASIL LTDA'] }), true);
+  assert.equal(requiresTedDocPayment({ clientNames: ['BL INDUSTRIA OTICA LTDA POA'] }), true);
+  assert.equal(requiresTedDocPayment({ clientDocument: '27.011.022/0001-03' }), true);
+  for (const cnpj of [
+    ...WHITE_MARTINS_TED_DOC_CNPJS,
+    ...ELECNOR_TED_DOC_CNPJS
+  ]) {
+    assert.equal(requiresTedDocPayment({ clientDocument: cnpj }), true, cnpj);
+  }
+  assert.equal(requiresTedDocPayment({ clientDocument: '309286' }), false);
+  assert.equal(requiresTedDocPayment({ clientDocument: '309311' }), false);
+  assert.equal(requiresTedDocPayment({ paymentMethod: 'Transferência TED/DOC' }), true);
+  assert.equal(requiresTedDocPayment({ clientNames: ['OUTRO CLIENTE LTDA'] }), false);
+});
+
+test('bloqueia geração de boleto para cliente com pagamento por TED/DOC', async () => {
+  await assert.rejects(
+    resolveInvoiceBillingData('11518', {
+      ...billingDependencies('97434690000129'),
+      fetchCompany: async () => ({
+        ...payerCompany,
+        fantasia: 'THE WHITE MARTINS GASES INDUSTRIAIS DO NORDESTE LTDA.'
+      })
+    }),
+    (error) => error.statusCode === 422 && /TED\/DOC/.test(error.message)
   );
 });
 
@@ -273,6 +311,57 @@ test('efetiva boleto DSL no Itaú uma única vez e armazena dados para o PDF', a
   assert.equal(itauCalls, 1);
 });
 
+test('permite pular temporariamente somente a consulta preventiva de uma fatura nova', async () => {
+  let record = null;
+  let queryCalls = 0;
+  let createCalls = 0;
+  const dependencies = {
+    ...billingDependencies('97434690000129'),
+    getBankSlipRecord: async () => record,
+    claimBankSlip: async (_invoiceId, processing) => {
+      if (record) return false;
+      record = processing;
+      return true;
+    },
+    saveBankSlipRecord: async (_invoiceId, value) => { record = value; },
+    releaseBankSlipClaim: async () => { record = null; },
+    itauBoletoConfig: () => ({
+      stage: 'efetivacao',
+      skipPrecheck: true,
+      beneficiaryId: '150000052061',
+      beneficiaryName: 'DSL DO BRASIL TRANSPORTE E LOGISTICA LTDA',
+      beneficiaryTaxId: '97434690000129',
+      wallet: '109',
+      species: '01',
+      acceptance: 'N'
+    }),
+    queryItauBankSlips: async () => {
+      queryCalls += 1;
+      throw new Error('A consulta preventiva não deveria ser executada');
+    },
+    createItauBankSlip: async () => {
+      createCalls += 1;
+      return {
+        id: '',
+        registered: true,
+        amount: 1844,
+        dueDate: '2026-08-14',
+        wallet: '109',
+        ourNumber: '00011518',
+        yourNumber: 'FAT11518',
+        digitableLine: '34191234567890123456789012345678901234567890123',
+        barCode: '34191234567890123456789012345678901234567890'
+      };
+    }
+  };
+
+  const result = await generateInvoiceBankSlip('11518', dependencies);
+  assert.equal(result.status, 'ready');
+  assert.equal(result.created, true);
+  assert.equal(queryCalls, 0);
+  assert.equal(createCalls, 1);
+});
+
 test('reconcilia uma efetivação Itaú em revisão sem repetir o POST', async () => {
   let record = {
     state: 'review',
@@ -289,6 +378,7 @@ test('reconcilia uma efetivação Itaú em revisão sem repetir o POST', async (
     saveBankSlipRecord: async (_invoiceId, value) => { record = value; },
     itauBoletoConfig: () => ({
       stage: 'efetivacao',
+      skipPrecheck: true,
       beneficiaryId: '150000052061',
       beneficiaryName: 'DSL DO BRASIL TRANSPORTE E LOGISTICA LTDA',
       beneficiaryTaxId: '97434690000129',
@@ -334,7 +424,7 @@ test('expõe o status e a mensagem segura quando a consulta Itaú falha', () => 
       receivedResponse: true
     })
   );
-  assert.equal(error.statusCode, 503);
+  assert.equal(error.statusCode, 403);
   assert.equal(error.expose, true);
   assert.match(error.message, /HTTP 403/);
   assert.match(error.message, /Acesso não autorizado/);
