@@ -311,6 +311,57 @@ test('efetiva boleto DSL no Itaú uma única vez e armazena dados para o PDF', a
   assert.equal(itauCalls, 1);
 });
 
+test('permite pular temporariamente somente a consulta preventiva de uma fatura nova', async () => {
+  let record = null;
+  let queryCalls = 0;
+  let createCalls = 0;
+  const dependencies = {
+    ...billingDependencies('97434690000129'),
+    getBankSlipRecord: async () => record,
+    claimBankSlip: async (_invoiceId, processing) => {
+      if (record) return false;
+      record = processing;
+      return true;
+    },
+    saveBankSlipRecord: async (_invoiceId, value) => { record = value; },
+    releaseBankSlipClaim: async () => { record = null; },
+    itauBoletoConfig: () => ({
+      stage: 'efetivacao',
+      skipPrecheck: true,
+      beneficiaryId: '150000052061',
+      beneficiaryName: 'DSL DO BRASIL TRANSPORTE E LOGISTICA LTDA',
+      beneficiaryTaxId: '97434690000129',
+      wallet: '109',
+      species: '01',
+      acceptance: 'N'
+    }),
+    queryItauBankSlips: async () => {
+      queryCalls += 1;
+      throw new Error('A consulta preventiva não deveria ser executada');
+    },
+    createItauBankSlip: async () => {
+      createCalls += 1;
+      return {
+        id: '',
+        registered: true,
+        amount: 1844,
+        dueDate: '2026-08-14',
+        wallet: '109',
+        ourNumber: '00011518',
+        yourNumber: 'FAT11518',
+        digitableLine: '34191234567890123456789012345678901234567890123',
+        barCode: '34191234567890123456789012345678901234567890'
+      };
+    }
+  };
+
+  const result = await generateInvoiceBankSlip('11518', dependencies);
+  assert.equal(result.status, 'ready');
+  assert.equal(result.created, true);
+  assert.equal(queryCalls, 0);
+  assert.equal(createCalls, 1);
+});
+
 test('reconcilia uma efetivação Itaú em revisão sem repetir o POST', async () => {
   let record = {
     state: 'review',
@@ -327,6 +378,7 @@ test('reconcilia uma efetivação Itaú em revisão sem repetir o POST', async (
     saveBankSlipRecord: async (_invoiceId, value) => { record = value; },
     itauBoletoConfig: () => ({
       stage: 'efetivacao',
+      skipPrecheck: true,
       beneficiaryId: '150000052061',
       beneficiaryName: 'DSL DO BRASIL TRANSPORTE E LOGISTICA LTDA',
       beneficiaryTaxId: '97434690000129',

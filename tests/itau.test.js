@@ -42,12 +42,15 @@ test('mantém emissão Itaú em validação até a ativação explícita', () =>
   const validation = itauBoletoConfig(configEnvironment());
   const production = itauBoletoConfig({
     ...configEnvironment(),
-    ITAU_BOLETO_STAGE: 'efetivacao'
+    ITAU_BOLETO_STAGE: 'efetivacao',
+    ITAU_BOLETO_SKIP_PRECHECK: 'true'
   });
   assert.equal(validation.stage, 'validacao');
   assert.equal(validation.beneficiaryId, '150000052061');
   assert.equal(validation.wallet, '109');
   assert.equal(production.stage, 'efetivacao');
+  assert.equal(validation.skipPrecheck, false);
+  assert.equal(production.skipPrecheck, true);
   assert.throws(
     () => itauBoletoConfig({ ...configEnvironment(), ITAU_BENEFICIARY_ID: '123' }),
     /totalizando 12 dígitos/

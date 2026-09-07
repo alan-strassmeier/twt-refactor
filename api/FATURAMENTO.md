@@ -42,6 +42,7 @@ ITAU_API_KEY=
 ITAU_BENEFICIARY_ID=
 ITAU_BOLETO_WALLET=
 ITAU_BOLETO_STAGE=validacao
+ITAU_BOLETO_SKIP_PRECHECK=false
 ITAU_BOLETO_SPECIES=01
 ITAU_BOLETO_ACCEPTANCE=N
 ITAU_BENEFICIARY_NAME=DSL DO BRASIL TRANSPORTE E LOGISTICA LTDA
@@ -168,6 +169,13 @@ título é registrado ou salvo como boleto emitido. Depois de homologar os dados
 altere somente para `ITAU_BOLETO_STAGE=efetivacao`. Em efetivação, o Redis reserva
 a fatura antes do POST e mantém o vínculo com o `id_boleto`, impedindo emissão
 duplicada. Respostas incertas ficam bloqueadas para conferência manual.
+
+Enquanto a credencial do Itaú ainda não possuir acesso ao `GET /boletos`, uma
+fatura nova pode ser usada em teste com `ITAU_BOLETO_SKIP_PRECHECK=true`. Essa
+opção pula somente a consulta preventiva anterior ao primeiro POST. Ela não
+libera faturas já marcadas como `review`, pois nelas houve uma tentativa com
+resultado bancário incerto e repetir a emissão poderia criar uma duplicidade.
+Volte a variável para `false` assim que o Itaú liberar a consulta.
 
 Se a efetivação retornar linha digitável e código de barras sem `id_boleto`, o
 identificador é formado conforme o contrato Itaú: beneficiário (12) + carteira

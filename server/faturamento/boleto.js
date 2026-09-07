@@ -600,7 +600,7 @@ const generateInvoiceBankSlip = async (invoiceId, dependencies = {}) => {
     }, false);
   }
 
-  if (isItau) {
+  if (isItau && !config.skipPrecheck) {
     const query = dependencies.queryItauBankSlips || queryItauBankSlips;
     let recovered;
     try {
