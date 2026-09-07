@@ -128,12 +128,21 @@ test('coleta os filtros do formulário antes de desabilitar os campos', () => {
 test('usa datas brasileiras nos filtros e converte para ISO antes da API', () => {
   const html = readFileSync(require.resolve('../faturamento/index.html'), 'utf8');
   const source = readFileSync(require.resolve('../faturamento/app.js'), 'utf8');
-  assert.doesNotMatch(html, /type="date"/);
   assert.equal((html.match(/data-date-filter/g) || []).length, 4);
+  assert.equal((html.match(/type="date" data-date-picker/g) || []).length, 4);
   assert.equal((html.match(/placeholder="dd\/mm\/aaaa"/g) || []).length, 4);
   assert.match(source, /const dateFilterToIso/);
+  assert.match(source, /const isoDateToBrazilian/);
   assert.match(source, /return `\$\{year\}-\$\{month\}-\$\{day\}`/);
   assert.match(source, /Informe uma data válida no formato dd\/mm\/aaaa/);
+});
+
+test('exibe ícone e calendário nativo nos filtros de data', () => {
+  const html = readFileSync(require.resolve('../faturamento/index.html'), 'utf8');
+  const styles = readFileSync(require.resolve('../faturamento/styles.css'), 'utf8');
+  assert.equal((html.match(/class="date-filter-icon"/g) || []).length, 4);
+  assert.match(styles, /\.date-filter-picker/);
+  assert.match(styles, /calendar-picker-indicator/);
 });
 
 test('coluna Visualizar oferece Fatura, DACTE, boleto e NFS-e conforme o emitente', () => {

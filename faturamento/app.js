@@ -11,6 +11,7 @@
     logoutButton: document.getElementById('logoutButton'),
     filterForm: document.getElementById('filterForm'),
     dateFilterInputs: [...document.querySelectorAll('[data-date-filter]')],
+    datePickerInputs: [...document.querySelectorAll('[data-date-picker]')],
     clearFilters: document.getElementById('clearFilters'),
     dashboardMessage: document.getElementById('dashboardMessage'),
     invoiceRows: document.getElementById('invoiceRows'),
@@ -175,9 +176,17 @@
     return `${year}-${month}-${day}`;
   };
 
+  const isoDateToBrazilian = (value) => {
+    const match = String(value || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    return match ? `${match[3]}/${match[2]}/${match[1]}` : '';
+  };
+
   const validateDateFilter = (input) => {
-    const valid = !input.value || Boolean(dateFilterToIso(input.value));
+    const isoDate = dateFilterToIso(input.value);
+    const valid = !input.value || Boolean(isoDate);
     input.setCustomValidity(valid ? '' : 'Informe uma data válida no formato dd/mm/aaaa.');
+    const picker = input.closest('.date-filter-control')?.querySelector('[data-date-picker]');
+    if (picker) picker.value = isoDate;
     return valid;
   };
 
@@ -1014,6 +1023,15 @@
       validateDateFilter(input);
     });
     input.addEventListener('blur', () => validateDateFilter(input));
+  });
+
+  elements.datePickerInputs.forEach((picker) => {
+    picker.addEventListener('change', () => {
+      const input = picker.closest('.date-filter-control')?.querySelector('[data-date-filter]');
+      if (!input) return;
+      input.value = isoDateToBrazilian(picker.value);
+      validateDateFilter(input);
+    });
   });
 
   elements.viewButtons.forEach((button) => {
