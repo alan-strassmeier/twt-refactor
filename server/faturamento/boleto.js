@@ -10,16 +10,17 @@ const {
   requiresTedDocPayment
 } = require('./billing-rules');
 const {
-  c6Config,
-  createC6BankSlip,
-  getC6BankSlipPdf
-} = require('./c6');
+  bradescoConfig,
+  createBradescoBankSlip,
+  queryBradescoBankSlip
+} = require('./bradesco');
 const {
   itauBoletoConfig,
   createItauBankSlip,
   queryItauBankSlips
 } = require('./itau');
 const { renderItauBankSlipPdf } = require('./itau-boleto-pdf');
+const { renderBradescoBankSlipPdf } = require('./bradesco-boleto-pdf');
 const store = require('./boleto-store');
 
 const digits = (value) => String(value || '').replace(/\D/g, '');
@@ -67,24 +68,20 @@ const payerFromCompany = (company, fallback = {}) => {
   const name = String(
     firstValue(company, ['razao', 'razao_social', 'nome', 'fantasia']) || fallback.name || ''
   ).trim().slice(0, 40);
-  const numberText = String(firstValue(company, ['numero', 'nro']) || '').trim();
-  const numberMatch = numberText.match(/\d+/);
-  const number = numberMatch ? Number(numberMatch[0]) : null;
+  const number = String(firstValue(company, ['numero', 'nro']) || '').trim().slice(0, 10);
   const state = String(firstValue(company, ['uf', 'UF', 'estado']) || '').trim().toUpperCase();
   const zipCode = digits(firstValue(company, ['cep', 'CEP']));
   const city = String(firstValue(company, ['cidade', 'municipio', 'xMun']) || '').trim().slice(0, 40);
   const district = String(firstValue(company, ['bairro', 'xBairro']) || '').trim().slice(0, 40);
-  const numberLength = number === null ? 0 : String(number).length;
-  const streetLimit = Math.max(1, Math.min(33, 40 - numberLength));
   const street = String(firstValue(company, ['endereco', 'logradouro', 'xLgr']) || '')
     .trim()
-    .slice(0, streetLimit);
+    .slice(0, 40);
   const complement = String(firstValue(company, ['complemento', 'xCpl']) || '').trim().slice(0, 24);
   const email = String(firstValue(company, ['email']) || '').trim().toLowerCase();
 
   if (![11, 14].includes(taxId.length)) throw validationError('CPF/CNPJ do pagador não está completo.');
   if (!name) throw validationError('Razão social do pagador não está preenchida.');
-  if (!street || number === null || !city || !/^[A-Z]{2}$/.test(state) || zipCode.length !== 8) {
+  if (!street || !number || !city || !/^[A-Z]{2}$/.test(state) || zipCode.length !== 8) {
     throw validationError(
       'O cadastro do pagador precisa ter logradouro, número, cidade, UF e CEP válidos para gerar boleto.'
     );
@@ -195,28 +192,105 @@ const resolveInvoiceBillingData = async (invoiceId, dependencies = {}) => {
   };
 };
 
-const c6Payer = (payer) => ({
-  name: payer.name,
-  tax_id: payer.tax_id,
-  ...(payer.email ? { email: payer.email } : {}),
-  address: {
-    street: payer.address.street,
-    number: payer.address.number,
-    ...(payer.address.complement ? { complement: payer.address.complement } : {}),
-    city: payer.address.city,
-    state: payer.address.state,
-    zip_code: payer.address.zip_code
-  }
-});
+const bradescoText = (value, maxLength) => String(value ?? '')
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .replace(/[^A-Za-z0-9 ]+/g, ' ')
+  .replace(/\s+/g, ' ')
+  .trim()
+  .slice(0, maxLength);
 
-const bankSlipPayload = (billing, config) => ({
-  external_reference_id: externalReferenceForInvoice(billing.invoiceId),
-  amount: billing.amount,
-  due_date: billing.dueAt,
-  instructions: [`Fatura ${billing.invoiceId} - TWT Airpack`],
-  billing_scheme: config.billingScheme,
-  payer: c6Payer(billing.payer)
-});
+const bradescoDate = (value) => {
+  const match = String(value || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) throw validationError('Data da fatura inválida para o Bradesco.');
+  return `${match[3]}.${match[2]}.${match[1]}`;
+};
+
+const bradescoMoney = (value) => {
+  const amount = Number(value);
+  if (!Number.isFinite(amount) || amount <= 0 || amount >= 100000000) {
+    throw validationError('Valor do boleto fora do limite aceito pelo Bradesco.');
+  }
+  return amount.toFixed(2);
+};
+
+const bradescoBankSlipPayload = (billing, config) => {
+  const payer = billing.payer;
+  const address = payer.address;
+  const zipCode = digits(address.zip_code);
+  const reference = `FAT${digits(billing.invoiceId)}`.slice(0, 25);
+  const district = bradescoText(address.district, 40);
+  if (!billing.issuedAt) throw validationError('A fatura não possui data de emissão válida.');
+  if (zipCode.length !== 8) throw validationError('CEP do pagador inválido para o Bradesco.');
+  if (!district) {
+    throw validationError('O cadastro do pagador precisa ter bairro preenchido para gerar boleto Bradesco.');
+  }
+
+  return {
+    debitoAutomatico: 'N',
+    nuCPFCNPJ: config.beneficiaryRoot,
+    filialCPFCNPJ: config.beneficiaryBranch,
+    ctrlCPFCNPJ: config.beneficiaryControl,
+    idProduto: config.productId,
+    nuNegociacao: config.registrationNegotiation,
+    nuTitulo: '0',
+    nuCliente: reference,
+    dtEmissaoTitulo: bradescoDate(billing.issuedAt),
+    dtVencimentoTitulo: bradescoDate(billing.dueAt),
+    indicadorMoeda: '1',
+    vlNominalTitulo: bradescoMoney(billing.amount),
+    qmoedaNegocTitlo: '0',
+    cdEspecieTitulo: config.species,
+    cindcdAceitSacdo: config.acceptance,
+    tpVencimento: '0',
+    tpProtestoAutomaticoNegativacao: '0',
+    prazoProtestoAutomaticoNegativacao: '0',
+    controleParticipante: reference,
+    cdPagamentoParcial: 'N',
+    qtdePagamentoParcial: '0',
+    tipoPrazoDecursoTres: '0',
+    percentualJuros: config.monthlyInterestPercent.toFixed(2),
+    vlJuros: '0',
+    qtdeDiasJuros: config.interestStartDays,
+    percentualMulta: config.penaltyPercent.toFixed(2),
+    vlMulta: '0',
+    qtdeDiasMulta: config.penaltyStartDays,
+    percentualDesconto1: '0',
+    vlDesconto1: '0',
+    dataLimiteDesconto1: '',
+    percentualDesconto2: '0',
+    vlDesconto2: '0',
+    dataLimiteDesconto2: '',
+    percentualDesconto3: '0',
+    vlDesconto3: '0',
+    dataLimiteDesconto3: '',
+    prazoBonificacao: '0',
+    percentualBonificacao: '0',
+    vlBonificacao: '0',
+    dtLimiteBonificacao: '',
+    vlAbatimento: '0',
+    vlIOF: '0',
+    nomePagador: bradescoText(payer.name, 70),
+    logradouroPagador: bradescoText(address.street, 40),
+    nuLogradouroPagador: bradescoText(address.number, 10),
+    complementoLogradouroPagador: bradescoText(address.complement, 15),
+    cepPagador: zipCode.slice(0, 5),
+    complementoCepPagador: zipCode.slice(5),
+    bairroPagador: district,
+    municipioPagador: bradescoText(address.city, 30),
+    ufPagador: String(address.state || '').toUpperCase(),
+    cdIndCpfcnpjPagador: digits(payer.tax_id).length === 14 ? '2' : '1',
+    nuCpfcnpjPagador: digits(payer.tax_id),
+    endEletronicoPagador: String(payer.email || '').slice(0, 70),
+    dddFoneSacado: '0',
+    foneSacado: '0',
+    listaMsgs: [
+      { mensagem: bradescoText(`REFERENTE A FATURA ${billing.invoiceId}`, 80) },
+      { mensagem: 'APOS O VENCIMENTO MULTA DE 3 POR CENTO' },
+      { mensagem: 'APOS O VENCIMENTO JUROS DE 0 15 POR CENTO AO DIA' }
+    ]
+  };
+};
 
 const itauOurNumberForInvoice = (invoiceId) => {
   const number = digits(invoiceId);
@@ -297,7 +371,7 @@ const publicRecord = (record, created = false) => ({
   created,
   amount: record.amount,
   dueAt: record.dueAt,
-  bank: record.bank || 'c6',
+  bank: record.bank || '',
   digitableLine: record.digitableLine || '',
   barCode: record.barCode || '',
   ...(record.state === 'validated'
@@ -331,7 +405,15 @@ const normalizeRegisteredItauResponse = (bankResponse, payload, config) => ({
   id: String(bankResponse?.id || itauBankSlipId(bankResponse, payload, config)).trim()
 });
 
-const readyRecordFromBankResponse = ({ billing, config, payload, bankResponse, now, isItau }) => {
+const readyRecordFromBankResponse = ({
+  billing,
+  config,
+  payload,
+  bankResponse,
+  now,
+  isItau,
+  isBradesco = false
+}) => {
   const itauDetail = payload?.dado_boleto?.dados_individuais_boleto?.[0] || {};
   const responseAmount = Number(bankResponse.amount);
   return {
@@ -340,7 +422,7 @@ const readyRecordFromBankResponse = ({ billing, config, payload, bankResponse, n
     issuerCnpj: billing.issuerCnpj,
     bank: billing.bank.id,
     bankSlipId: bankResponse.id,
-    externalReferenceId: payload.external_reference_id || itauDetail.texto_seu_numero || '',
+    externalReferenceId: payload.nuCliente || itauDetail.texto_seu_numero || '',
     amount: Number.isFinite(responseAmount) && responseAmount > 0
       ? responseAmount
       : billing.amount,
@@ -361,6 +443,27 @@ const readyRecordFromBankResponse = ({ billing, config, payload, bankResponse, n
       speciesLabel: 'DS',
       instructions: `Referente à fatura ${billing.invoiceId}. Não aceitar pagamento após o vencimento.`
     } : {}),
+    ...(isBradesco ? {
+      beneficiaryName: bankResponse.beneficiaryName || config.beneficiaryName,
+      beneficiaryTaxId: bankResponse.beneficiaryTaxId || config.beneficiaryTaxId,
+      agency: config.agency,
+      agencyDigit: config.agencyDigit,
+      account: config.account,
+      accountDigit: config.accountDigit,
+      wallet: String(bankResponse.wallet || config.productId).padStart(2, '0'),
+      ourNumber: digits(bankResponse.ourNumber).padStart(11, '0'),
+      yourNumber: bankResponse.yourNumber || payload.nuCliente,
+      acceptance: 'N',
+      species: config.species,
+      speciesLabel: bankResponse.speciesLabel || 'DS',
+      penaltyPercent: config.penaltyPercent,
+      dailyInterestPercent: config.dailyInterestPercent,
+      instructions: [
+        `Referente a fatura ${billing.invoiceId}.`,
+        `Apos o vencimento multa de ${config.penaltyPercent.toFixed(2).replace('.', ',')}%.`,
+        `Apos o vencimento juros de ${config.dailyInterestPercent.toFixed(2).replace('.', ',')}% ao dia.`
+      ].join('\n')
+    } : {}),
     createdAt: now.toISOString()
   };
 };
@@ -369,6 +472,13 @@ const validRegisteredItauResponse = (bankResponse) => Boolean(
   bankResponse?.id &&
   digits(bankResponse.digitableLine).length >= 47 &&
   digits(bankResponse.barCode).length === 44
+);
+
+const validRegisteredBradescoResponse = (bankResponse) => Boolean(
+  digits(bankResponse?.id).length === 11 &&
+  digits(bankResponse?.ourNumber).length === 11 &&
+  digits(bankResponse?.digitableLine).length === 47 &&
+  digits(bankResponse?.barCode).length === 44
 );
 
 const sameMoney = (left, right) => (
@@ -510,6 +620,29 @@ const itauLookupError = (prefix, error) => {
   });
 };
 
+const bradescoLookupError = (prefix, error) => {
+  const upstreamStatus = Number(error?.upstreamStatus);
+  const statusCode = [401, 403].includes(upstreamStatus)
+    ? upstreamStatus
+    : (error?.statusCode === 422 ? 422 : 503);
+  const safeMessage = String(error?.message || '')
+    .replace(/[\r\n]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 240);
+  const detail = Number.isInteger(upstreamStatus) && upstreamStatus > 0
+    ? ` O Bradesco respondeu HTTP ${upstreamStatus}${safeMessage ? `: ${safeMessage}` : '.'}`
+    : (error?.expose && safeMessage
+        ? ` ${safeMessage}`
+        : ' A consulta falhou antes de receber uma resposta HTTP.');
+  return Object.assign(new Error(`${prefix}.${detail}`.trim()), {
+    statusCode,
+    expose: true,
+    cause: error,
+    ...(Number.isInteger(upstreamStatus) ? { upstreamStatus } : {})
+  });
+};
+
 const generateInvoiceBankSlip = async (invoiceId, dependencies = {}) => {
   if (!validInvoiceId(invoiceId)) throw validationError('Número da fatura inválido.');
   const getRecord = dependencies.getBankSlipRecord || store.getBankSlipRecord;
@@ -529,16 +662,17 @@ const generateInvoiceBankSlip = async (invoiceId, dependencies = {}) => {
   if (existing?.state === 'ready') return publicRecord(existing, false);
 
   const isItau = billing.bank.id === 'itau';
+  const isBradesco = billing.bank.id === 'bradesco';
   const getConfig = isItau
     ? (dependencies.itauBoletoConfig || itauBoletoConfig)
-    : (dependencies.c6Config || c6Config);
+    : (dependencies.bradescoConfig || bradescoConfig);
   const create = isItau
     ? (dependencies.createItauBankSlip || createItauBankSlip)
-    : (dependencies.createC6BankSlip || createC6BankSlip);
+    : (dependencies.createBradescoBankSlip || createBradescoBankSlip);
   const config = getConfig();
   const payload = isItau
     ? itauBankSlipPayload(billing, config)
-    : bankSlipPayload(billing, config);
+    : bradescoBankSlipPayload(billing, config);
 
   if (existing?.state === 'review' && isItau) {
     const query = dependencies.queryItauBankSlips || queryItauBankSlips;
@@ -574,6 +708,40 @@ const generateInvoiceBankSlip = async (invoiceId, dependencies = {}) => {
     throw Object.assign(new Error(
       'A tentativa anterior ainda não apareceu na consulta do Itaú. Confira o Bankline antes de emitir novamente.'
     ), { statusCode: 409 });
+  }
+  if (existing?.state === 'review' && isBradesco) {
+    const ourNumber = digits(existing.ourNumber);
+    if (ourNumber.length !== 11) {
+      throw Object.assign(new Error(
+        'A tentativa anterior no Bradesco não retornou Nosso Número. Confira o título no Net Empresa antes de emitir novamente.'
+      ), { statusCode: 409 });
+    }
+    let recovered;
+    try {
+      const query = dependencies.queryBradescoBankSlip || queryBradescoBankSlip;
+      recovered = await query(ourNumber, { config });
+    } catch (error) {
+      throw bradescoLookupError(
+        'Não foi possível conferir no Bradesco a tentativa anterior de emissão',
+        error
+      );
+    }
+    if (!recovered || !validRegisteredBradescoResponse(recovered)) {
+      throw Object.assign(new Error(
+        'A tentativa anterior ainda não apareceu na consulta do Bradesco. Confira o Net Empresa antes de emitir novamente.'
+      ), { statusCode: 409 });
+    }
+    const readyRecord = readyRecordFromBankResponse({
+      billing,
+      config,
+      payload,
+      bankResponse: recovered,
+      now,
+      isItau,
+      isBradesco
+    });
+    await save(billing.invoiceId, readyRecord);
+    return publicRecord(readyRecord, false);
   }
   if (existing?.state === 'processing' || existing?.state === 'review') {
     throw generationConflict(existing.state);
@@ -625,7 +793,8 @@ const generateInvoiceBankSlip = async (invoiceId, dependencies = {}) => {
         payload,
         bankResponse: recovered,
         now,
-        isItau
+        isItau,
+        isBradesco
       });
       await save(billing.invoiceId, readyRecord);
       return publicRecord(readyRecord, false);
@@ -667,13 +836,24 @@ const generateInvoiceBankSlip = async (invoiceId, dependencies = {}) => {
         ambiguousBankState: true
       });
     }
+    if (isBradesco && (!bankResponse.registered || !validRegisteredBradescoResponse(bankResponse))) {
+      throw Object.assign(new Error(
+        'O Bradesco recebeu o registro, mas não retornou Nosso Número, linha digitável e código de barras completos.'
+      ), {
+        statusCode: 502,
+        receivedResponse: true,
+        ambiguousBankState: true,
+        bankResponse
+      });
+    }
     const readyRecord = readyRecordFromBankResponse({
       billing,
       config,
       payload,
       bankResponse: { ...bankResponse, id: bankSlipId },
       now,
-      isItau
+      isItau,
+      isBradesco
     });
     await save(billing.invoiceId, readyRecord);
     return publicRecord(readyRecord, true);
@@ -682,7 +862,10 @@ const generateInvoiceBankSlip = async (invoiceId, dependencies = {}) => {
       const reviewRecord = {
         ...processingRecord,
         state: 'review',
-        reviewedAt: now.toISOString()
+        reviewedAt: now.toISOString(),
+        ...((bankResponse?.ourNumber || error?.bankResponse?.ourNumber)
+          ? { ourNumber: digits(bankResponse?.ourNumber || error.bankResponse.ourNumber).padStart(11, '0') }
+          : {})
       };
       try { await save(billing.invoiceId, reviewRecord); } catch { /* mantém o lock original */ }
     } else {
@@ -703,9 +886,13 @@ const getInvoiceBankSlipPdf = async (invoiceId, dependencies = {}) => {
     const render = dependencies.renderItauBankSlipPdf || renderItauBankSlipPdf;
     return render(record);
   }
-  const download = dependencies.getC6BankSlipPdf || getC6BankSlipPdf;
-  const config = (dependencies.c6Config || c6Config)();
-  return download(record.bankSlipId, { config });
+  if (record.bank === 'bradesco') {
+    const render = dependencies.renderBradescoBankSlipPdf || renderBradescoBankSlipPdf;
+    return render(record);
+  }
+  throw Object.assign(new Error(
+    'O boleto armazenado pertence a uma integração bancária que não está mais ativa.'
+  ), { statusCode: 409 });
 };
 
 module.exports = {
@@ -713,12 +900,16 @@ module.exports = {
   payerFromCompany,
   issuerFromInvoice,
   resolveInvoiceBillingData,
-  bankSlipPayload,
+  bradescoText,
+  bradescoDate,
+  bradescoMoney,
+  bradescoBankSlipPayload,
   itauOurNumberForInvoice,
   itauAmountForPayload,
   itauBankSlipPayload,
   itauBankSlipId,
   itauLookupError,
+  bradescoLookupError,
   generateInvoiceBankSlip,
   getInvoiceBankSlipPdf
 };

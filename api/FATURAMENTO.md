@@ -22,14 +22,25 @@ R2_BUCKET_NAME=twt-brudam-documentos
 R2_DOCCOB_PREFIX=brudam/clientes
 R2_DOCCOB_SCAN_LIMIT=250
 
-C6_ENVIRONMENT=sandbox
-C6_CLIENT_ID=
-C6_CLIENT_SECRET=
-C6_MTLS_CERT_BASE64=
-C6_MTLS_KEY_BASE64=
-C6_MTLS_KEY_PASSPHRASE=
-C6_PARTNER_SOFTWARE_NAME=TWT Faturamento
-C6_PARTNER_SOFTWARE_VERSION=1.0.0
+BRADESCO_ENVIRONMENT=sandbox
+BRADESCO_CLIENT_ID=
+BRADESCO_CLIENT_SECRET=
+BRADESCO_MTLS_CERT_BASE64=
+BRADESCO_MTLS_KEY_BASE64=
+BRADESCO_MTLS_KEY_PASSPHRASE=
+BRADESCO_BENEFICIARY_CNPJ=09123137000108
+BRADESCO_BENEFICIARY_NAME=TWT AIRPACK SERVICOS AUX. DE TRANSP. AEREO LTDA
+BRADESCO_AGENCY=7218
+BRADESCO_AGENCY_DIGIT=4
+BRADESCO_ACCOUNT=0000074
+BRADESCO_ACCOUNT_DIGIT=4
+BRADESCO_PRODUCT_ID=09
+BRADESCO_BOLETO_SPECIES=4
+BRADESCO_BOLETO_ACCEPTANCE=2
+BRADESCO_PENALTY_PERCENT=3.00
+BRADESCO_DAILY_INTEREST_PERCENT=0.15
+BRADESCO_INTEREST_START_DAYS=2
+BRADESCO_PENALTY_START_DAYS=2
 
 ITAU_CLIENT_ID=
 ITAU_CLIENT_SECRET=
@@ -84,49 +95,78 @@ O banco é definido no servidor pelo emitente confirmado nos dados da
 fatura/DOCCOB. Não existe parâmetro no navegador para selecionar ou trocar o
 banco:
 
-- TWT (`09.123.137/0001-08`) gera boleto exclusivamente no C6;
+- TWT (`09.123.137/0001-08`) gera boleto convencional exclusivamente no Bradesco;
 - DSL (`97.434.690/0001-29`) gera boleto exclusivamente no Itaú;
 - faturas sem identificação segura do emitente são recusadas.
 
 Essa validação também ocorre no endpoint de geração. Assim, uma chamada manual
-jamais envia uma fatura DSL ao C6 nem uma fatura TWT ao Itaú.
+jamais envia uma fatura DSL ao Bradesco nem uma fatura TWT ao Itaú.
 
-## Boletos C6 (TWT)
+## Boletos Bradesco (TWT)
 
-O C6 exige OAuth2 `client_credentials` e autenticação mTLS. Cadastre-se no
-[C6 Developers](https://developers.c6bank.com.br/create-access), solicite acesso
-à API de Boleto e receba `client_id`, `client_secret`, certificado `.crt` e chave
-`.key`. Converta os dois arquivos para Base64 antes de cadastrá-los na Vercel:
+O Bradesco exige OAuth2 `client_credentials` e autenticação mTLS tanto na
+obtenção do token quanto nas chamadas da API. Converta o certificado público e
+a chave privada para Base64 antes de cadastrá-los na Vercel:
 
 ```powershell
 [Convert]::ToBase64String([IO.File]::ReadAllBytes('caminho\certificado.crt'))
 [Convert]::ToBase64String([IO.File]::ReadAllBytes('caminho\chave.key'))
 ```
 
-Comece com `C6_ENVIRONMENT=sandbox`. O código seleciona automaticamente a
-carteira 21 no sandbox e a carteira 15 em produção. Só altere para `production`
-depois da homologação e da liberação das credenciais produtivas pelo C6.
+Comece com `BRADESCO_ENVIRONMENT=sandbox`. O sistema usa os endpoints oficiais
+`openapisandbox.prebanco.com.br` nesse ambiente e troca para
+`openapi.bradesco.com.br` somente quando a variável for alterada para
+`production`. Certificado e credenciais de sandbox não devem ser reutilizados em
+produção.
 
-O botão identifica o C6 para faturas TWT. A geração usa o
+Antes da produção, a conta precisa ter contrato de cobrança ativo, indicador
+`175` habilitado e ao menos um acesso anterior ao Bradesco Net Empresa. No
+sandbox, o portal aceita certificado A1 público autoassinado; em produção, use o
+certificado A1 público emitido por uma autoridade certificadora confiável e as
+credenciais produtivas liberadas pelo banco. A chave privada correspondente fica
+somente na Vercel, em Base64, e nunca deve ser enviada ao portal ou versionada.
+Se a chave estiver criptografada, configure também
+`BRADESCO_MTLS_KEY_PASSPHRASE`.
+
+O botão identifica o Bradesco para faturas TWT. A geração usa o
 saldo pendente, o vencimento da fatura e os dados do pagador consultados em
-`GET /cadastro/empresas`. O C6 exige razão social, CPF/CNPJ, logradouro, número,
-cidade, UF e CEP; se algum desses dados estiver ausente, a emissão é bloqueada
-com uma mensagem para correção do cadastro.
+`GET /cadastro/empresas`. O Bradesco exige razão social, CPF/CNPJ, logradouro,
+número, bairro, cidade, UF e CEP; se algum desses dados estiver ausente, a
+emissão é bloqueada com uma mensagem para correção do cadastro. Logradouro,
+bairro e município são enviados sem acentos e sem caracteres especiais, como
+determina o layout.
 
 `POST /api/faturamento/boleto` gera ou recupera de forma idempotente o boleto da
-fatura. `GET /api/faturamento/boleto-pdf?id=...` baixa o PDF do C6 ou gera a ficha
-de compensação Itaú com os dados bancários autorizados. Ambos exigem a sessão
-administrativa. O POST também exige mesma origem.
+fatura. `GET /api/faturamento/boleto-pdf?id=...` gera localmente o recibo do
+pagador e a ficha de compensação Bradesco ou Itaú com os dados bancários
+autorizados. Ambos exigem a sessão administrativa. O POST também exige mesma
+origem.
 
 O Redis é obrigatório para a emissão: ele mantém o vínculo entre a fatura e o
-identificador do C6 e impede boletos duplicados em cliques simultâneos ou novas
-execuções serverless. Uma falha de rede com resultado bancário incerto bloqueia
-nova tentativa até conferência manual.
+Nosso Número devolvido pelo Bradesco e impede boletos duplicados em cliques
+simultâneos ou novas execuções serverless. Como o Nosso Número é gerado pelo
+banco, não existe uma consulta preventiva antes do primeiro registro. Após a
+emissão, a consulta de título específico usa esse Nosso Número para recuperar a
+segunda via. Uma falha de rede sem Nosso Número e com resultado bancário incerto
+bloqueia nova tentativa até conferência manual no Bradesco Net Empresa.
+
+O número da negociação de registro é montado automaticamente como agência de 4
+dígitos + 7 zeros + conta de 7 dígitos. Para consulta, é usado agência + conta,
+totalizando 11 dígitos. A carteira/produto padrão é `09`, a espécie `4` representa
+`DS` e o aceite `2` representa não aceite. O sistema envia Nosso Número `0` para
+que o Bradesco gere o identificador.
+
+Os encargos confirmados para a TWT são multa de 3% e juros de 0,15% ao dia. Como
+o campo de juros da API é mensal e o Bradesco calcula o valor diário dividindo
+por 30, o payload envia 4,50% ao mês. Ambos começam após o vencimento com o
+deslocamento documentado pelo banco: para iniciar no dia seguinte, os campos
+`qtdeDiasJuros` e `qtdeDiasMulta` recebem `2`, pois a API subtrai um dia do valor
+informado.
 
 ## Boletos Itaú (DSL)
 
 O sistema reconhece o CNPJ da DSL e apresenta o Itaú como banco obrigatório. A
-fatura DSL nunca é enviada ao C6. A implementação segue a especificação oficial
+fatura DSL nunca é enviada ao Bradesco. A implementação segue a especificação oficial
 `API Boletos - Emissão e Instrução 2.75.147`: autenticação OAuth2/mTLS no STS e
 emissão em `POST /cash_management/v2/boletos`. A resposta fornece `id_boleto`,
 nosso número, linha digitável e código de barras. Como essa API não oferece uma

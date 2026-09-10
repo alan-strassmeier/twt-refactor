@@ -2,16 +2,10 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const {
-  ENVIRONMENTS,
-  c6Config,
-  requestAccessToken,
-  resetTokenCache
-} = require('../server/faturamento/c6');
-const {
   externalReferenceForInvoice,
   payerFromCompany,
   resolveInvoiceBillingData,
-  bankSlipPayload,
+  bradescoBankSlipPayload,
   itauOurNumberForInvoice,
   itauAmountForPayload,
   itauBankSlipPayload,
@@ -43,6 +37,7 @@ const payerCompany = {
   endereco: 'AVENIDA DAS EMPRESAS MUITO COMPRIDA PARA O LIMITE DO BANCO',
   numero: '123',
   complemento: 'SALA 4',
+  bairro: 'CENTRO HISTORICO',
   cidade: 'PORTO ALEGRE',
   uf: 'RS',
   cep: '91000-000',
@@ -59,60 +54,13 @@ const billingDependencies = (issuerCnpj = '09123137000108') => ({
   now: new Date('2026-08-08T12:00:00Z')
 });
 
-test('configura hosts e carteiras oficiais separados para sandbox e produção', () => {
-  const common = {
-    C6_CLIENT_ID: 'client-id',
-    C6_CLIENT_SECRET: 'client-secret',
-    C6_MTLS_CERT_BASE64: Buffer.from('certificado').toString('base64'),
-    C6_MTLS_KEY_BASE64: Buffer.from('chave').toString('base64')
-  };
-  const sandbox = c6Config({ ...common, C6_ENVIRONMENT: 'sandbox' });
-  const production = c6Config({ ...common, C6_ENVIRONMENT: 'production' });
-
-  assert.equal(sandbox.baseUrl, ENVIRONMENTS.sandbox.baseUrl);
-  assert.equal(sandbox.billingScheme, '21');
-  assert.equal(production.baseUrl, ENVIRONMENTS.production.baseUrl);
-  assert.equal(production.billingScheme, '15');
-});
-
-test('autentica no C6 com client_credentials e certificado mTLS', async () => {
-  resetTokenCache();
-  const config = c6Config({
-    C6_ENVIRONMENT: 'sandbox',
-    C6_CLIENT_ID: 'client-id',
-    C6_CLIENT_SECRET: 'client-secret',
-    C6_MTLS_CERT_BASE64: Buffer.from('certificado').toString('base64'),
-    C6_MTLS_KEY_BASE64: Buffer.from('chave').toString('base64')
-  });
-  const result = await requestAccessToken(config, async (request) => {
-    assert.equal(request.url, 'https://baas-api-sandbox.c6bank.info/v1/auth/');
-    assert.equal(request.method, 'POST');
-    assert.equal(request.config.cert.toString(), 'certificado');
-    const body = new URLSearchParams(request.body);
-    assert.equal(body.get('client_id'), 'client-id');
-    assert.equal(body.get('client_secret'), 'client-secret');
-    assert.equal(body.get('grant_type'), 'client_credentials');
-    return {
-      statusCode: 200,
-      headers: { 'content-type': 'application/json' },
-      body: Buffer.from(JSON.stringify({
-        access_token: 'token-seguro',
-        expires_in: 300,
-        token_type: 'Bearer'
-      }))
-    };
-  });
-
-  assert.deepEqual(result, { token: 'token-seguro', expiresIn: 300 });
-});
-
-test('normaliza o pagador conforme limites obrigatórios da API C6', () => {
+test('normaliza o pagador conforme dados obrigatórios das APIs bancárias', () => {
   const payer = payerFromCompany(payerCompany);
   assert.equal(payer.name.length, 40);
   assert.equal(payer.tax_id, '28759933000186');
-  assert.equal(payer.address.number, 123);
+  assert.equal(payer.address.number, '123');
   assert.equal(payer.address.zip_code, '91000000');
-  assert.equal(payer.address.street.length + String(payer.address.number).length <= 40, true);
+  assert.equal(payer.address.street.length <= 40, true);
   assert.equal(payer.email, 'financeiro@example.com');
 });
 
@@ -123,11 +71,11 @@ test('gera referência externa determinística com no máximo dez caracteres', (
   assert.equal(long.length, 10);
 });
 
-test('roteia TWT para C6 e DSL para Itaú usando o emitente confirmado no DOCCOB', async () => {
+test('roteia TWT para Bradesco e DSL para Itaú usando o emitente confirmado no DOCCOB', async () => {
   const billing = await resolveInvoiceBillingData('11518', billingDependencies());
   assert.equal(billing.invoiceId, '11518');
   assert.equal(billing.issuerCnpj, '09123137000108');
-  assert.equal(billing.bank, BILLING_BANKS.c6);
+  assert.equal(billing.bank, BILLING_BANKS.bradesco);
   assert.equal(billing.amount, 1844);
   assert.equal(billing.dueAt, '2026-08-14');
 
@@ -179,14 +127,14 @@ test('bloqueia geração de boleto para cliente com pagamento por TED/DOC', asyn
   );
 });
 
-test('fatura DSL é validada no Itaú sem registrar título nem chamar o C6', async () => {
-  let c6Calls = 0;
+test('fatura DSL é validada no Itaú sem registrar título nem chamar o Bradesco', async () => {
+  let bradescoCalls = 0;
   let itauCalls = 0;
   const result = await generateInvoiceBankSlip('11518', {
     ...billingDependencies('97434690000129'),
     getBankSlipRecord: async () => null,
-    c6Config: () => { c6Calls += 1; },
-    createC6BankSlip: async () => { c6Calls += 1; },
+    bradescoConfig: () => { bradescoCalls += 1; },
+    createBradescoBankSlip: async () => { bradescoCalls += 1; },
     itauBoletoConfig: () => ({
       stage: 'validacao',
       beneficiaryId: '150000052061',
@@ -202,7 +150,7 @@ test('fatura DSL é validada no Itaú sem registrar título nem chamar o C6', as
   });
   assert.equal(result.status, 'validated');
   assert.match(result.message, /Nenhum boleto foi registrado/);
-  assert.equal(c6Calls, 0);
+  assert.equal(bradescoCalls, 0);
   assert.equal(itauCalls, 1);
 });
 
@@ -216,19 +164,36 @@ test('bloqueia fatura vencida até a data ser corrigida na Brudam', async () => 
   );
 });
 
-test('monta a emissão com carteira do ambiente e sem seleção de outro banco', async () => {
+test('monta a emissão Bradesco convencional com Nosso Número gerado pelo banco', async () => {
   const billing = await resolveInvoiceBillingData('11518', billingDependencies());
-  const payload = bankSlipPayload(billing, { billingScheme: '21' });
-  assert.deepEqual(Object.keys(payload).sort(), [
-    'amount',
-    'billing_scheme',
-    'due_date',
-    'external_reference_id',
-    'instructions',
-    'payer'
-  ]);
-  assert.equal(payload.billing_scheme, '21');
-  assert.equal(payload.external_reference_id, 'TWT11518');
+  const payload = bradescoBankSlipPayload(billing, {
+    beneficiaryRoot: '09123137',
+    beneficiaryBranch: '0001',
+    beneficiaryControl: '08',
+    productId: '09',
+    registrationNegotiation: '721800000000000074',
+    species: '4',
+    acceptance: '2',
+    monthlyInterestPercent: 4.5,
+    dailyInterestPercent: 0.15,
+    penaltyPercent: 3,
+    interestStartDays: '2',
+    penaltyStartDays: '2'
+  });
+  assert.equal(payload.nuTitulo, '0');
+  assert.equal(payload.nuCliente, 'FAT11518');
+  assert.equal(payload.nuNegociacao, '721800000000000074');
+  assert.equal(payload.dtEmissaoTitulo, '03.08.2026');
+  assert.equal(payload.dtVencimentoTitulo, '14.08.2026');
+  assert.equal(payload.vlNominalTitulo, '1844.00');
+  assert.equal(payload.percentualJuros, '4.50');
+  assert.equal(payload.percentualMulta, '3.00');
+  assert.equal(payload.qtdeDiasJuros, '2');
+  assert.equal(payload.qtdeDiasMulta, '2');
+  assert.equal(payload.cdEspecieTitulo, '4');
+  assert.equal(payload.cdIndCpfcnpjPagador, '2');
+  assert.equal(payload.cepPagador, '91000');
+  assert.equal(payload.complementoCepPagador, '000');
 });
 
 test('monta o boleto Itaú no contrato oficial e com nosso número determinístico', async () => {
@@ -482,7 +447,7 @@ test('reaproveita boleto Itaú já emitido pela Brudam sem executar o POST', asy
   assert.equal(createCalls, 0);
 });
 
-test('PDF do Itaú é gerado localmente e o PDF do C6 continua vindo do banco', async () => {
+test('PDFs do Itaú e Bradesco são gerados localmente com os dados registrados', async () => {
   const itauPdf = Buffer.from('%PDF-itau');
   const rendered = await getInvoiceBankSlipPdf('11518', {
     getBankSlipRecord: async () => ({
@@ -494,17 +459,16 @@ test('PDF do Itaú é gerado localmente e o PDF do C6 continua vindo do banco', 
   });
   assert.equal(rendered, itauPdf);
 
-  const c6Pdf = Buffer.from('%PDF-c6');
-  const downloaded = await getInvoiceBankSlipPdf('11518', {
+  const bradescoPdf = Buffer.from('%PDF-bradesco');
+  const renderedBradesco = await getInvoiceBankSlipPdf('11518', {
     getBankSlipRecord: async () => ({
       state: 'ready',
-      bank: 'c6',
-      bankSlipId: '01J3NCKY6Q99QC4D7T733D35QD'
+      bank: 'bradesco',
+      bankSlipId: '00000021311'
     }),
-    c6Config: () => ({ environment: 'sandbox' }),
-    getC6BankSlipPdf: async () => c6Pdf
+    renderBradescoBankSlipPdf: async () => bradescoPdf
   });
-  assert.equal(downloaded, c6Pdf);
+  assert.equal(renderedBradesco, bradescoPdf);
 });
 
 test('emite uma única vez e reaproveita o boleto registrado no Redis', async () => {
@@ -521,16 +485,39 @@ test('emite uma única vez e reaproveita o boleto registrado no Redis', async ()
     },
     saveBankSlipRecord: async (_invoiceId, value) => { record = value; },
     releaseBankSlipClaim: async () => { record = null; },
-    c6Config: () => ({ billingScheme: '21' }),
-    createC6BankSlip: async (payload) => {
+    bradescoConfig: () => ({
+      beneficiaryRoot: '09123137',
+      beneficiaryBranch: '0001',
+      beneficiaryControl: '08',
+      beneficiaryName: 'TWT AIRPACK SERVICOS AUX. DE TRANSP. AEREO LTDA',
+      beneficiaryTaxId: '09123137000108',
+      agency: '7218',
+      agencyDigit: '4',
+      account: '0000074',
+      accountDigit: '4',
+      productId: '09',
+      registrationNegotiation: '721800000000000074',
+      species: '4',
+      acceptance: '2',
+      monthlyInterestPercent: 4.5,
+      dailyInterestPercent: 0.15,
+      penaltyPercent: 3,
+      interestStartDays: '2',
+      penaltyStartDays: '2'
+    }),
+    createBradescoBankSlip: async (payload) => {
       createCalls += 1;
-      assert.equal(payload.external_reference_id, 'TWT11518');
+      assert.equal(payload.nuCliente, 'FAT11518');
       return {
-        id: '01J3NCKY6Q99QC4D7T733D35QD',
+        id: '00000021311',
+        registered: true,
+        ourNumber: '00000021311',
+        yourNumber: 'FAT11518',
+        wallet: '09',
         amount: 1844,
-        due_date: '2026-08-14',
-        digitable_line: '33690.00009 00000.000000 00000.000000 0 00000000184400',
-        bar_code: '33690000000001844000000000000000000000000000'
+        dueDate: '2026-08-14',
+        digitableLine: '23797218029000000213011000007408715790000072461',
+        barCode: '23797157900000724617218090000002131100000740'
       };
     }
   };
@@ -540,6 +527,8 @@ test('emite uma única vez e reaproveita o boleto registrado no Redis', async ()
   assert.equal(first.created, true);
   assert.equal(second.created, false);
   assert.equal(first.status, 'ready');
+  assert.equal(first.bank, 'bradesco');
+  assert.equal(record.ourNumber, '00000021311');
   assert.equal(createCalls, 1);
 });
 
@@ -554,8 +543,21 @@ test('mantém bloqueio para conferência quando a resposta bancária é incerta'
     },
     saveBankSlipRecord: async (_invoiceId, value) => { record = value; },
     releaseBankSlipClaim: async () => { record = null; },
-    c6Config: () => ({ billingScheme: '21' }),
-    createC6BankSlip: async () => {
+    bradescoConfig: () => ({
+      beneficiaryRoot: '09123137',
+      beneficiaryBranch: '0001',
+      beneficiaryControl: '08',
+      productId: '09',
+      registrationNegotiation: '721800000000000074',
+      species: '4',
+      acceptance: '2',
+      monthlyInterestPercent: 4.5,
+      dailyInterestPercent: 0.15,
+      penaltyPercent: 3,
+      interestStartDays: '2',
+      penaltyStartDays: '2'
+    }),
+    createBradescoBankSlip: async () => {
       throw Object.assign(new Error('timeout'), {
         statusCode: 504,
         ambiguousBankState: true

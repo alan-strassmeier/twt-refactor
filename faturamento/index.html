@@ -78,32 +78,40 @@
               Emissão inicial
               <span class="date-filter-control">
                 <input type="text" name="emissao[gte]" data-date-filter inputmode="numeric" autocomplete="off" maxlength="10" placeholder="dd/mm/aaaa">
-                <span class="date-filter-icon" aria-hidden="true"></span>
-                <input class="date-filter-picker" type="date" data-date-picker aria-label="Abrir calendário da emissão inicial">
+                <button class="date-filter-trigger" type="button" data-date-trigger aria-label="Abrir calendário da emissão inicial">
+                  <span class="date-filter-icon" aria-hidden="true"></span>
+                </button>
+                <input class="date-filter-picker" type="date" data-date-picker tabindex="-1" aria-hidden="true">
               </span>
             </label>
             <label>
               Emissão final
               <span class="date-filter-control">
                 <input type="text" name="emissao[lte]" data-date-filter inputmode="numeric" autocomplete="off" maxlength="10" placeholder="dd/mm/aaaa">
-                <span class="date-filter-icon" aria-hidden="true"></span>
-                <input class="date-filter-picker" type="date" data-date-picker aria-label="Abrir calendário da emissão final">
+                <button class="date-filter-trigger" type="button" data-date-trigger aria-label="Abrir calendário da emissão final">
+                  <span class="date-filter-icon" aria-hidden="true"></span>
+                </button>
+                <input class="date-filter-picker" type="date" data-date-picker tabindex="-1" aria-hidden="true">
               </span>
             </label>
             <label>
               Vencimento inicial
               <span class="date-filter-control">
                 <input type="text" name="vencimento[gte]" data-date-filter inputmode="numeric" autocomplete="off" maxlength="10" placeholder="dd/mm/aaaa">
-                <span class="date-filter-icon" aria-hidden="true"></span>
-                <input class="date-filter-picker" type="date" data-date-picker aria-label="Abrir calendário do vencimento inicial">
+                <button class="date-filter-trigger" type="button" data-date-trigger aria-label="Abrir calendário do vencimento inicial">
+                  <span class="date-filter-icon" aria-hidden="true"></span>
+                </button>
+                <input class="date-filter-picker" type="date" data-date-picker tabindex="-1" aria-hidden="true">
               </span>
             </label>
             <label>
               Vencimento final
               <span class="date-filter-control">
                 <input type="text" name="vencimento[lte]" data-date-filter inputmode="numeric" autocomplete="off" maxlength="10" placeholder="dd/mm/aaaa">
-                <span class="date-filter-icon" aria-hidden="true"></span>
-                <input class="date-filter-picker" type="date" data-date-picker aria-label="Abrir calendário do vencimento final">
+                <button class="date-filter-trigger" type="button" data-date-trigger aria-label="Abrir calendário do vencimento final">
+                  <span class="date-filter-icon" aria-hidden="true"></span>
+                </button>
+                <input class="date-filter-picker" type="date" data-date-picker tabindex="-1" aria-hidden="true">
               </span>
             </label>
             <label>
@@ -255,7 +263,11 @@
     <section class="document-modal-panel" role="dialog" aria-modal="true"
       aria-labelledby="documentModalTitle" aria-describedby="documentModalDescription">
       <button class="document-modal-close" id="documentModalClose" type="button"
-        aria-label="Fechar opções de documentos">×</button>
+        aria-label="Fechar opções de documentos">
+        <svg aria-hidden="true" viewBox="0 0 24 24" focusable="false">
+          <path d="M6 6l12 12M18 6L6 18"></path>
+        </svg>
+      </button>
       <span class="document-modal-eyebrow">Documentos da entrega</span>
       <h2 id="documentModalTitle">Visualizar fatura</h2>
       <p id="documentModalDescription">Escolha qual documento deseja abrir em uma nova guia.</p>
@@ -285,7 +297,11 @@
     <section class="document-modal-panel nfse-confirm-panel" role="dialog" aria-modal="true"
       aria-labelledby="nfseConfirmTitle" aria-describedby="nfseConfirmDescription">
       <button class="document-modal-close" id="nfseConfirmClose" type="button"
-        aria-label="Cancelar emissão da NFS-e">×</button>
+        aria-label="Cancelar emissão da NFS-e">
+        <svg aria-hidden="true" viewBox="0 0 24 24" focusable="false">
+          <path d="M6 6l12 12M18 6L6 18"></path>
+        </svg>
+      </button>
       <span class="document-modal-eyebrow">Conferência fiscal</span>
       <h2 id="nfseConfirmTitle">Emitir NFS-e</h2>
       <p id="nfseConfirmDescription">Confira os dados abaixo. Após a autorização, a NFS-e somente poderá ser cancelada ou substituída.</p>

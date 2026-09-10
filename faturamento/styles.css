@@ -238,41 +238,53 @@ select:focus {
   padding-right: 48px;
 }
 
-.date-filter-icon {
+.date-filter-trigger {
   position: absolute;
-  top: 50%;
-  right: 13px;
+  z-index: 1;
+  top: 0;
+  right: 0;
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  padding: 0;
+  border: 0;
+  color: #66798a;
+  background: transparent;
+  cursor: pointer;
+}
+
+.date-filter-trigger:focus-visible {
+  outline: 2px solid var(--blue-500);
+  outline-offset: -2px;
+  border-radius: 6px;
+}
+
+.date-filter-icon {
+  display: block;
   width: 20px;
   height: 20px;
   pointer-events: none;
-  transform: translateY(-50%);
   background: center / contain no-repeat url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 24 24' fill='none' stroke='%2366798a' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='4.5' width='18' height='16' rx='2'/%3E%3Cpath d='M8 2.5v4M16 2.5v4M3 9.5h18'/%3E%3C/svg%3E");
 }
 
 .date-filter-picker {
   position: absolute;
-  top: 0;
-  right: 0;
-  width: 46px;
-  min-height: 46px;
+  right: 27px;
+  bottom: 2px;
+  width: 1px;
+  height: 1px;
+  min-height: 0;
   margin: 0;
   padding: 0;
   border: 0;
   opacity: 0;
-  cursor: pointer;
+  pointer-events: none;
 }
 
 .date-filter-picker:focus {
   border: 0;
   box-shadow: none;
-}
-
-.date-filter-picker::-webkit-calendar-picker-indicator {
-  width: 100%;
-  height: 46px;
-  margin: 0;
-  padding: 0;
-  cursor: pointer;
 }
 
 .date-filter-control:focus-within > [data-date-filter] {
@@ -970,9 +982,19 @@ body.modal-open {
   border-radius: 50%;
   color: var(--navy-900);
   background: var(--blue-50);
-  font-size: 1.5rem;
-  line-height: 1;
+  font-size: 0;
+  line-height: 0;
   cursor: pointer;
+}
+
+.document-modal-close svg {
+  display: block;
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
 }
 
 .document-modal-eyebrow {
