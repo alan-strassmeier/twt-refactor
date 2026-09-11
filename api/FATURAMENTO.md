@@ -141,10 +141,21 @@ Na aba **Webhooks** do mesmo Agent:
    `ZOHO_WEBHOOK_AUTH_KEY` e faça um novo deployment;
 5. use **Send Test** no ZeptoMail. A resposta esperada da URL é HTTP 200.
 
-O endpoint é público porque precisa receber chamadas do ZeptoMail, mas rejeita
-payloads sem a assinatura HMAC-SHA256 correta ou com mais de cinco minutos. A
-URL faz parte da função consolidada e não consome uma Serverless Function
-adicional.
+Se a tela atual do ZeptoMail exibir **Authorization headers**, use uma destas
+opções (a primeira é recomendada):
+
+- nome `X-TWT-Webhook-Token` e valor igual a `ZOHO_WEBHOOK_AUTH_KEY`; ou
+- nome `Authorization` e valor `Bearer VALOR_DE_ZOHO_WEBHOOK_AUTH_KEY`.
+
+`ZOHO_WEBHOOK_AUTH_KEY` é o nome da variável na Vercel, não o nome recomendado
+para o cabeçalho HTTP. O nome legado também é aceito pelo servidor para não
+bloquear configurações já salvas.
+
+O endpoint é público porque precisa receber chamadas do ZeptoMail. O POST
+rejeita payloads que não tenham a assinatura HMAC-SHA256 oficial válida nem um
+dos tokens configurados acima. GET e HEAD apenas retornam o estado `ready` para
+verificadores de disponibilidade e nunca processam eventos. A URL faz parte da
+função consolidada e não consome uma Serverless Function adicional.
 
 O log **Aguardando confirmação** significa apenas que o SMTP aceitou a
 mensagem. **Entregue ao servidor destinatário** significa que o servidor do

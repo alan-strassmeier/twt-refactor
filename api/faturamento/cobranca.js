@@ -10,6 +10,9 @@ const store = require('../../server/faturamento/cobranca-store');
 const { runBillingCollection } = require('../../server/faturamento/cobranca-processor');
 const {
   readWebhookBody,
+  webhookConfig,
+  webhookTokenAuthorized,
+  parseWebhookPayload,
   validateWebhook,
   processWebhookPayload
 } = require('../../server/faturamento/cobranca-webhook');
@@ -188,16 +191,28 @@ const handleProcess = async (req, res) => {
 };
 
 const handleWebhook = async (req, res) => {
+  const config = webhookConfig();
+  if (req.method === 'GET' || req.method === 'HEAD') {
+    res.statusCode = 200;
+    res.setHeader('Cache-Control', 'no-store, max-age=0');
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.end(req.method === 'HEAD' ? undefined : JSON.stringify({ status: 'ready' }));
+    return;
+  }
   if (req.method !== 'POST') {
-    res.setHeader('Allow', 'POST');
+    res.setHeader('Allow', 'GET, HEAD, POST');
     sendJson(res, 405, { message: 'Método não permitido.' });
     return;
   }
   const body = await readWebhookBody(req);
-  const payload = validateWebhook({
-    body,
-    signatureHeader: req.headers['producer-signature']
-  });
+  const payload = webhookTokenAuthorized(req.headers, config)
+    ? parseWebhookPayload(body)
+    : validateWebhook({
+      body,
+      signatureHeader: req.headers['producer-signature'],
+      config
+    });
   const result = await processWebhookPayload(payload);
   sendJson(res, 200, { received: true, ...result });
 };
