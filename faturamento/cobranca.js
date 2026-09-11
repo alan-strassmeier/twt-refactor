@@ -126,11 +126,43 @@
   };
 
   const deleteContact = async (cnpj, id) => {
-    if (!window.confirm('Excluir este contato de cobrança?')) return;
+    if (!window.confirm('Excluir este contato de cobrança também da Brudam?')) return;
     setLoading(true);
     try {
-      await requestJson(endpoint('contacts', { cnpj, id }), { method: 'DELETE' });
-      setMessage('Contato excluído.', 'success');
+      const result = await requestJson(endpoint('contacts', { cnpj, id }), { method: 'DELETE' });
+      setMessage(result.message || 'Contato excluído.', 'success');
+      await loadCategories();
+    } catch (error) {
+      setMessage(error.message, 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const setContactEnabled = async (category, contact, enabled) => {
+    setLoading(true);
+    try {
+      await requestJson(endpoint('contacts'), {
+        method: 'PATCH',
+        body: JSON.stringify({ cnpj: category.cnpj, id: contact.id, enabled })
+      });
+      setMessage(enabled ? 'Contato habilitado para envio.' : 'Contato desabilitado para envio.', 'success');
+      await loadCategories();
+    } catch (error) {
+      setMessage(error.message, 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const syncContacts = async (category) => {
+    setLoading(true);
+    try {
+      const result = await requestJson(endpoint('contacts-sync'), {
+        method: 'POST',
+        body: JSON.stringify({ cnpj: category.cnpj })
+      });
+      setMessage(result.message, 'success');
       await loadCategories();
     } catch (error) {
       setMessage(error.message, 'error');
@@ -142,13 +174,25 @@
   const createContactItem = (category, contact) => {
     const item = document.createElement('li');
     item.className = 'contact-item';
+    const enabled = contact.enabled !== false;
+    item.classList.toggle('is-disabled', !enabled);
     const identity = document.createElement('div');
+    identity.className = 'contact-identity';
     const name = document.createElement('strong');
     name.textContent = [contact.firstName, contact.lastName].filter(Boolean).join(' ');
     const email = document.createElement('a');
     email.href = `mailto:${contact.email}`;
     email.textContent = contact.email;
     identity.append(name, email);
+    const actions = document.createElement('div');
+    actions.className = 'contact-actions';
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = `contact-send-toggle ${enabled ? 'is-enabled' : 'is-disabled'}`;
+    toggle.setAttribute('aria-pressed', String(enabled));
+    toggle.setAttribute('aria-label', `${enabled ? 'Desabilitar' : 'Habilitar'} envio para ${name.textContent}`);
+    toggle.textContent = enabled ? 'Envio ✔️' : 'Envio ❌';
+    toggle.addEventListener('click', () => setContactEnabled(category, contact, !enabled));
     const remove = document.createElement('button');
     remove.type = 'button';
     remove.className = 'icon-action danger-action';
@@ -156,7 +200,8 @@
     remove.title = 'Excluir contato';
     remove.textContent = 'Excluir';
     remove.addEventListener('click', () => deleteContact(category.cnpj, contact.id));
-    item.append(identity, remove);
+    actions.append(toggle, remove);
+    item.append(identity, actions);
     return item;
   };
 
@@ -262,7 +307,10 @@
     company.append(name, cnpj);
     const count = document.createElement('span');
     count.className = 'category-count';
-    count.textContent = `${category.contacts.length} destinatário${category.contacts.length === 1 ? '' : 's'}`;
+    const enabledTotal = category.contacts.filter((contact) => contact.enabled !== false).length;
+    count.textContent = enabledTotal === category.contacts.length
+      ? `${enabledTotal} destinatário${enabledTotal === 1 ? '' : 's'}`
+      : `${enabledTotal} de ${category.contacts.length} com envio`;
     summary.append(company, count);
 
     const content = document.createElement('div');
@@ -300,9 +348,14 @@
     removeCategory.className = 'button button-quiet danger-button';
     removeCategory.textContent = 'Excluir empresa';
     removeCategory.addEventListener('click', () => requestCategoryDeletion(category, removeCategory));
+    const updateContacts = document.createElement('button');
+    updateContacts.type = 'button';
+    updateContacts.className = 'button button-quiet';
+    updateContacts.textContent = 'Atualizar Contatos';
+    updateContacts.addEventListener('click', () => syncContacts(category));
     const footer = document.createElement('div');
     footer.className = 'category-footer';
-    footer.appendChild(removeCategory);
+    footer.append(updateContacts, removeCategory);
     content.append(contacts, form, footer);
     card.append(summary, content);
     return card;
@@ -482,12 +535,12 @@
     const data = new FormData(elements.categoryForm);
     setLoading(true);
     try {
-      await requestJson(endpoint('categories'), {
+      const result = await requestJson(endpoint('categories'), {
         method: 'POST',
         body: JSON.stringify({ cnpj: data.get('cnpj'), name: data.get('name') })
       });
       elements.categoryForm.reset();
-      setMessage('Empresa salva.', 'success');
+      setMessage(result.message || 'Empresa salva.', 'success');
       await loadCategories();
     } catch (error) {
       setMessage(error.message, 'error');

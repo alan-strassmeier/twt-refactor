@@ -11,12 +11,21 @@ const {
 const seed = require('../server/faturamento/cobranca-contacts-seed.json');
 const {
   normalizedContact,
+  mergeContacts,
+  setContactEnabled,
   deliveryField,
   saoPauloDate: logDate,
   listLogs,
   claimProcessingRun,
   releaseProcessingRun
 } = require('../server/faturamento/cobranca-store');
+const {
+  companyFromPayload,
+  contactsFromCompany,
+  registerCompany,
+  removeCompanyContact,
+  deleteContact: deleteBrudamContact
+} = require('../server/faturamento/cobranca-brudam-contacts');
 const {
   EVENT_TYPES,
   billingSubject,
@@ -70,9 +79,167 @@ test('infere nome e sobrenome do local-part do e-mail', () => {
       id: normalizedContact('11280282000144', { email: 'maria-silva@example.com' }).id,
       firstName: 'Maria',
       lastName: 'Silva',
-      email: 'maria-silva@example.com'
+      email: 'maria-silva@example.com',
+      enabled: true
     }
   );
+});
+
+test('interpreta os contatos de xGrupo retornados pela Brudam', () => {
+  const payload = {
+    status: 1,
+    data: [{
+      cnpj: '11.280.282/0001-44',
+      fantasia: 'BHZ',
+      xGrupo: [
+        { xNome: 'MARIA SILVA', email: 'Maria@Example.com', telefone: '51999999999' },
+        { xNome: 'Sem e-mail', email: '' }
+      ]
+    }]
+  };
+  const company = companyFromPayload(payload, '11280282000144');
+  assert.equal(company.fantasia, 'BHZ');
+  assert.deepEqual(contactsFromCompany(company), [{
+    firstName: 'MARIA SILVA',
+    lastName: '',
+    email: 'maria@example.com',
+    enabled: true
+  }]);
+});
+
+test('ao cadastrar empresa importa os contatos da Brudam pelo CNPJ', async () => {
+  const saved = [];
+  const merged = [];
+  const storage = {
+    saveCategory: async (category) => {
+      saved.push(category);
+      return { ...category, cnpj: '11280282000144', contacts: [] };
+    },
+    mergeContacts: async (cnpj, contacts) => {
+      merged.push({ cnpj, contacts });
+      return {
+        category: { cnpj, name: 'BHZ', contacts },
+        added: contacts
+      };
+    }
+  };
+  const result = await registerCompany({ cnpj: '11.280.282/0001-44', name: '' }, {
+    store: storage,
+    get: async (url) => {
+      assert.equal(url, '/cadastro/empresas?cnpj=11280282000144');
+      return {
+        response: { ok: true, status: 200 },
+        payload: {
+          status: 1,
+          data: [{
+            cnpj: '11280282000144',
+            fantasia: 'BHZ',
+            xGrupo: [{ xNome: 'Maria Silva', email: 'maria@example.com' }]
+          }]
+        }
+      };
+    }
+  });
+  assert.deepEqual(saved, [{ cnpj: '11.280.282/0001-44', name: 'BHZ' }]);
+  assert.equal(merged[0].cnpj, '11280282000144');
+  assert.equal(result.imported, 1);
+});
+
+test('remove da Brudam somente o contato escolhido e confirma por novo GET', async () => {
+  const original = {
+    status: 1,
+    data: [{
+      cnpj: '11280282000144',
+      fantasia: 'BHZ',
+      xGrupo: [
+        { xNome: 'Maria', email: 'maria@example.com', telefone: '1111', alertaOcorrencias: 'S' },
+        { xNome: 'João', email: 'joao@example.com', telefone: '2222', preAlertaWhatsApp: 'N' }
+      ]
+    }]
+  };
+  const verified = {
+    status: 1,
+    data: [{
+      cnpj: '11280282000144',
+      fantasia: 'BHZ',
+      xGrupo: [{ xNome: 'João', email: 'joao@example.com', telefone: '2222', preAlertaWhatsApp: 'N' }]
+    }]
+  };
+  let getCalls = 0;
+  let patchBody;
+  const result = await removeCompanyContact('11280282000144', 'maria@example.com', {
+    get: async () => ({ response: { ok: true, status: 200 }, payload: getCalls++ ? verified : original }),
+    patch: async (url, body) => {
+      assert.equal(url, '/cadastro/empresas');
+      patchBody = body;
+      return { response: { ok: true, status: 200 }, payload: { status: 1, message: 'OK' } };
+    }
+  });
+  assert.equal(result.removed, true);
+  assert.deepEqual(patchBody, {
+    nCNPJ: '11280282000144',
+    xGrupo: [{
+      xNome: 'João',
+      email: 'joao@example.com',
+      telefone: '2222',
+      preAlertaWhatsApp: 'N'
+    }]
+  });
+  assert.equal(getCalls, 2);
+});
+
+test('preserva o contato local quando a Brudam não confirma a exclusão', async () => {
+  const category = {
+    cnpj: '11280282000144',
+    name: 'BHZ',
+    contacts: [{ id: 'contato-1', email: 'maria@example.com' }]
+  };
+  let localDeletes = 0;
+  const remotePayload = {
+    status: 1,
+    data: [{ cnpj: category.cnpj, fantasia: category.name, xGrupo: [{ xNome: 'Maria', email: 'maria@example.com' }] }]
+  };
+  await assert.rejects(deleteBrudamContact(category.cnpj, 'contato-1', {
+    store: {
+      getCategory: async () => category,
+      deleteContact: async () => { localDeletes += 1; return true; }
+    },
+    get: async () => ({ response: { ok: true, status: 200 }, payload: remotePayload }),
+    patch: async () => ({ response: { ok: true, status: 200 }, payload: { status: 1 } })
+  }), /não confirmou/);
+  assert.equal(localDeletes, 0);
+});
+
+test('Redis preserva contatos existentes e altera somente a opção de envio', async () => {
+  let value = JSON.stringify({
+    cnpj: '11280282000144',
+    name: 'BHZ',
+    contacts: [{
+      id: 'contato-1',
+      firstName: 'Maria',
+      lastName: '',
+      email: 'maria@example.com'
+    }]
+  });
+  const command = async (name, ...args) => {
+    if (name === 'EVAL') return 0;
+    if (name === 'HGET') return value;
+    if (name === 'HSET') {
+      value = args[2];
+      return 1;
+    }
+    throw new Error(`Comando inesperado: ${name}`);
+  };
+  const merged = await mergeContacts('11280282000144', [
+    { firstName: 'Maria duplicada', email: 'MARIA@example.com' },
+    { firstName: 'João', email: 'joao@example.com' }
+  ], command);
+  assert.equal(merged.added.length, 1);
+  assert.equal(merged.category.contacts.length, 2);
+
+  const toggled = await setContactEnabled('11280282000144', 'contato-1', false, command);
+  assert.equal(toggled.contact.enabled, false);
+  assert.equal(JSON.parse(value).contacts.find((contact) => contact.id === 'contato-1').enabled, false);
 });
 
 test('expande categorias múltiplas e ignora contato sem categoria', () => {
@@ -579,6 +746,32 @@ test('mantém na fila a fatura que ainda não possui destinatário', async () =>
   assert.equal(context.summary.waitingContacts, 1);
 });
 
+test('não envia cobrança para contato com envio desabilitado', async () => {
+  const saved = [];
+  let sent = false;
+  const context = processorContext({
+    getCategory: async () => ({
+      contacts: [{
+        id: '1',
+        firstName: 'Maria',
+        lastName: '',
+        email: 'maria@example.com',
+        enabled: false
+      }]
+    }),
+    savePending: async (record) => saved.push(record),
+    sendBillingEmail: async () => { sent = true; }
+  });
+  await processInvoiceEvent({
+    event: EVENT_TYPES.initial,
+    invoice: { id: '11756', clientDocument: '11280282000144', client: 'BHZ' },
+    context
+  });
+  assert.equal(sent, false);
+  assert.equal(saved.at(-1).reason, 'contacts');
+  assert.equal(context.summary.waitingContacts, 1);
+});
+
 test('chave de idempotência separa evento, fatura e destinatário', () => {
   assert.equal(
     deliveryField('reminder', '11756', 'Maria@Example.com'),
@@ -756,7 +949,12 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(source, /const filters = logFilters\(\);[\s\S]*setLoading\(true\)/);
   assert.doesNotMatch(source, /window\.confirm\(`Excluir \$\{category\.name\}/);
   assert.match(source, /openEmailLogModal\(record, previewButton\)/);
+  assert.match(source, /Atualizar Contatos/);
+  assert.match(source, /Envio ✔️/);
+  assert.match(source, /Envio ❌/);
+  assert.match(source, /method: 'PATCH'/);
   assert.match(apiSource, /query\.route === 'webhook'/);
+  assert.match(apiSource, /query\.route === 'contacts-sync'/);
   assert.match(apiSource, /req\.method === 'GET' \|\| req\.method === 'HEAD'/);
   assert.equal(fs.existsSync(path.join(root, 'api', 'faturamento', 'cobranca.js')), true);
 });

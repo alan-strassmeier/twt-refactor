@@ -233,8 +233,12 @@ const initialDeliveryAlreadyCoveredEvent = async ({ event, invoiceId, email, due
   return event === EVENT_TYPES.reminder && sentAt >= addDays(dueDate, -2);
 };
 
+const enabledContacts = (category) => Array.isArray(category?.contacts)
+  ? category.contacts.filter((contact) => contact?.enabled !== false)
+  : [];
+
 const existingDeliveryPlan = async ({ event, invoiceId, category, context }) => {
-  const contacts = Array.isArray(category?.contacts) ? category.contacts : [];
+  const contacts = enabledContacts(category);
   if (contacts.length === 0) return { fullyClaimed: false, recipientCount: 0 };
 
   const deliveries = new Map();
@@ -326,7 +330,7 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
   const category = resolvedCnpj === clientCnpj
     ? categoryBeforeInvoiceLookup
     : await context.getCategory(resolvedCnpj);
-  const contacts = Array.isArray(category?.contacts) ? category.contacts : [];
+  const contacts = enabledContacts(category);
   const missingCustomerContacts = contacts.length === 0;
   if (missingCustomerContacts) {
     const current = context.pendingByInvoice.get(String(invoice.id));

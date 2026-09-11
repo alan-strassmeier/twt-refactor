@@ -1442,11 +1442,13 @@ body.modal-open {
   border-bottom: 1px solid #edf2f5;
 }
 
-.contact-item > div {
+.contact-identity {
   min-width: 0;
   display: grid;
   gap: 3px;
 }
+
+.contact-item.is-disabled .contact-identity { opacity: .58; }
 
 .contact-item strong {
   color: var(--ink);
@@ -1479,6 +1481,31 @@ body.modal-open {
   cursor: pointer;
 }
 
+.contact-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.contact-send-toggle {
+  min-height: 34px;
+  padding: 6px 10px;
+  border: 1px solid #b8d8c4;
+  border-radius: 8px;
+  color: #176b37;
+  background: #f1fbf5;
+  font-size: .75rem;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.contact-send-toggle.is-disabled {
+  color: #687681;
+  border-color: #d4dde3;
+  background: #f4f7f9;
+}
+
 .contact-form {
   margin-top: 12px;
   padding: 16px;
@@ -1491,7 +1518,8 @@ body.modal-open {
 .category-footer {
   padding-top: 14px;
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between;
+  gap: 12px;
 }
 
 .danger-button {
@@ -1841,6 +1869,16 @@ body.modal-open {
   .category-card > summary {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .contact-item {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .contact-actions {
+    width: 100%;
+    justify-content: space-between;
   }
 
   .filter-heading {
