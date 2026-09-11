@@ -1525,7 +1525,9 @@ body.modal-open {
 .collection-status.status-accepted,
 .collection-status.status-submitted { color: var(--warning); }
 .collection-status.status-review,
+.collection-status.status-soft_bounce,
 .collection-status.status-waiting_contacts { color: var(--warning); }
+.collection-status.status-hard_bounce,
 .collection-status.status-bounced,
 .collection-status.status-error { color: var(--danger); }
 

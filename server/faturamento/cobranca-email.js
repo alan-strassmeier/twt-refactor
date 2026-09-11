@@ -161,6 +161,7 @@ const sendBillingEmail = async ({
   invoicePdf,
   dactePdf = null,
   bankSlipPdf = null,
+  clientReference = '',
   transport,
   config = zohoConfig()
 }) => {
@@ -172,6 +173,7 @@ const sendBillingEmail = async ({
     from: { name: config.fromName, address: config.fromEmail },
     to: { name: [contact.firstName, contact.lastName].filter(Boolean).join(' '), address: contact.email },
     ...(highPriority ? { priority: 'high' } : {}),
+    ...(clientReference ? { headers: { 'X-TM-CLIENT-REF': clientReference } } : {}),
     subject: billingSubject(event, data),
     text: billingText(event, data, contact),
     html: billingHtml(event, data, contact),

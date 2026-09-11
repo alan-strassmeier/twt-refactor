@@ -332,6 +332,8 @@
     accepted: 'Aguardando confirmação',
     submitted: 'Aguardando confirmação',
     delivered: 'Entregue ao servidor destinatário',
+    soft_bounce: 'Falha temporária',
+    hard_bounce: 'Falha definitiva',
     bounced: 'Entrega recusada',
     review: 'Requer conferência',
     error: 'Erro',
@@ -355,6 +357,7 @@
       appendCell(row, EVENT_LABELS[record.event] || record.event || '—');
       const status = appendCell(row, STATUS_LABELS[record.status] || record.status || '—');
       status.className = `collection-status status-${record.status || 'unknown'}`;
+      if (record.message) status.title = record.message;
       return row;
     });
     elements.logRows.replaceChildren(...rows);

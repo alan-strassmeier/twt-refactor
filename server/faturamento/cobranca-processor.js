@@ -21,6 +21,7 @@ const {
   createZohoTransport,
   sendBillingEmail
 } = require('./cobranca-email');
+const { deliveryReference } = require('./cobranca-webhook');
 const store = require('./cobranca-store');
 
 const PAGE_SIZE = 100;
@@ -367,12 +368,15 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
 
   for (const contact of unsentContacts) {
     const internalAlert = contact.id === '__alerta_interno__';
+    const contactName = [contact.firstName, contact.lastName].filter(Boolean).join(' ');
+    const clientReference = deliveryReference(event, invoice.id, contact.email);
     const deliveryMetadata = internalAlert
       ? { recipientRole: 'internal_alert' }
       : event === EVENT_TYPES.initial ? {} : { alertDeliveryMode: 'separate' };
     const claimed = await context.claimDelivery(event, invoice.id, contact.email, {
       state: 'processing',
       createdAt: now,
+      clientReference,
       ...deliveryMetadata
     });
     if (!claimed) {
@@ -380,6 +384,15 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
       continue;
     }
     try {
+      await context.saveDeliveryReference(clientReference, {
+        event,
+        invoiceId: String(invoice.id),
+        clientCnpj: resolvedCnpj,
+        clientName: data.client?.tradeName || data.client?.name || invoice.client,
+        contactName,
+        email: contact.email,
+        ...(internalAlert ? { recipientRole: 'internal_alert' } : {})
+      });
       const result = await context.sendBillingEmail({
         event,
         data,
@@ -387,6 +400,7 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
         invoicePdf,
         dactePdf,
         bankSlipPdf,
+        clientReference,
         transport: context.transport,
         config: context.emailConfig
       });
@@ -396,6 +410,7 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
         messageId: result.messageId,
         accepted: result.accepted,
         rejected: result.rejected,
+        clientReference,
         ...deliveryMetadata
       };
       await context.saveDelivery(event, invoice.id, contact.email, record);
@@ -406,9 +421,10 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
         invoiceId: String(invoice.id),
         clientCnpj: resolvedCnpj,
         clientName: data.client?.tradeName || data.client?.name || invoice.client,
-        contactName: [contact.firstName, contact.lastName].filter(Boolean).join(' '),
+        contactName,
         email: contact.email,
         ...(internalAlert ? { recipientRole: 'internal_alert' } : {}),
+        clientReference,
         messageId: result.messageId,
         message: 'Mensagem aceita pelo SMTP do Zoho; a confirmação de entrega ainda está pendente.'
       });
@@ -419,6 +435,7 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
       await context.saveDelivery(event, invoice.id, contact.email, {
         state: 'review',
         failedAt,
+        clientReference,
         message: String(error.message || error).slice(0, 300),
         ...deliveryMetadata
       });
@@ -429,9 +446,10 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
         invoiceId: String(invoice.id),
         clientCnpj: resolvedCnpj,
         clientName: data.client?.tradeName || data.client?.name || invoice.client,
-        contactName: [contact.firstName, contact.lastName].filter(Boolean).join(' '),
+        contactName,
         email: contact.email,
         ...(internalAlert ? { recipientRole: 'internal_alert' } : {}),
+        clientReference,
         message: 'O resultado do envio precisa de conferência manual para evitar duplicidade.'
       });
       context.summary.review += 1;
@@ -517,6 +535,7 @@ const runBillingCollection = async (dependencies = {}) => {
     getDelivery: dependencies.getDelivery || store.getDelivery,
     claimDelivery: dependencies.claimDelivery || store.claimDelivery,
     saveDelivery: dependencies.saveDelivery || store.saveDelivery,
+    saveDeliveryReference: dependencies.saveDeliveryReference || store.saveDeliveryReference,
     addLog: dependencies.addLog || store.addLog
   };
 
