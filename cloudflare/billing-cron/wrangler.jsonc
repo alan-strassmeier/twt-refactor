@@ -1,0 +1,12 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "twt-billing-cron",
+  "main": "worker.js",
+  "compatibility_date": "2026-09-10",
+  "triggers": {
+    "crons": ["0 * * * *"]
+  },
+  "vars": {
+    "BILLING_ENDPOINT": "https://SEU-DOMINIO/api/faturamento/cobranca?route=process"
+  }
+}

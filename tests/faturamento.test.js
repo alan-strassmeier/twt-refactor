@@ -139,10 +139,15 @@ test('usa datas brasileiras nos filtros e converte para ISO antes da API', () =>
 
 test('exibe ícone e calendário nativo nos filtros de data', () => {
   const html = readFileSync(require.resolve('../faturamento/index.html'), 'utf8');
+  const source = readFileSync(require.resolve('../faturamento/app.js'), 'utf8');
   const styles = readFileSync(require.resolve('../faturamento/styles.css'), 'utf8');
   assert.equal((html.match(/class="date-filter-icon"/g) || []).length, 4);
+  assert.equal((html.match(/data-date-trigger/g) || []).length, 4);
   assert.match(styles, /\.date-filter-picker/);
-  assert.match(styles, /calendar-picker-indicator/);
+  assert.match(styles, /\.date-filter-trigger/);
+  assert.match(source, /const openDatePicker/);
+  assert.match(source, /picker\.showPicker\(\)/);
+  assert.match(source, /event\.preventDefault\(\)/);
 });
 
 test('coluna Visualizar oferece Fatura, DACTE, boleto e NFS-e conforme o emitente', () => {
@@ -187,6 +192,7 @@ test('coluna Visualizar oferece Fatura, DACTE, boleto e NFS-e conforme o emitent
 });
 
 test('centraliza o X dentro do botão de fechar o modal', () => {
+  const html = readFileSync(require.resolve('../faturamento/index.html'), 'utf8');
   const styles = readFileSync(require.resolve('../faturamento/styles.css'), 'utf8');
   const closeButton = styles.slice(
     styles.indexOf('.document-modal-close {'),
@@ -195,6 +201,11 @@ test('centraliza o X dentro do botão de fechar o modal', () => {
   assert.match(closeButton, /display:\s*grid/);
   assert.match(closeButton, /place-items:\s*center/);
   assert.match(closeButton, /padding:\s*0/);
+  assert.match(closeButton, /font-size:\s*0/);
+  assert.match(closeButton, /\.document-modal-close svg/);
+  assert.equal((html.match(/class="document-modal-close"/g) || []).length, 2);
+  assert.equal((html.match(/<svg aria-hidden="true" viewBox="0 0 24 24"/g) || []).length, 2);
+  assert.doesNotMatch(html, />×<\/button>/);
 });
 
 test('rejeita data, status e CNPJ inválidos', () => {

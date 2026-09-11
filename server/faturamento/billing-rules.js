@@ -34,7 +34,7 @@ const TED_DOC_CLIENT_CNPJS = new Set([
 ]);
 
 const BILLING_BANKS = Object.freeze({
-  c6: Object.freeze({ id: 'c6', label: 'C6', issuerCnpj: TWT_ISSUER_CNPJ }),
+  bradesco: Object.freeze({ id: 'bradesco', label: 'Bradesco', issuerCnpj: TWT_ISSUER_CNPJ }),
   itau: Object.freeze({ id: 'itau', label: 'Itaú', issuerCnpj: DSL_ISSUER_CNPJ })
 });
 
@@ -79,7 +79,7 @@ const isTwtIssuer = (value) => digits(value) === TWT_ISSUER_CNPJ;
 const isDslIssuer = (value) => digits(value) === DSL_ISSUER_CNPJ;
 
 const bankSlipBankForIssuer = (value) => {
-  if (isTwtIssuer(value)) return BILLING_BANKS.c6;
+  if (isTwtIssuer(value)) return BILLING_BANKS.bradesco;
   if (isDslIssuer(value)) return BILLING_BANKS.itau;
   return null;
 };

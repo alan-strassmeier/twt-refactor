@@ -7,9 +7,10 @@
   <meta name="theme-color" content="#112a40">
   <title>Faturamento | TWT Airpack</title>
   <link rel="icon" href="/favicon.ico">
-  <link rel="stylesheet" href="/faturamento/styles.css?v=9">
+  <link rel="stylesheet" href="/faturamento/styles.css?v=11">
   <script src="/faturamento/sort.js?v=1" defer></script>
-  <script src="/faturamento/app.js?v=13" defer></script>
+  <script src="/faturamento/app.js?v=14" defer></script>
+  <script src="/faturamento/cobranca.js?v=1" defer></script>
 </head>
 <body>
   <div class="page-shell">
@@ -56,6 +57,16 @@
       </section>
 
       <section class="dashboard" id="dashboardPanel" hidden>
+        <nav class="area-tabs" aria-label="Áreas do faturamento">
+          <button class="area-tab is-active" type="button" data-billing-area="invoices" aria-pressed="true">
+            Faturas
+          </button>
+          <button class="area-tab" type="button" data-billing-area="collection" aria-pressed="false">
+            Cobrança de faturas
+          </button>
+        </nav>
+
+        <div id="invoiceWorkspace">
         <div class="dashboard-heading">
           <div>
             <span class="eyebrow">Visão financeira</span>
@@ -78,32 +89,40 @@
               Emissão inicial
               <span class="date-filter-control">
                 <input type="text" name="emissao[gte]" data-date-filter inputmode="numeric" autocomplete="off" maxlength="10" placeholder="dd/mm/aaaa">
-                <span class="date-filter-icon" aria-hidden="true"></span>
-                <input class="date-filter-picker" type="date" data-date-picker aria-label="Abrir calendário da emissão inicial">
+                <button class="date-filter-trigger" type="button" data-date-trigger aria-label="Abrir calendário da emissão inicial">
+                  <span class="date-filter-icon" aria-hidden="true"></span>
+                </button>
+                <input class="date-filter-picker" type="date" data-date-picker tabindex="-1" aria-hidden="true">
               </span>
             </label>
             <label>
               Emissão final
               <span class="date-filter-control">
                 <input type="text" name="emissao[lte]" data-date-filter inputmode="numeric" autocomplete="off" maxlength="10" placeholder="dd/mm/aaaa">
-                <span class="date-filter-icon" aria-hidden="true"></span>
-                <input class="date-filter-picker" type="date" data-date-picker aria-label="Abrir calendário da emissão final">
+                <button class="date-filter-trigger" type="button" data-date-trigger aria-label="Abrir calendário da emissão final">
+                  <span class="date-filter-icon" aria-hidden="true"></span>
+                </button>
+                <input class="date-filter-picker" type="date" data-date-picker tabindex="-1" aria-hidden="true">
               </span>
             </label>
             <label>
               Vencimento inicial
               <span class="date-filter-control">
                 <input type="text" name="vencimento[gte]" data-date-filter inputmode="numeric" autocomplete="off" maxlength="10" placeholder="dd/mm/aaaa">
-                <span class="date-filter-icon" aria-hidden="true"></span>
-                <input class="date-filter-picker" type="date" data-date-picker aria-label="Abrir calendário do vencimento inicial">
+                <button class="date-filter-trigger" type="button" data-date-trigger aria-label="Abrir calendário do vencimento inicial">
+                  <span class="date-filter-icon" aria-hidden="true"></span>
+                </button>
+                <input class="date-filter-picker" type="date" data-date-picker tabindex="-1" aria-hidden="true">
               </span>
             </label>
             <label>
               Vencimento final
               <span class="date-filter-control">
                 <input type="text" name="vencimento[lte]" data-date-filter inputmode="numeric" autocomplete="off" maxlength="10" placeholder="dd/mm/aaaa">
-                <span class="date-filter-icon" aria-hidden="true"></span>
-                <input class="date-filter-picker" type="date" data-date-picker aria-label="Abrir calendário do vencimento final">
+                <button class="date-filter-trigger" type="button" data-date-trigger aria-label="Abrir calendário do vencimento final">
+                  <span class="date-filter-icon" aria-hidden="true"></span>
+                </button>
+                <input class="date-filter-picker" type="date" data-date-picker tabindex="-1" aria-hidden="true">
               </span>
             </label>
             <label>
@@ -246,6 +265,110 @@
             <p>Revise os filtros ou faça uma nova consulta.</p>
           </div>
         </section>
+        </div>
+
+        <section class="collection-workspace" id="collectionWorkspace" hidden>
+          <div class="dashboard-heading collection-heading">
+            <div>
+              <span class="eyebrow">Cobrança automática</span>
+              <h1>Cobrança de faturas</h1>
+              <p>Gerencie destinatários, acompanhe documentos pendentes e confira os envios.</p>
+            </div>
+            <button class="button button-primary" id="runCollectionButton" type="button">
+              Verificar agora
+            </button>
+          </div>
+
+          <p class="dashboard-message collection-message" id="collectionMessage" role="status" aria-live="polite"></p>
+
+          <nav class="collection-quick-nav" aria-label="Navegação rápida da cobrança">
+            <span>Ir para</span>
+            <a href="#collectionContactsSection">E-mails cadastrados</a>
+            <a href="#pendingDoccobSection">Aguardando pendência</a>
+            <a href="#collectionLogsSection">Logs de envio</a>
+          </nav>
+
+          <section class="collection-summary" aria-label="Resumo das cobranças">
+            <article><span>Empresas cadastradas</span><strong id="collectionCompanyCount">0</strong></article>
+            <article><span>Destinatários</span><strong id="collectionContactCount">0</strong></article>
+            <article><span>Aguardando DOCCOB</span><strong id="collectionPendingCount">0</strong></article>
+          </section>
+
+          <section class="collection-card collection-anchor-target" id="collectionContactsSection" aria-labelledby="collectionContactsTitle">
+            <div class="collection-card-heading">
+              <div>
+                <h2 id="collectionContactsTitle">E-mails para cobrança</h2>
+                <p>As empresas são identificadas pelo CNPJ. Abra uma categoria para gerenciar as pessoas.</p>
+              </div>
+            </div>
+            <form class="collection-form category-form" id="categoryForm">
+              <label>CNPJ da empresa
+                <input name="cnpj" type="text" inputmode="numeric" autocomplete="off" maxlength="18" placeholder="00.000.000/0000-00" required>
+              </label>
+              <label>Nome fantasia
+                <input name="name" type="text" autocomplete="organization" maxlength="160" required>
+              </label>
+              <button class="button button-primary" type="submit">Adicionar empresa</button>
+            </form>
+            <div class="category-list" id="categoryList"></div>
+            <div class="collection-empty" id="categoryEmpty" hidden>
+              <strong>Nenhuma empresa cadastrada</strong>
+              <p>Adicione uma empresa pelo formulário acima.</p>
+            </div>
+          </section>
+
+          <section class="collection-card collection-anchor-target" id="pendingDoccobSection" aria-labelledby="pendingDoccobTitle">
+            <div class="collection-card-heading">
+              <div>
+                <h2 id="pendingDoccobTitle">Faturas aguardando envio</h2>
+                <p>Inclui DOCCOB pendente, destinatários ausentes e falhas anteriores de processamento.</p>
+              </div>
+              <button class="button button-quiet" id="refreshPendingButton" type="button">Atualizar</button>
+            </div>
+            <div class="table-scroll collection-table-scroll">
+              <table class="collection-table">
+                <thead><tr><th>Fatura</th><th>Cliente</th><th>Motivo</th><th>Emissão</th><th>Vencimento</th><th>Última verificação</th><th>Tentativas</th></tr></thead>
+                <tbody id="pendingRows"></tbody>
+              </table>
+              <div class="collection-empty" id="pendingEmpty" hidden>
+                <strong>Nenhuma fatura aguardando</strong>
+                <p>Todos os DOCCOB necessários foram localizados.</p>
+              </div>
+            </div>
+          </section>
+
+          <section class="collection-card collection-anchor-target" id="collectionLogsSection" aria-labelledby="collectionLogsTitle">
+            <div class="collection-card-heading">
+              <div>
+                <h2 id="collectionLogsTitle">Logs de envio</h2>
+                <p>“Aceito pelo Zoho” confirma que o servidor de e-mail recebeu a mensagem para entrega.</p>
+              </div>
+            </div>
+            <form class="collection-form logs-form" id="collectionLogsForm">
+              <label>Fatura
+                <input name="invoiceId" type="text" inputmode="numeric" maxlength="20" placeholder="Ex.: 11756">
+              </label>
+              <label>Data
+                <input name="date" type="date">
+              </label>
+              <label>CNPJ
+                <input name="cnpj" type="text" inputmode="numeric" maxlength="18" placeholder="00.000.000/0000-00">
+              </label>
+              <button class="button button-primary" type="submit">Filtrar logs</button>
+              <button class="button button-quiet" id="clearCollectionLogs" type="button">Limpar</button>
+            </form>
+            <div class="table-scroll collection-table-scroll">
+              <table class="collection-table collection-log-table">
+                <thead><tr><th>Data e hora</th><th>Fatura</th><th>Cliente</th><th>Destinatário</th><th>Evento</th><th>Status</th></tr></thead>
+                <tbody id="collectionLogRows"></tbody>
+              </table>
+              <div class="collection-empty" id="collectionLogsEmpty" hidden>
+                <strong>Nenhum envio encontrado</strong>
+                <p>Os registros aparecerão aqui após o processamento das cobranças.</p>
+              </div>
+            </div>
+          </section>
+        </section>
       </section>
     </main>
   </div>
@@ -255,7 +378,11 @@
     <section class="document-modal-panel" role="dialog" aria-modal="true"
       aria-labelledby="documentModalTitle" aria-describedby="documentModalDescription">
       <button class="document-modal-close" id="documentModalClose" type="button"
-        aria-label="Fechar opções de documentos">×</button>
+        aria-label="Fechar opções de documentos">
+        <svg aria-hidden="true" viewBox="0 0 24 24" focusable="false">
+          <path d="M6 6l12 12M18 6L6 18"></path>
+        </svg>
+      </button>
       <span class="document-modal-eyebrow">Documentos da entrega</span>
       <h2 id="documentModalTitle">Visualizar fatura</h2>
       <p id="documentModalDescription">Escolha qual documento deseja abrir em uma nova guia.</p>
@@ -285,7 +412,11 @@
     <section class="document-modal-panel nfse-confirm-panel" role="dialog" aria-modal="true"
       aria-labelledby="nfseConfirmTitle" aria-describedby="nfseConfirmDescription">
       <button class="document-modal-close" id="nfseConfirmClose" type="button"
-        aria-label="Cancelar emissão da NFS-e">×</button>
+        aria-label="Cancelar emissão da NFS-e">
+        <svg aria-hidden="true" viewBox="0 0 24 24" focusable="false">
+          <path d="M6 6l12 12M18 6L6 18"></path>
+        </svg>
+      </button>
       <span class="document-modal-eyebrow">Conferência fiscal</span>
       <h2 id="nfseConfirmTitle">Emitir NFS-e</h2>
       <p id="nfseConfirmDescription">Confira os dados abaixo. Após a autorização, a NFS-e somente poderá ser cancelada ou substituída.</p>

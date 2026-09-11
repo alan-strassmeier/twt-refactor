@@ -1,0 +1,926 @@
+[
+  {
+    "cnpj": "02663553000150",
+    "name": "Akroz",
+    "contacts": [
+      {
+        "id": "bce8705bdb880a67e0f2",
+        "firstName": "Brian",
+        "lastName": "Nascimento",
+        "email": "faturamento@akrozgroup.com.br"
+      },
+      {
+        "id": "6cc7f06604c4c6a6b433",
+        "firstName": "Rony",
+        "lastName": "Cassio",
+        "email": "financeiro@newtectelemetria.com.br"
+      },
+      {
+        "id": "b49d832377fe25e76681",
+        "firstName": "Rony",
+        "lastName": "Cassio",
+        "email": "financeiro@jimibrasil.com.br"
+      }
+    ]
+  },
+  {
+    "cnpj": "35820448009516",
+    "name": "Bau White Martins",
+    "contacts": [
+      {
+        "id": "8d37275fdfb7bcd0a49e",
+        "firstName": "Francisco",
+        "lastName": "Bernardo",
+        "email": "francisco.bernardo@linde.com"
+      },
+      {
+        "id": "2485cefa9ea482de648b",
+        "firstName": "Gilmar",
+        "lastName": "Lima",
+        "email": "gilmar.lima@linde.com"
+      },
+      {
+        "id": "8697b8367677126ccdad",
+        "firstName": "Jessica",
+        "lastName": "Barbosa",
+        "email": "jessica.barbosa@linde.com"
+      },
+      {
+        "id": "9c260b240adc7511ad36",
+        "firstName": "Lucas",
+        "lastName": "Mota Santos",
+        "email": "lucas.mota@linde.com"
+      },
+      {
+        "id": "18525fa0b7e80cc49443",
+        "firstName": "Wellington",
+        "lastName": "Araujo",
+        "email": "wellington_ricardo@praxair.com"
+      }
+    ]
+  },
+  {
+    "cnpj": "11280282000144",
+    "name": "BHZ Target",
+    "contacts": [
+      {
+        "id": "bc209c6a4d2cea87e5a9",
+        "firstName": "Fabiana",
+        "lastName": "Souza",
+        "email": "torreadministrativofinanceiro@targetcargo.com.br"
+      },
+      {
+        "id": "0671358bc82e33dde776",
+        "firstName": "Roberto",
+        "lastName": "Brandao",
+        "email": "robertobrandao@targetcargo.com.br"
+      }
+    ]
+  },
+  {
+    "cnpj": "27011022000103",
+    "name": "BL Ind Otica Ltda",
+    "contacts": [
+      {
+        "id": "7274818d1579528dd1e6",
+        "firstName": "Julia",
+        "lastName": "Vidal",
+        "email": "julia.vidal@bausch.com"
+      },
+      {
+        "id": "d847ae1909e332a9dfd7",
+        "firstName": "Ronaldo",
+        "lastName": "Carvalho",
+        "email": "ronaldo.carvalho@bausch.com"
+      }
+    ]
+  },
+  {
+    "cnpj": "35820448001884",
+    "name": "BSB - WHITE MARTINS",
+    "contacts": [
+      {
+        "id": "717a556a32b1b264eb3d",
+        "firstName": "Aldo",
+        "lastName": "Almeida",
+        "email": "aldo.almeida@linde.com"
+      },
+      {
+        "id": "a251a0d64092085c1b1d",
+        "firstName": "Jullyane",
+        "lastName": "Silva",
+        "email": "jullyane.silva@linde.com"
+      },
+      {
+        "id": "c019b8e125e4d63b300b",
+        "firstName": "Rodolpho",
+        "lastName": "Alves",
+        "email": "rodolpho.alves@linde.com"
+      }
+    ]
+  },
+  {
+    "cnpj": "24380578006896",
+    "name": "CE White Martins",
+    "contacts": [
+      {
+        "id": "1885eaab18f774dea4a1",
+        "firstName": "Augusto",
+        "lastName": "Vieira",
+        "email": "augusto.vieira@linde.com"
+      },
+      {
+        "id": "4f8f55119d0b4ba6794a",
+        "firstName": "Paulo",
+        "lastName": "Reinaldo",
+        "email": "paulo.reinaldo@linde.com"
+      }
+    ]
+  },
+  {
+    "cnpj": "35820448008110",
+    "name": "Diadema White Martins",
+    "contacts": [
+      {
+        "id": "75da68c35db44cbb8335",
+        "firstName": "Dercia",
+        "lastName": "Cerqueira",
+        "email": "dercia.cerqueira@linde.com"
+      },
+      {
+        "id": "d28ed7f85ad976d143fe",
+        "firstName": "Erika",
+        "lastName": "Yamaguti",
+        "email": "erika.yamaguti@linde.com"
+      }
+    ]
+  },
+  {
+    "cnpj": "62327878000193",
+    "name": "DNA",
+    "contacts": [
+      {
+        "id": "4b24ef7a6551ce8bc750",
+        "firstName": "Comercialdnaair",
+        "lastName": "",
+        "email": "comercialdnaair@gmail.com"
+      },
+      {
+        "id": "15229b112973fa132d87",
+        "firstName": "Dnaecargo",
+        "lastName": "",
+        "email": "dnaecargo@gmail.com"
+      }
+    ]
+  },
+  {
+    "cnpj": "35820448000721",
+    "name": "DUC - White Martins Duque de Caxias RJ",
+    "contacts": [
+      {
+        "id": "6e81aca68bfc8526681d",
+        "firstName": "Fernando",
+        "lastName": "Ataide",
+        "email": "fernando.ataide@linde.com"
+      }
+    ]
+  },
+  {
+    "cnpj": "30455661000920",
+    "name": "Elecnor  Rio de Janeiro",
+    "contacts": [
+      {
+        "id": "5863ed7aa5260080e9ee",
+        "firstName": "Iasmim",
+        "lastName": "Silva",
+        "email": "iasmim.silva@elecnor.com"
+      },
+      {
+        "id": "9ab4bcbe0084aaad6c83",
+        "firstName": "Isadora",
+        "lastName": "Souza",
+        "email": "isadora.souza@elecnor.es"
+      },
+      {
+        "id": "a4ad2bd50366c69950f8",
+        "firstName": "Taciane",
+        "lastName": "Godoi",
+        "email": "taciane.godoi@elecnor.es"
+      }
+    ]
+  },
+  {
+    "cnpj": "30455661000172",
+    "name": "Elecnor RJ - Rua do Passeio",
+    "contacts": [
+      {
+        "id": "ac2af2e5cf6e6cfc4ef6",
+        "firstName": "Iasmim",
+        "lastName": "Silva",
+        "email": "iasmim.silva@elecnor.es"
+      },
+      {
+        "id": "dcdae45298533e99a591",
+        "firstName": "Isadora",
+        "lastName": "Souza",
+        "email": "isadora.souza@elecnor.es"
+      },
+      {
+        "id": "9eb41cfe1d3a15fba99f",
+        "firstName": "Isadora",
+        "lastName": "Souza",
+        "email": "isadora.souza@elecnor.com"
+      }
+    ]
+  },
+  {
+    "cnpj": "35640442000187",
+    "name": "Figwal",
+    "contacts": [
+      {
+        "id": "be373a8defa2a148ef1d",
+        "firstName": "João",
+        "lastName": "Cardoso",
+        "email": "jcardoso@figwal.com.br"
+      },
+      {
+        "id": "11399665d0c24e5057c3",
+        "firstName": "Laerte",
+        "lastName": "Santos",
+        "email": "leugenio@figwal.com.br"
+      },
+      {
+        "id": "ff0b4953dcbda90ce1ff",
+        "firstName": "Raniel",
+        "lastName": "",
+        "email": "raniel@figwal.com.br"
+      }
+    ]
+  },
+  {
+    "cnpj": "35820448002341",
+    "name": "GO White Martins",
+    "contacts": [
+      {
+        "id": "fca3cc0a457f8b3ed2fc",
+        "firstName": "Alexandre",
+        "lastName": "Alcantara",
+        "email": "alexandre_alcantara@praxair.com"
+      },
+      {
+        "id": "729def3364fe2215f434",
+        "firstName": "Cleiton",
+        "lastName": "Costa",
+        "email": "cleiton_costa@praxair.com"
+      },
+      {
+        "id": "50ba67750abaab2cb360",
+        "firstName": "Patrick",
+        "lastName": "Souza",
+        "email": "patrick.souza@linde.com"
+      }
+    ]
+  },
+  {
+    "cnpj": "01464550000124",
+    "name": "Gross Cargo",
+    "contacts": [
+      {
+        "id": "2c4217563325f047a50a",
+        "firstName": "Fabio",
+        "lastName": "Karan",
+        "email": "fabio@grosscargo.com.br"
+      },
+      {
+        "id": "2f202cfd9562a6cdab9d",
+        "firstName": "Financeiro",
+        "lastName": "",
+        "email": "financeiro@grosscargo.com.br"
+      },
+      {
+        "id": "1ba717e7bcde85419688",
+        "firstName": "Glenio",
+        "lastName": "",
+        "email": "glenio@grosscargo.com.br"
+      }
+    ]
+  },
+  {
+    "cnpj": "41870054000195",
+    "name": "Jimi Iot SP",
+    "contacts": [
+      {
+        "id": "90ee4db210040de8d548",
+        "firstName": "Brian",
+        "lastName": "Nascimento",
+        "email": "faturamento@akrozgroup.com.br"
+      },
+      {
+        "id": "3da8cb188f0556b74f94",
+        "firstName": "Rony",
+        "lastName": "Cassio",
+        "email": "financeiro@newtectelemetria.com.br"
+      },
+      {
+        "id": "7395341a25d176e3b64d",
+        "firstName": "Rony",
+        "lastName": "Cassio",
+        "email": "financeiro@jimibrasil.com.br"
+      }
+    ]
+  },
+  {
+    "cnpj": "41870054000276",
+    "name": "Jimi Itajai",
+    "contacts": [
+      {
+        "id": "442d84b274839df70eab",
+        "firstName": "Brian",
+        "lastName": "Nascimento",
+        "email": "faturamento@akrozgroup.com.br"
+      },
+      {
+        "id": "c2687088975d361e8cc3",
+        "firstName": "Cesar",
+        "lastName": "Barbosa",
+        "email": "cesar.barbosa@jimibrasil.com.br"
+      },
+      {
+        "id": "62014e971c64308db70e",
+        "firstName": "Rony",
+        "lastName": "Cassio",
+        "email": "financeiro@newtectelemetria.com.br"
+      },
+      {
+        "id": "31d654def8934a4d3675",
+        "firstName": "Rony",
+        "lastName": "Cassio",
+        "email": "financeiro@jimibrasil.com.br"
+      }
+    ]
+  },
+  {
+    "cnpj": "35820448010794",
+    "name": "JOI White Martins",
+    "contacts": [
+      {
+        "id": "c920b68b7907a5655467",
+        "firstName": "Costa,",
+        "lastName": "Andrey",
+        "email": "andrey.costa@linde.com"
+      },
+      {
+        "id": "397b7fda0607d1a8e6be",
+        "firstName": "Diego",
+        "lastName": "Albertuni",
+        "email": "diego.albertuni@linde.com"
+      },
+      {
+        "id": "d8d7bf0f2e0c79f1ecb2",
+        "firstName": "Silvana",
+        "lastName": "Nunes",
+        "email": "silvana.nunes@linde.com"
+      }
+    ]
+  },
+  {
+    "cnpj": "10629265000107",
+    "name": "JTT Log",
+    "contacts": [
+      {
+        "id": "8c7a3adf1daf8472fb28",
+        "firstName": "Jennifer",
+        "lastName": "",
+        "email": "suporte@jttlog.com.com"
+      },
+      {
+        "id": "781413af80fe4758a46f",
+        "firstName": "Lisie",
+        "lastName": "Iahnig",
+        "email": "faturamento@jttlog.com.br"
+      },
+      {
+        "id": "747cb509f5bcd9241abf",
+        "firstName": "Mazotto",
+        "lastName": "",
+        "email": "mazotto@jttlog.com.br"
+      },
+      {
+        "id": "c7c3147ef3720eba110b",
+        "firstName": "Nicole",
+        "lastName": "",
+        "email": "suporte03@jttlog.com.br"
+      },
+      {
+        "id": "5bb081c676554def42ca",
+        "firstName": "Tamiris",
+        "lastName": "",
+        "email": "comercial02@jttlog.com.br"
+      }
+    ]
+  },
+  {
+    "cnpj": "04004335000139",
+    "name": "Kralik",
+    "contacts": [
+      {
+        "id": "f95c957c10032da6699a",
+        "firstName": "Janete",
+        "lastName": "",
+        "email": "janete@kralik.com.br"
+      },
+      {
+        "id": "1bc8fa96a6896feb32a0",
+        "firstName": "Jose",
+        "lastName": "Kralik",
+        "email": "jose@kralik.com.br"
+      }
+    ]
+  },
+  {
+    "cnpj": "35820448005448",
+    "name": "LDB White Martins",
+    "contacts": [
+      {
+        "id": "06a76881b5df13839018",
+        "firstName": "Aguinaldo",
+        "lastName": "Fernandes",
+        "email": "aguinaldo.fernandes@linde.com"
+      },
+      {
+        "id": "4345c2e81e7812d7345a",
+        "firstName": "Lilian",
+        "lastName": "Cattai",
+        "email": "lilian.cattai@linde.com"
+      },
+      {
+        "id": "b7f5a774a1dd16c378ab",
+        "firstName": "Thais",
+        "lastName": "Talavera",
+        "email": "thais.talavera@linde.com"
+      }
+    ]
+  },
+  {
+    "cnpj": "35820448003070",
+    "name": "MG White Contagem",
+    "contacts": [
+      {
+        "id": "35bb216247f86447f3c0",
+        "firstName": "Alana",
+        "lastName": "Santos",
+        "email": "alana.santos@linde.com"
+      },
+      {
+        "id": "361a4b030327bf73f235",
+        "firstName": "Edna",
+        "lastName": "Guimaraes",
+        "email": "edna.guimaraes@linde.com"
+      },
+      {
+        "id": "78c0a03f3d7b50e712d4",
+        "firstName": "Luciana",
+        "lastName": "Santos",
+        "email": "luciana.santos@linde.com"
+      },
+      {
+        "id": "d13eb47d21653ca68e98",
+        "firstName": "Varlei",
+        "lastName": "Paula",
+        "email": "varlei.paula@linde.com"
+      }
+    ]
+  },
+  {
+    "cnpj": "07843144000159",
+    "name": "MGF Inga",
+    "contacts": [
+      {
+        "id": "4a9360604a1f00b15581",
+        "firstName": "Ezauri",
+        "lastName": "Castro",
+        "email": "ezauricastro@terra.com.br"
+      },
+      {
+        "id": "a3d5dd777e93bdf01b61",
+        "firstName": "Johnny",
+        "lastName": "",
+        "email": "ingaex@terra.com.br"
+      }
+    ]
+  },
+  {
+    "cnpj": "34597955000785",
+    "name": "MT White Martins",
+    "contacts": [
+      {
+        "id": "c6a7731e15d3989d6b34",
+        "firstName": "Joao",
+        "lastName": "Araujo",
+        "email": "joao.araujo@linde.com"
+      },
+      {
+        "id": "a8cdf35a5ff5f931a1f3",
+        "firstName": "Lozano",
+        "lastName": "Araujo",
+        "email": "lozano.araujo@linde.com"
+      },
+      {
+        "id": "d3b374afa767c511041c",
+        "firstName": "Nilton",
+        "lastName": "Ramalho",
+        "email": "nilton.ramalho@linde.com"
+      },
+      {
+        "id": "4b59f23d195a626edabd",
+        "firstName": "Rayssa",
+        "lastName": "Neves",
+        "email": "rayssa.neves@linde.com"
+      },
+      {
+        "id": "52ec4308810972042dac",
+        "firstName": "Silvia",
+        "lastName": "Ramos",
+        "email": "silvia.ramos@linde.com"
+      },
+      {
+        "id": "8af71139e54480cfbe2a",
+        "firstName": "Silvia",
+        "lastName": "Sousa",
+        "email": "silvia.sousa@linde.com"
+      },
+      {
+        "id": "86214724448a680962eb",
+        "firstName": "Tamara",
+        "lastName": "Almeida",
+        "email": "tamara.almeida@linde.com"
+      }
+    ]
+  },
+  {
+    "cnpj": "33011601000159",
+    "name": "Navegam Mao",
+    "contacts": [
+      {
+        "id": "2303c1dfc764a3e46aec",
+        "firstName": "Alvaro",
+        "lastName": "",
+        "email": "alvaro@navegam.com.br"
+      },
+      {
+        "id": "0d158a495e92062b7d27",
+        "firstName": "Contas",
+        "lastName": "A Pagar",
+        "email": "contasapagar@navegam.com.br"
+      },
+      {
+        "id": "79196a287d8f4e30e357",
+        "firstName": "Geferson",
+        "lastName": "",
+        "email": "geferson@navegam.com.br"
+      },
+      {
+        "id": "6d29f6461038ec43b802",
+        "firstName": "Juliana",
+        "lastName": "Dias",
+        "email": "faturamento@navegam.com.br"
+      },
+      {
+        "id": "3e53b0886b61cb73b29c",
+        "firstName": "Laura",
+        "lastName": "Alburquerque",
+        "email": "laura@navegam.com.br"
+      },
+      {
+        "id": "c2944ede8300922d8211",
+        "firstName": "Maiara",
+        "lastName": "Falcao",
+        "email": "maiara.falcao@navegam.com.br"
+      },
+      {
+        "id": "cad7d43e145e7ba22f52",
+        "firstName": "Oseas",
+        "lastName": "Silva",
+        "email": "oseas.silva@navegam.com.br"
+      },
+      {
+        "id": "cdfa93ce19ccc77bdf19",
+        "firstName": "Rafaelly",
+        "lastName": "Pereira",
+        "email": "rafaelly.pereira@navegam.com.br"
+      }
+    ]
+  },
+  {
+    "cnpj": "35820448016482",
+    "name": "PR White Martins",
+    "contacts": [
+      {
+        "id": "75c94440a8229948b873",
+        "firstName": "Luis",
+        "lastName": "Fila",
+        "email": "luis.fila@linde.com"
+      }
+    ]
+  },
+  {
+    "cnpj": "03532163000294",
+    "name": "PROMOTEXTIL COMERCIO ATACADISTA LTDA",
+    "contacts": [
+      {
+        "id": "34de13a816c373a99c1b",
+        "firstName": "Lea",
+        "lastName": "",
+        "email": "lea@tprint.com.br"
+      }
+    ]
+  },
+  {
+    "cnpj": "06040676000195",
+    "name": "Prosperity",
+    "contacts": [
+      {
+        "id": "de045e791500c25a073e",
+        "firstName": "Emanuel",
+        "lastName": "",
+        "email": "emanuel@sensitivetransportes.com.br"
+      },
+      {
+        "id": "602208ca22a5cefeb9ba",
+        "firstName": "Financeiro",
+        "lastName": "",
+        "email": "financeiro@prosperitytransportes.com.br"
+      },
+      {
+        "id": "46d561d8c67e0d824e0a",
+        "firstName": "Samsung",
+        "lastName": "",
+        "email": "samsung@prosperitytransportes.com.br"
+      },
+      {
+        "id": "d3a40bf9c60781b7fac0",
+        "firstName": "Willian",
+        "lastName": "Marcelo",
+        "email": "willian@prosperitytransportes.com.br"
+      }
+    ]
+  },
+  {
+    "cnpj": "06908675000110",
+    "name": "RIO LC Express",
+    "contacts": [
+      {
+        "id": "5db6a1bf4f6302e4f905",
+        "firstName": "Marcos",
+        "lastName": "",
+        "email": "marcos@lcexpress.com.br"
+      },
+      {
+        "id": "6b080ff0c8e8c35b01d9",
+        "firstName": "Riodejaneiro",
+        "lastName": "",
+        "email": "riodejaneiro@lcexpress.com.br"
+      }
+    ]
+  },
+  {
+    "cnpj": "28759933000186",
+    "name": "Sensitive",
+    "contacts": [
+      {
+        "id": "f5d69dc42f649b777bc6",
+        "firstName": "Emanuel",
+        "lastName": "",
+        "email": "emanuel@sensitivetransportes.com.br"
+      },
+      {
+        "id": "40451d154a6872210d07",
+        "firstName": "Financeiro",
+        "lastName": "",
+        "email": "financeiro@sensitivetransportes.com.br"
+      },
+      {
+        "id": "cbbde1756398af053183",
+        "firstName": "Gabriela",
+        "lastName": "",
+        "email": "gabriela@sensitivetransportes.com.br"
+      },
+      {
+        "id": "5e3e41a911e1aafb8f65",
+        "firstName": "Redespacho",
+        "lastName": "",
+        "email": "redespacho@sensitivetransportes.com.br"
+      },
+      {
+        "id": "6a8d3028d5dac433a10e",
+        "firstName": "Willian",
+        "lastName": "",
+        "email": "willian@sensitivetransportes.com.br"
+      }
+    ]
+  },
+  {
+    "cnpj": "35820448006339",
+    "name": "SPS White Martins",
+    "contacts": [
+      {
+        "id": "2984422668e1b057d712",
+        "firstName": "Bibiana",
+        "lastName": "Junqueira",
+        "email": "bibiana.junqueira@linde.com"
+      },
+      {
+        "id": "662b20668e4414ca161b",
+        "firstName": "João",
+        "lastName": "Lopes",
+        "email": "joao.lopes@linde.com"
+      },
+      {
+        "id": "5d8230701858e28a68c3",
+        "firstName": "Rosane",
+        "lastName": "Rocha",
+        "email": "roseane.rocha@linde.com"
+      },
+      {
+        "id": "07a851ecf7205a2d096b",
+        "firstName": "Sara",
+        "lastName": "Rodrigues",
+        "email": "sara.rodrigues1@linde.com"
+      },
+      {
+        "id": "2130802cf127c1778aa0",
+        "firstName": "Viviane",
+        "lastName": "Barreto",
+        "email": "viviane.barreto@linde.com"
+      }
+    ]
+  },
+  {
+    "cnpj": "35820448009435",
+    "name": "STZ - White Martins - Sertãozinho",
+    "contacts": [
+      {
+        "id": "60eb2a688933cdde899d",
+        "firstName": "Diego",
+        "lastName": "Ramiris",
+        "email": "diego.ramiris@linde.com"
+      },
+      {
+        "id": "00817284e5afc0d521b9",
+        "firstName": "Michel",
+        "lastName": "Alves",
+        "email": "michel.alves@linde.com"
+      },
+      {
+        "id": "c04c123d17921ae85787",
+        "firstName": "Ricardo",
+        "lastName": "Nogueira",
+        "email": "ricardo.nogueira@linde.com"
+      }
+    ]
+  },
+  {
+    "cnpj": "41870054000666",
+    "name": "Teste",
+    "contacts": [
+      {
+        "id": "9cabf5ddfb8175a790c8",
+        "firstName": "Teste",
+        "lastName": "",
+        "email": "69chidaruma669@gmail.com"
+      }
+    ]
+  },
+  {
+    "cnpj": "24380578002475",
+    "name": "THE White Martins",
+    "contacts": [
+      {
+        "id": "157fc02271ce798cfc03",
+        "firstName": "Cristiano",
+        "lastName": "Andrade",
+        "email": "cristiano.andrade@linde.com"
+      }
+    ]
+  },
+  {
+    "cnpj": "21458144000166",
+    "name": "Transflecha Rio",
+    "contacts": [
+      {
+        "id": "70a221d57ee5dcd17bfe",
+        "firstName": "Transflechatransportes",
+        "lastName": "",
+        "email": "transflechatransportes@gmail.com"
+      }
+    ]
+  },
+  {
+    "cnpj": "63598129000163",
+    "name": "TRAXOR TECNOLOG",
+    "contacts": [
+      {
+        "id": "379f2902ccaa7fe77488",
+        "firstName": "Financeiro",
+        "lastName": "",
+        "email": "financeiro@alisat.com.br"
+      },
+      {
+        "id": "39af513787fcf0765960",
+        "firstName": "Suportehardware",
+        "lastName": "",
+        "email": "suportehardware@alisat.com.br"
+      }
+    ]
+  },
+  {
+    "cnpj": "35820448003909",
+    "name": "UDI White Martins",
+    "contacts": [
+      {
+        "id": "0dab4e6a8ab2b3987bab",
+        "firstName": "Alex",
+        "lastName": "Freitas",
+        "email": "alex.freitas@linde.com"
+      },
+      {
+        "id": "d3772370fac3c9c6cf45",
+        "firstName": "Joyce",
+        "lastName": "Abreu",
+        "email": "joyce.abreu@linde.com"
+      }
+    ]
+  },
+  {
+    "cnpj": "35820448021303",
+    "name": "Vinhedo White",
+    "contacts": [
+      {
+        "id": "cac66380ef2de15845ec",
+        "firstName": "Alan",
+        "lastName": "Emidio",
+        "email": "alan.emidio@linde.com"
+      },
+      {
+        "id": "a8a6108af7e225929139",
+        "firstName": "Caio",
+        "lastName": "Leal",
+        "email": "caio.leal@linde.com"
+      },
+      {
+        "id": "39180395d58b8e2628a7",
+        "firstName": "Cristiana",
+        "lastName": "Almeida1",
+        "email": "cristiana.almeida1@linde.com"
+      },
+      {
+        "id": "920df76668fd613b7d1e",
+        "firstName": "Gisele",
+        "lastName": "Gatto",
+        "email": "gisele.gatto@linde.com"
+      },
+      {
+        "id": "29d514b92b999db263ad",
+        "firstName": "Inilza",
+        "lastName": "Marinho",
+        "email": "izilda.marinho@linde.com"
+      },
+      {
+        "id": "d88a0c0b922e289896a5",
+        "firstName": "Ricardo",
+        "lastName": "Carrera",
+        "email": "ricardo.carrera@linde.com"
+      }
+    ]
+  },
+  {
+    "cnpj": "35820448001965",
+    "name": "VIX - White Martins - Cariacica",
+    "contacts": [
+      {
+        "id": "b88cfaff270de0a5da36",
+        "firstName": "Danilo",
+        "lastName": "Fonseca",
+        "email": "danilo.fonseca@linde.com"
+      },
+      {
+        "id": "9a4506a60a71fa466e17",
+        "firstName": "Fredson",
+        "lastName": "Ssantos",
+        "email": "fredson.ssantos@linde.com"
+      }
+    ]
+  },
+  {
+    "cnpj": "24380578002556",
+    "name": "White Martins Parnamirim RN",
+    "contacts": [
+      {
+        "id": "5e448ceabd14ce03bdb7",
+        "firstName": "Joselito",
+        "lastName": "Cavalcante",
+        "email": "joselito.cavalcante@linde.com"
+      }
+    ]
+  }
+]

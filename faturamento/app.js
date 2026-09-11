@@ -12,6 +12,7 @@
     filterForm: document.getElementById('filterForm'),
     dateFilterInputs: [...document.querySelectorAll('[data-date-filter]')],
     datePickerInputs: [...document.querySelectorAll('[data-date-picker]')],
+    datePickerTriggers: [...document.querySelectorAll('[data-date-trigger]')],
     clearFilters: document.getElementById('clearFilters'),
     dashboardMessage: document.getElementById('dashboardMessage'),
     invoiceRows: document.getElementById('invoiceRows'),
@@ -188,6 +189,25 @@
     const picker = input.closest('.date-filter-control')?.querySelector('[data-date-picker]');
     if (picker) picker.value = isoDate;
     return valid;
+  };
+
+  const openDatePicker = (trigger) => {
+    const control = trigger.closest('.date-filter-control');
+    const input = control?.querySelector('[data-date-filter]');
+    const picker = control?.querySelector('[data-date-picker]');
+    if (!picker) return;
+    const currentDate = dateFilterToIso(input?.value);
+    if (currentDate) picker.value = currentDate;
+    if (typeof picker.showPicker === 'function') {
+      try {
+        picker.showPicker();
+        return;
+      } catch {
+        // Navegadores antigos podem expor showPicker sem permitir seu uso.
+      }
+    }
+    picker.focus({ preventScroll: true });
+    picker.click();
   };
 
   const formatCurrency = (value) =>
@@ -1031,6 +1051,14 @@
       if (!input) return;
       input.value = isoDateToBrazilian(picker.value);
       validateDateFilter(input);
+    });
+  });
+
+  elements.datePickerTriggers.forEach((trigger) => {
+    trigger.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      openDatePicker(trigger);
     });
   });
 

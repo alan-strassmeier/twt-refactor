@@ -8,7 +8,7 @@ const redisCommand = async (...args) => {
   const { url, token } = redisConfig();
   if (!url || !token) {
     throw Object.assign(
-      new Error('Redis obrigatório para impedir boletos duplicados.'),
+      new Error('Redis obrigatório para o controle seguro do faturamento.'),
       { statusCode: 503, expose: true }
     );
   }
@@ -22,7 +22,7 @@ const redisCommand = async (...args) => {
   });
   const payload = await response.json();
   if (!response.ok || payload.error) {
-    throw Object.assign(new Error('Falha no controle de duplicidade do boleto.'), {
+    throw Object.assign(new Error('Falha ao acessar o controle financeiro no Redis.'), {
       statusCode: 503,
       expose: true
     });
