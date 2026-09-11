@@ -1,6 +1,7 @@
+.git
 .env
 .env.*
-.env.example
 .vercel
 node_modules
-/README.md
+tests
+*.log

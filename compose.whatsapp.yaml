@@ -1,0 +1,61 @@
+services:
+  whatsapp-baixa:
+    build:
+      context: .
+      dockerfile: services/whatsapp-baixa/Dockerfile
+    env_file:
+      - ${WHATSAPP_ENV_FILE:-/opt/twt/secrets/whatsapp-baixa.env}
+    restart: unless-stopped
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    volumes:
+      - type: bind
+        source: /opt/twt/data/whatsapp-baixa
+        target: /data/whatsapp-baixa
+    user: node
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 1g
+    stop_grace_period: 30s
+    expose:
+      - "3000"
+    networks:
+      - twt_backend
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/health/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  whatsapp-migrate:
+    profiles: ["tools"]
+    build:
+      context: .
+      dockerfile: services/whatsapp-baixa/Dockerfile
+    env_file:
+      - ${WHATSAPP_ENV_FILE:-/opt/twt/secrets/whatsapp-baixa.env}
+    command: ["node", "services/whatsapp-baixa/migrate.js"]
+    user: node
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - twt_backend
+
+networks:
+  twt_backend:
+    external: true
+    name: twt_backend
