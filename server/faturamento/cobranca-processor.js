@@ -19,6 +19,7 @@ const {
   EVENT_TYPES,
   zohoConfig,
   createZohoTransport,
+  billingEmailPreview,
   sendBillingEmail
 } = require('./cobranca-email');
 const { deliveryReference } = require('./cobranca-webhook');
@@ -373,6 +374,14 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
     const deliveryMetadata = internalAlert
       ? { recipientRole: 'internal_alert' }
       : event === EVENT_TYPES.initial ? {} : { alertDeliveryMode: 'separate' };
+    const emailPreview = billingEmailPreview({
+      event,
+      data,
+      contact,
+      dactePdf,
+      bankSlipPdf,
+      config: context.emailConfig
+    });
     const claimed = await context.claimDelivery(event, invoice.id, contact.email, {
       state: 'processing',
       createdAt: now,
@@ -391,6 +400,7 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
         clientName: data.client?.tradeName || data.client?.name || invoice.client,
         contactName,
         email: contact.email,
+        emailPreview,
         ...(internalAlert ? { recipientRole: 'internal_alert' } : {})
       });
       const result = await context.sendBillingEmail({
@@ -411,6 +421,7 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
         accepted: result.accepted,
         rejected: result.rejected,
         clientReference,
+        emailPreview,
         ...deliveryMetadata
       };
       await context.saveDelivery(event, invoice.id, contact.email, record);
@@ -426,6 +437,7 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
         ...(internalAlert ? { recipientRole: 'internal_alert' } : {}),
         clientReference,
         messageId: result.messageId,
+        emailPreview,
         message: 'Mensagem aceita pelo SMTP do Zoho; a confirmação de entrega ainda está pendente.'
       });
       context.summary.sent += 1;
@@ -436,6 +448,7 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
         state: 'review',
         failedAt,
         clientReference,
+        emailPreview,
         message: String(error.message || error).slice(0, 300),
         ...deliveryMetadata
       });
@@ -450,6 +463,7 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
         email: contact.email,
         ...(internalAlert ? { recipientRole: 'internal_alert' } : {}),
         clientReference,
+        emailPreview,
         message: 'O resultado do envio precisa de conferência manual para evitar duplicidade.'
       });
       context.summary.review += 1;

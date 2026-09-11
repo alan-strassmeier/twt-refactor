@@ -359,7 +359,7 @@
             </form>
             <div class="table-scroll collection-table-scroll">
               <table class="collection-table collection-log-table">
-                <thead><tr><th>Data e hora</th><th>Fatura</th><th>Cliente</th><th>Destinatário</th><th>Evento</th><th>Status</th></tr></thead>
+                <thead><tr><th>Data e hora</th><th>Fatura</th><th>Cliente</th><th>Destinatário</th><th>Evento</th><th>Status</th><th>E-mail</th></tr></thead>
                 <tbody id="collectionLogRows"></tbody>
               </table>
               <div class="collection-empty" id="collectionLogsEmpty" hidden>
@@ -454,6 +454,40 @@
         <button class="button" id="cancelCategoryDelete" type="button">Não</button>
         <button class="button danger-button" id="confirmCategoryDelete" type="button">Sim</button>
       </div>
+    </section>
+  </div>
+  <div class="document-modal" id="emailLogModal" hidden>
+    <button class="document-modal-backdrop" id="emailLogBackdrop" type="button"
+      aria-label="Fechar conteúdo do e-mail"></button>
+    <section class="document-modal-panel email-log-panel" role="dialog" aria-modal="true"
+      aria-labelledby="emailLogTitle">
+      <button class="document-modal-close" id="emailLogClose" type="button"
+        aria-label="Fechar conteúdo do e-mail">
+        <svg aria-hidden="true" viewBox="0 0 24 24" focusable="false">
+          <path d="M6 6l12 12M18 6L6 18"></path>
+        </svg>
+      </button>
+      <span class="document-modal-eyebrow">Registro de envio</span>
+      <h2 id="emailLogTitle">Conteúdo do e-mail</h2>
+      <div id="emailLogContent">
+        <dl class="email-log-metadata">
+          <div><dt>De</dt><dd id="emailLogFrom">—</dd></div>
+          <div><dt>Para</dt><dd id="emailLogTo">—</dd></div>
+          <div class="email-log-wide"><dt>Assunto</dt><dd id="emailLogSubject">—</dd></div>
+          <div><dt>Prioridade</dt><dd id="emailLogPriority">—</dd></div>
+        </dl>
+        <section class="email-log-message" aria-labelledby="emailLogMessageTitle">
+          <strong id="emailLogMessageTitle">Mensagem</strong>
+          <pre id="emailLogBody"></pre>
+        </section>
+        <section class="email-log-attachments" aria-labelledby="emailLogAttachmentsTitle">
+          <strong id="emailLogAttachmentsTitle">Anexos enviados</strong>
+          <ul id="emailLogAttachments"></ul>
+        </section>
+      </div>
+      <p class="email-log-unavailable" id="emailLogUnavailable" hidden>
+        O conteúdo não foi armazenado neste registro antigo. A visualização estará disponível nos próximos envios.
+      </p>
     </section>
   </div>
   <button class="back-to-top" id="backToTopButton" type="button"

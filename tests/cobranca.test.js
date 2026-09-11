@@ -22,6 +22,7 @@ const {
   billingSubject,
   billingText,
   billingAttachments,
+  billingEmailPreview,
   sendBillingEmail
 } = require('../server/faturamento/cobranca-email');
 const {
@@ -138,6 +139,28 @@ test('anexa DACTEs em um único PDF quando o documento é informado', () => {
     'dactes-fatura-11532.pdf',
     'boleto-fatura-11532.pdf'
   ]);
+});
+
+test('salva uma prévia textual do e-mail sem duplicar os PDFs', () => {
+  const preview = billingEmailPreview({
+    event: EVENT_TYPES.reminder,
+    data: invoiceData(),
+    contact: { firstName: 'Maria', lastName: 'Silva', email: 'maria@example.com' },
+    dactePdf: Buffer.from('dactes'),
+    bankSlipPdf: Buffer.from('boleto'),
+    config: { fromName: 'TWT LOG', fromEmail: 'faturamento@twt.com.br' }
+  });
+  assert.equal(preview.fromEmail, 'faturamento@twt.com.br');
+  assert.equal(preview.toName, 'Maria Silva');
+  assert.equal(preview.priority, 'high');
+  assert.match(preview.subject, /Fatura : 11756/);
+  assert.match(preview.text, /Perto do vencimento/);
+  assert.deepEqual(preview.attachments, [
+    'fatura-11756.pdf',
+    'dactes-fatura-11756.pdf',
+    'boleto-fatura-11756.pdf'
+  ]);
+  assert.equal(Object.values(preview).some(Buffer.isBuffer), false);
 });
 
 test('não inclui Adriano em cópia nas mensagens dos clientes', async () => {
@@ -333,8 +356,12 @@ test('trava execuções concorrentes da cobrança com expiração de segurança'
 test('fatura TED envia somente a fatura e não tenta gerar boleto', async () => {
   let boletoCalls = 0;
   let sentInput;
+  const references = [];
+  const logs = [];
   const context = processorContext({
     generateInvoiceBankSlip: async () => { boletoCalls += 1; },
+    saveDeliveryReference: async (_reference, record) => references.push(record),
+    addLog: async (record) => logs.push(record),
     sendBillingEmail: async (input) => {
       sentInput = input;
       return { messageId: 'm-1', accepted: ['maria@example.com'], rejected: [] };
@@ -347,6 +374,8 @@ test('fatura TED envia somente a fatura e não tenta gerar boleto', async () => 
   });
   assert.equal(boletoCalls, 0);
   assert.equal(sentInput.bankSlipPdf, null);
+  assert.deepEqual(references[0].emailPreview.attachments, ['fatura-11756.pdf']);
+  assert.equal(logs[0].emailPreview.subject, 'Fatura : 11756 Vecto: 06/11/2026 - TWT LOG');
   assert.equal(context.summary.sent, 1);
 });
 
@@ -617,7 +646,7 @@ test('interpreta entrega e bounce com a referência e diagnóstico do ZeptoMail'
   assert.match(events[0].diagnostic, /5\.4\.1/);
 });
 
-test('webhook atualiza o envio original e registra o último estado uma única vez', async () => {
+test('webhook atualiza o envio original e preserva a prévia do e-mail', async () => {
   const saved = [];
   const logs = [];
   const claimed = new Set();
@@ -629,7 +658,8 @@ test('webhook atualiza o envio original e registra o último estado uma única v
       clientCnpj: '11280282000144',
       clientName: 'BHZ',
       contactName: 'Maria',
-      email: 'maria@example.com'
+      email: 'maria@example.com',
+      emailPreview: { subject: 'Fatura 11756', text: 'Mensagem enviada' }
     } : null,
     claimWebhookEvent: async (id) => {
       if (claimed.has(id)) return false;
@@ -657,6 +687,7 @@ test('webhook atualiza o envio original e registra o último estado uma única v
   assert.equal(saved[0][3].state, 'delivered');
   assert.equal(logs[0].status, 'delivered');
   assert.equal(logs[0].invoiceId, '11756');
+  assert.equal(logs[0].emailPreview.subject, 'Fatura 11756');
 });
 
 test('endpoint do cron exige segredo longo e compara em tempo constante', () => {
@@ -682,11 +713,14 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(html, /id="collectionLogsForm"/);
   assert.match(html, /id="previousLogPage"/);
   assert.match(html, /id="categoryDeleteModal"/);
+  assert.match(html, /id="emailLogModal"/);
+  assert.match(html, /id="emailLogBody"/);
   assert.match(html, /href="#pendingDoccobSection"/);
   assert.match(html, /href="#collectionLogsSection"/);
   assert.match(source, /route, \.\.\.query/);
   assert.match(source, /const filters = logFilters\(\);[\s\S]*setLoading\(true\)/);
   assert.doesNotMatch(source, /window\.confirm\(`Excluir \$\{category\.name\}/);
+  assert.match(source, /openEmailLogModal\(record, previewButton\)/);
   assert.match(apiSource, /query\.route === 'webhook'/);
   assert.match(apiSource, /req\.method === 'GET' \|\| req\.method === 'HEAD'/);
   assert.equal(fs.existsSync(path.join(root, 'api', 'faturamento', 'cobranca.js')), true);

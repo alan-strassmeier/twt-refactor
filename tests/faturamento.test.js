@@ -203,8 +203,8 @@ test('centraliza o X dentro do botão de fechar o modal', () => {
   assert.match(closeButton, /padding:\s*0/);
   assert.match(closeButton, /font-size:\s*0/);
   assert.match(closeButton, /\.document-modal-close svg/);
-  assert.equal((html.match(/class="document-modal-close"/g) || []).length, 2);
-  assert.equal((html.match(/<svg aria-hidden="true" viewBox="0 0 24 24"/g) || []).length, 2);
+  assert.equal((html.match(/class="document-modal-close"/g) || []).length, 3);
+  assert.equal((html.match(/<svg aria-hidden="true" viewBox="0 0 24 24"/g) || []).length, 3);
   assert.doesNotMatch(html, />×<\/button>/);
 });
 
