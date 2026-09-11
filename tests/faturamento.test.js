@@ -457,6 +457,24 @@ test('aceita fatura única ou lista no retorno da Brudam', () => {
   }), [invoice]);
 });
 
+test('trata retornos OK sem lançamentos como lista vazia', () => {
+  assert.deepEqual(invoiceListFromPayload({
+    message: 'OK',
+    status: 1,
+    data: null
+  }), []);
+  assert.deepEqual(invoiceListFromPayload({
+    message: 'OK',
+    status: 1,
+    data: { status: 1, qtd_lancamentos: 0 }
+  }), []);
+  assert.equal(invoiceListFromPayload({
+    message: 'OK',
+    status: 1,
+    data: { status: 1, qtd_lancamentos: 1 }
+  }), null);
+});
+
 test('preserva os CT-es quando documentos pertence à fatura documentada', () => {
   const linkedCtes = [
     { id: '66620', numero: '6135-2', tipo: 'CTE', valor: '9.60' },

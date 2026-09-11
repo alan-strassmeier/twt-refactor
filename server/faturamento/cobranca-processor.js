@@ -51,7 +51,12 @@ const fetchInvoiceScanPage = async (input) => {
   const result = await authenticatedGet(`/financeiro/faturas?${query}`);
   const rawInvoices = invoiceListFromPayload(result.payload);
   if (!result.response.ok || Number(result.payload?.status) !== 1 || rawInvoices === null) {
-    const error = new Error(String(result.payload?.message || '').trim() || 'Falha ao consultar faturas na Brudam.');
+    const upstreamMessage = String(result.payload?.message || '').trim();
+    const error = new Error(
+      upstreamMessage && upstreamMessage.toUpperCase() !== 'OK'
+        ? upstreamMessage
+        : 'Formato inesperado no retorno de faturas da Brudam.'
+    );
     error.statusCode = result.response.status >= 400 ? result.response.status : 502;
     throw error;
   }
