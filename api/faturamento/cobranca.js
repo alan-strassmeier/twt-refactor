@@ -8,6 +8,11 @@ const {
 } = require('../../server/faturamento/http');
 const store = require('../../server/faturamento/cobranca-store');
 const { runBillingCollection } = require('../../server/faturamento/cobranca-processor');
+const {
+  readWebhookBody,
+  validateWebhook,
+  processWebhookPayload
+} = require('../../server/faturamento/cobranca-webhook');
 
 const constantTimeEqual = (left, right) => {
   const expected = Buffer.from(String(right || ''), 'utf8');
@@ -182,6 +187,21 @@ const handleProcess = async (req, res) => {
   }
 };
 
+const handleWebhook = async (req, res) => {
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', 'POST');
+    sendJson(res, 405, { message: 'Método não permitido.' });
+    return;
+  }
+  const body = await readWebhookBody(req);
+  const payload = validateWebhook({
+    body,
+    signatureHeader: req.headers['producer-signature']
+  });
+  const result = await processWebhookPayload(payload);
+  sendJson(res, 200, { received: true, ...result });
+};
+
 module.exports = async (req, res) => {
   let query;
   try {
@@ -191,6 +211,7 @@ module.exports = async (req, res) => {
     if (query.route === 'pending') return await handlePending(req, res);
     if (query.route === 'logs') return await handleLogs(req, res, query);
     if (query.route === 'process') return await handleProcess(req, res);
+    if (query.route === 'webhook') return await handleWebhook(req, res);
     sendJson(res, 404, { message: 'Rota de cobrança não encontrada.' });
   } catch (error) {
     const statusCode = Number(error.statusCode) || (error.name === 'AbortError' ? 504 : 500);

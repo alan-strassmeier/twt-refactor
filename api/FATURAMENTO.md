@@ -88,6 +88,8 @@ ZOHO_SMTP_USER=faturamento@twt.com.br
 ZOHO_SMTP_PASSWORD=
 ZOHO_SMTP_FROM_EMAIL=faturamento@twt.com.br
 ZOHO_SMTP_FROM_NAME=TWT LOG
+ZOHO_WEBHOOK_AUTH_KEY=
+ZOHO_WEBHOOK_MAX_AGE_SECONDS=300
 BILLING_ALERT_EMAIL=adriano@twt.com.br
 BILLING_CRON_SECRET=
 BILLING_EMAIL_MAX_INVOICES_PER_RUN=12
@@ -122,14 +124,34 @@ Se o primeiro nome for deixado vazio ao cadastrar uma pessoa, o sistema o
 deduz da parte anterior a `@`. Os separadores `.`, `-` e `_` dividem primeiro
 nome e sobrenome. Por exemplo, `jon.doe@empresa.com` resulta em `Jon Doe`.
 
-Use no Zoho uma senha específica de aplicativo quando a conta tiver
-autenticação em dois fatores. A senha fica somente em `ZOHO_SMTP_PASSWORD` na
-Vercel e nunca deve ser commitada. O log **Aguardando confirmação** significa
-que o servidor SMTP do Zoho aceitou a mensagem. Essa resposta não comprova que
-o servidor do destinatário a aceitou nem que ela entrou na caixa de entrada.
-Uma confirmação posterior exige um serviço transacional com evento de entrega,
-como o webhook do ZeptoMail; mesmo esse evento confirma o servidor destinatário,
-não a separação posterior entre caixa de entrada, spam e quarentena.
+Para receber confirmação posterior de entrega, use um Agent do **Zoho
+ZeptoMail**. Troque as credenciais SMTP pelas fornecidas na aba SMTP/API do
+Agent (`smtp.zeptomail.com`, porta 465 com SSL ou 587 com TLS). A senha fica
+somente em `ZOHO_SMTP_PASSWORD` na Vercel e nunca deve ser commitada. O sistema
+envia o cabeçalho `X-TM-CLIENT-REF` para relacionar cada evento do ZeptoMail à
+fatura e ao destinatário corretos.
+
+Na aba **Webhooks** do mesmo Agent:
+
+1. configure como URL
+   `https://SEU-DOMINIO/api/faturamento/cobranca?route=webhook`;
+2. marque os eventos **Delivered**, **Soft bounced** e **Hard bounced**;
+3. crie uma chave de autenticação aleatória e forte no ZeptoMail;
+4. cadastre exatamente o mesmo valor na Vercel como
+   `ZOHO_WEBHOOK_AUTH_KEY` e faça um novo deployment;
+5. use **Send Test** no ZeptoMail. A resposta esperada da URL é HTTP 200.
+
+O endpoint é público porque precisa receber chamadas do ZeptoMail, mas rejeita
+payloads sem a assinatura HMAC-SHA256 correta ou com mais de cinco minutos. A
+URL faz parte da função consolidada e não consome uma Serverless Function
+adicional.
+
+O log **Aguardando confirmação** significa apenas que o SMTP aceitou a
+mensagem. **Entregue ao servidor destinatário** significa que o servidor do
+destinatário a aceitou. Isso ainda não comprova a colocação na caixa de entrada:
+spam e quarentena são decisões posteriores do provedor do destinatário. Bounces
+temporários e definitivos aparecem no mesmo registro do envio, e o motivo
+enviado pelo ZeptoMail fica disponível ao passar o mouse sobre o status.
 
 Em cada execução o servidor:
 

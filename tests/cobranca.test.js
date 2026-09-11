@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { createHmac } = require('node:crypto');
 const {
   namesFromEmail,
   categoriesFromValue,
@@ -23,6 +24,12 @@ const {
   billingAttachments,
   sendBillingEmail
 } = require('../server/faturamento/cobranca-email');
+const {
+  deliveryReference,
+  validateWebhook,
+  extractWebhookEvents,
+  processWebhookPayload
+} = require('../server/faturamento/cobranca-webhook');
 const {
   addDays,
   billingEventForInvoice,
@@ -160,6 +167,26 @@ test('não inclui Adriano em cópia nas mensagens dos clientes', async () => {
   assert.equal(calls[2].priority, 'high');
 });
 
+test('envia ao ZeptoMail uma referência determinística sem expor o e-mail', async () => {
+  const calls = [];
+  const reference = deliveryReference(EVENT_TYPES.initial, '11756', 'Maria@Example.com');
+  await sendBillingEmail({
+    event: EVENT_TYPES.initial,
+    data: invoiceData(),
+    contact: { firstName: 'Maria', lastName: '', email: 'maria@example.com' },
+    invoicePdf: Buffer.from('pdf'),
+    clientReference: reference,
+    transport: { sendMail: async (message) => {
+      calls.push(message);
+      return { messageId: 'm-1', accepted: ['maria@example.com'], rejected: [] };
+    } },
+    config: { fromName: 'TWT', fromEmail: 'faturamento@twt.com.br' }
+  });
+  assert.equal(calls[0].headers['X-TM-CLIENT-REF'], reference);
+  assert.match(reference, /^twt-initial-11756-[a-f0-9]{16}$/);
+  assert.doesNotMatch(reference, /maria|example/i);
+});
+
 test('varre páginas e calcula o dia de lembrete sem depender do fuso do servidor', async () => {
   const calls = [];
   const result = await scanInvoices({ status: '0' }, {
@@ -253,6 +280,7 @@ const processorContext = (overrides = {}) => {
     getDelivery: async () => null,
     claimDelivery: async () => true,
     saveDelivery: async () => {},
+    saveDeliveryReference: async () => {},
     addLog: async () => {},
     ...overrides
   };
@@ -513,6 +541,106 @@ test('filtra os logs pela fatura e limita a página a dez registros', async () =
   assert.ok(result.logs.every((record) => record.invoiceId === '11756'));
 });
 
+test('exibe somente o estado mais recente de cada envio correlacionado', async () => {
+  const records = [
+    JSON.stringify({ id: 'novo', invoiceId: '11756', clientReference: 'ref-1', status: 'delivered' }),
+    JSON.stringify({ id: 'antigo', invoiceId: '11756', clientReference: 'ref-1', status: 'submitted' }),
+    JSON.stringify({ id: 'legado', invoiceId: '11756', status: 'submitted' })
+  ];
+  const result = await listLogs({ invoiceId: '11756' }, async () => records);
+  assert.deepEqual(result.logs.map((record) => record.id), ['novo', 'legado']);
+  assert.equal(result.total, 2);
+});
+
+test('valida a assinatura HMAC do formulário enviado pelo ZeptoMail', () => {
+  const payload = {
+    event_name: ['delivered'],
+    event_message: [{ email_info: { client_reference: 'twt-initial-11756-abc' } }]
+  };
+  const payloadText = JSON.stringify(payload);
+  const authenticationKey = 'chave-de-webhook-com-32-caracteres';
+  const timestamp = 1_786_000_000_000;
+  const signature = createHmac('sha256', authenticationKey).update(payloadText).digest('base64');
+  const parsed = validateWebhook({
+    body: `eventData=${encodeURIComponent(payloadText)}`,
+    signatureHeader: `ts=${timestamp};s=${encodeURIComponent(signature)};s-algorithm=HmacSHA256`,
+    config: { authenticationKey, maxAgeMs: 300_000 },
+    now: timestamp + 1_000
+  });
+  assert.deepEqual(parsed, payload);
+  assert.throws(() => validateWebhook({
+    body: `eventData=${encodeURIComponent(payloadText)}`,
+    signatureHeader: `ts=${timestamp};s=incorreta;s-algorithm=HmacSHA256`,
+    config: { authenticationKey, maxAgeMs: 300_000 },
+    now: timestamp + 1_000
+  }), /Assinatura do webhook inválida/);
+});
+
+test('interpreta entrega e bounce com a referência e diagnóstico do ZeptoMail', () => {
+  const events = extractWebhookEvents({
+    event_name: ['hardbounce'],
+    webhook_request_id: 'webhook-1',
+    event_message: [{
+      request_id: 'request-1',
+      email_info: {
+        client_reference: 'twt-initial-11756-abc',
+        email_reference: 'zepto-1',
+        to: { email_address: [{ address: 'maria@example.com' }] }
+      },
+      event_data: {
+        object: 'bounce',
+        details: { reason: 'Invalid recipient', diagnostic_message: '550 5.4.1 Access denied' }
+      }
+    }]
+  });
+  assert.equal(events[0].status, 'hard_bounce');
+  assert.equal(events[0].clientReference, 'twt-initial-11756-abc');
+  assert.equal(events[0].email, 'maria@example.com');
+  assert.match(events[0].diagnostic, /5\.4\.1/);
+});
+
+test('webhook atualiza o envio original e registra o último estado uma única vez', async () => {
+  const saved = [];
+  const logs = [];
+  const claimed = new Set();
+  const reference = deliveryReference('initial', '11756', 'maria@example.com');
+  const store = {
+    getDeliveryReference: async (value) => value === reference ? {
+      event: 'initial',
+      invoiceId: '11756',
+      clientCnpj: '11280282000144',
+      clientName: 'BHZ',
+      contactName: 'Maria',
+      email: 'maria@example.com'
+    } : null,
+    claimWebhookEvent: async (id) => {
+      if (claimed.has(id)) return false;
+      claimed.add(id);
+      return true;
+    },
+    releaseWebhookEvent: async (id) => claimed.delete(id),
+    getDelivery: async () => ({ state: 'sent', clientReference: reference }),
+    saveDelivery: async (...args) => saved.push(args),
+    addLog: async (record) => logs.push(record)
+  };
+  const payload = {
+    event_name: ['delivered'],
+    webhook_request_id: 'webhook-1',
+    event_message: [{
+      request_id: 'request-1',
+      email_info: { client_reference: reference, email_reference: 'zepto-1' }
+    }]
+  };
+  const now = () => new Date('2026-09-11T18:00:00.000Z');
+  const first = await processWebhookPayload(payload, { store, now });
+  const second = await processWebhookPayload(payload, { store, now });
+  assert.equal(first.processed, 1);
+  assert.equal(second.duplicates, 1);
+  assert.equal(saved[0][3].state, 'delivered');
+  assert.equal(logs[0].status, 'delivered');
+  assert.equal(logs[0].invoiceId, '11756');
+});
+
 test('endpoint do cron exige segredo longo e compara em tempo constante', () => {
   const secret = 'x'.repeat(40);
   assert.equal(constantTimeEqual(`Bearer ${secret}`, `Bearer ${secret}`), true);
@@ -529,6 +657,7 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   const root = path.resolve(__dirname, '..');
   const html = fs.readFileSync(path.join(root, 'faturamento', 'index.html'), 'utf8');
   const source = fs.readFileSync(path.join(root, 'faturamento', 'cobranca.js'), 'utf8');
+  const apiSource = fs.readFileSync(path.join(root, 'api', 'faturamento', 'cobranca.js'), 'utf8');
   assert.match(html, /data-billing-area="collection"/);
   assert.match(html, /id="categoryForm"/);
   assert.match(html, /id="pendingRows"/);
@@ -540,5 +669,6 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(source, /route, \.\.\.query/);
   assert.match(source, /const filters = logFilters\(\);[\s\S]*setLoading\(true\)/);
   assert.doesNotMatch(source, /window\.confirm\(`Excluir \$\{category\.name\}/);
+  assert.match(apiSource, /query\.route === 'webhook'/);
   assert.equal(fs.existsSync(path.join(root, 'api', 'faturamento', 'cobranca.js')), true);
 });

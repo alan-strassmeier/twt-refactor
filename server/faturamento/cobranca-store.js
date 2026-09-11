@@ -12,6 +12,8 @@ const KEYS = Object.freeze({
   seed: 'faturamento:cobranca:categorias-seed:v1',
   pending: 'faturamento:cobranca:doccob-pendente:v1',
   deliveries: 'faturamento:cobranca:envios:v1',
+  deliveryReferences: 'faturamento:cobranca:referencias:v1',
+  webhookEvents: 'faturamento:cobranca:webhook-eventos:v1',
   logs: 'faturamento:cobranca:logs:v1',
   overdueCursor: 'faturamento:cobranca:cursor:vencidas:v1',
   processing: 'faturamento:cobranca:processamento:v1',
@@ -189,6 +191,34 @@ const saveDelivery = (event, invoiceId, email, record, command = redisCommand) =
   JSON.stringify(record)
 );
 
+const saveDeliveryReference = (reference, record, command = redisCommand) => command(
+  'HSET',
+  KEYS.deliveryReferences,
+  String(reference),
+  JSON.stringify(record)
+);
+
+const getDeliveryReference = async (reference, command = redisCommand) =>
+  parseRecord(await command('HGET', KEYS.deliveryReferences, String(reference)));
+
+const webhookEventKey = (eventId) => `${KEYS.webhookEvents}:${String(eventId)}`;
+
+const claimWebhookEvent = async (eventId, command = redisCommand) => (
+  await command(
+    'SET',
+    webhookEventKey(eventId),
+    new Date().toISOString(),
+    'NX',
+    'EX',
+    '604800'
+  )
+) === 'OK';
+
+const releaseWebhookEvent = (eventId, command = redisCommand) => command(
+  'DEL',
+  webhookEventKey(eventId)
+);
+
 const addLog = async (record, command = redisCommand) => {
   const log = {
     id: record.id || randomUUID(),
@@ -216,12 +246,20 @@ const filteredLogs = async ({ invoiceId = '', date = '', cnpj = '' } = {}, comma
   const normalizedInvoice = String(invoiceId || '').replace(/\D/g, '');
   const normalizedCnpj = digits(cnpj);
   const normalizedDate = String(date || '').slice(0, 10);
-  return values
+  const matching = values
     .map((value) => parseRecord(value))
     .filter(Boolean)
     .filter((record) => !normalizedInvoice || digits(record.invoiceId) === normalizedInvoice)
     .filter((record) => !normalizedCnpj || digits(record.clientCnpj) === normalizedCnpj)
     .filter((record) => !normalizedDate || saoPauloDate(record.createdAt) === normalizedDate);
+  const seenReferences = new Set();
+  return matching.filter((record) => {
+    const reference = String(record.clientReference || '');
+    if (!reference) return true;
+    if (seenReferences.has(reference)) return false;
+    seenReferences.add(reference);
+    return true;
+  });
 };
 
 const listLogs = async ({ invoiceId = '', date = '', cnpj = '', page = 1, limit = 10 } = {}, command = redisCommand) => {
@@ -292,6 +330,10 @@ module.exports = {
   getDelivery,
   claimDelivery,
   saveDelivery,
+  saveDeliveryReference,
+  getDeliveryReference,
+  claimWebhookEvent,
+  releaseWebhookEvent,
   addLog,
   saoPauloDate,
   listLogs,
