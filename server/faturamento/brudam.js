@@ -465,7 +465,20 @@ const invoiceListFromPayload = (payload) => {
   if (!payload || typeof payload !== 'object') return null;
   if (isInvoiceObject(payload.data)) return [payload.data];
   if (Array.isArray(payload?.data?.documentos)) return payload.data.documentos;
-  return findInvoiceList(payload.data);
+  const invoices = findInvoiceList(payload.data);
+  if (invoices !== null) return invoices;
+
+  // A Brudam pode responder uma consulta sem resultados com message "OK" e
+  // data nulo ou somente com o contador zerado. Isso é uma página vazia, não
+  // uma falha de formato.
+  if (Number(payload.status) === 1) {
+    if (payload.data === null || payload.data === undefined || payload.data === '') return [];
+    const reportedCount = integer(firstValue(payload.data, [
+      'qtd_lancamentos', 'quantidade', 'total', 'count'
+    ]), { min: 0 });
+    if (reportedCount === 0) return [];
+  }
+  return null;
 };
 
 const invoicePageFingerprint = (invoices) => invoices
