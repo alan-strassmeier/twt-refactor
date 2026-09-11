@@ -112,6 +112,20 @@ test('anexa boleto somente quando o PDF bancário existe', () => {
   }).length, 2);
 });
 
+test('anexa DACTEs em um único PDF quando o documento é informado', () => {
+  const attachments = billingAttachments({
+    invoiceId: 11532,
+    invoicePdf: Buffer.from('fatura'),
+    dactePdf: Buffer.from('dactes'),
+    bankSlipPdf: Buffer.from('boleto')
+  });
+  assert.deepEqual(attachments.map((attachment) => attachment.filename), [
+    'fatura-11532.pdf',
+    'dactes-fatura-11532.pdf',
+    'boleto-fatura-11532.pdf'
+  ]);
+});
+
 test('copia Adriano nos avisos próximos e vencidos', async () => {
   const calls = [];
   const transport = { sendMail: async (message) => {
@@ -171,6 +185,10 @@ const processorContext = (overrides = {}) => {
     findDoccobForInvoice: async () => ({}),
     fetchInvoicePdfData: async () => invoiceData({ type: 'ted_doc' }),
     buildInvoicePdf: async () => Buffer.from('fatura'),
+    resolveInvoiceCteKeys: async () => ({ cteKeys: [] }),
+    fetchCteXmls: async () => [],
+    parseCteXml: (xml) => xml,
+    buildDactePdf: async () => Buffer.from('dactes'),
     generateInvoiceBankSlip: async () => ({ status: 'ready' }),
     getInvoiceBankSlipPdf: async () => Buffer.from('boleto'),
     sendBillingEmail: async () => ({ messageId: 'm-1', accepted: [], rejected: [] }),
@@ -219,6 +237,64 @@ test('fatura TED envia somente a fatura e não tenta gerar boleto', async () => 
   assert.equal(boletoCalls, 0);
   assert.equal(sentInput.bankSlipPdf, null);
   assert.equal(context.summary.sent, 1);
+});
+
+test('fatura DSL envia todos os DACTEs em um único anexo', async () => {
+  const cteKey = '43260797434690000129570000000151221704715130';
+  let sentInput;
+  const context = processorContext({
+    findDoccobForInvoice: async () => ({
+      invoice: { issuerCnpj: '97434690000129' },
+      transports: [{ accessKey: cteKey }]
+    }),
+    fetchInvoicePdfData: async () => ({
+      ...invoiceData({ type: 'ted_doc' }),
+      issuer: { document: '97434690000129' }
+    }),
+    fetchCteXmls: async (keys) => {
+      assert.deepEqual(keys, [cteKey]);
+      return ['<cteProc />'];
+    },
+    parseCteXml: (xml) => ({ xml }),
+    buildDactePdf: async (models) => {
+      assert.equal(models.length, 1);
+      return Buffer.from('dactes-dsl');
+    },
+    sendBillingEmail: async (input) => {
+      sentInput = input;
+      return { messageId: 'm-1', accepted: ['maria@example.com'], rejected: [] };
+    }
+  });
+  await processInvoiceEvent({
+    event: EVENT_TYPES.initial,
+    invoice: { id: '11532', clientDocument: '41870054000276', client: 'JIMI BRASIL' },
+    context
+  });
+  assert.equal(sentInput.dactePdf.toString(), 'dactes-dsl');
+});
+
+test('fatura DSL não é enviada sem chave CT-e para o DACTE', async () => {
+  let sent = false;
+  const context = processorContext({
+    findDoccobForInvoice: async () => ({
+      invoice: { issuerCnpj: '97434690000129' },
+      transports: []
+    }),
+    fetchInvoicePdfData: async () => ({
+      ...invoiceData({ type: 'ted_doc' }),
+      issuer: { document: '97434690000129' }
+    }),
+    sendBillingEmail: async () => { sent = true; }
+  });
+  await assert.rejects(
+    processInvoiceEvent({
+      event: EVENT_TYPES.initial,
+      invoice: { id: '11532', clientDocument: '41870054000276', client: 'JIMI BRASIL' },
+      context
+    }),
+    /não possui chave CT-e/
+  );
+  assert.equal(sent, false);
 });
 
 test('mantém na fila a fatura que ainda não possui destinatário', async () => {

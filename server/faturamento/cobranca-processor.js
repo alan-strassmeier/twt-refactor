@@ -8,6 +8,13 @@ const {
 const { findDoccobForInvoice } = require('./r2-doccob');
 const { fetchInvoicePdfData, buildInvoicePdf } = require('./invoice-pdf');
 const { generateInvoiceBankSlip, getInvoiceBankSlipPdf } = require('./boleto');
+const { isDslIssuer } = require('./billing-rules');
+const {
+  normalizeCteKeys,
+  resolveInvoiceCteKeys,
+  fetchCteXmls
+} = require('./cte-documents');
+const { parseCteXml, buildDactePdf } = require('./dacte');
 const {
   EVENT_TYPES,
   zohoConfig,
@@ -122,6 +129,35 @@ const logOnceWithoutContacts = async ({ event, invoice, addLog, claimDelivery, n
   });
 };
 
+const buildDslDacteAttachment = async ({ invoiceId, doccob, data, context }) => {
+  const issuerCnpj = doccob?.invoice?.issuerCnpj || data.issuer?.document;
+  if (!isDslIssuer(issuerCnpj)) return null;
+
+  let cteKeys = normalizeCteKeys(
+    (Array.isArray(doccob?.transports) ? doccob.transports : [])
+      .map((transport) => transport?.accessKey)
+  );
+  if (!cteKeys.length) {
+    const resolved = await context.resolveInvoiceCteKeys(invoiceId);
+    cteKeys = normalizeCteKeys(resolved?.cteKeys || []);
+  }
+  if (!cteKeys.length) {
+    throw Object.assign(new Error('A fatura DSL não possui chave CT-e para gerar o DACTE.'), {
+      statusCode: 409,
+      expose: true
+    });
+  }
+
+  const xmls = await context.fetchCteXmls(cteKeys);
+  if (xmls.length !== cteKeys.length) {
+    throw Object.assign(new Error('Não foi possível gerar todos os DACTEs da fatura DSL.'), {
+      statusCode: 502,
+      expose: true
+    });
+  }
+  return context.buildDactePdf(xmls.map(context.parseCteXml));
+};
+
 const processInvoiceEvent = async ({ event, invoice, context }) => {
   const now = context.now().toISOString();
   if (context.doccobPendingIds?.has(String(invoice.id))) return;
@@ -188,6 +224,12 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
   }
 
   const invoicePdf = await context.buildInvoicePdf(data);
+  const dactePdf = await buildDslDacteAttachment({
+    invoiceId: invoice.id,
+    doccob,
+    data,
+    context
+  });
   const tedDoc = data.invoice?.payment?.type === 'ted_doc';
   let bankSlipPdf = null;
   if (!tedDoc) {
@@ -216,6 +258,7 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
         data,
         contact,
         invoicePdf,
+        dactePdf,
         bankSlipPdf,
         transport: context.transport,
         config: context.emailConfig
@@ -337,6 +380,10 @@ const runBillingCollection = async (dependencies = {}) => {
     findDoccobForInvoice: dependencies.findDoccobForInvoice || findDoccobForInvoice,
     fetchInvoicePdfData: dependencies.fetchInvoicePdfData || fetchInvoicePdfData,
     buildInvoicePdf: dependencies.buildInvoicePdf || buildInvoicePdf,
+    resolveInvoiceCteKeys: dependencies.resolveInvoiceCteKeys || resolveInvoiceCteKeys,
+    fetchCteXmls: dependencies.fetchCteXmls || fetchCteXmls,
+    parseCteXml: dependencies.parseCteXml || parseCteXml,
+    buildDactePdf: dependencies.buildDactePdf || buildDactePdf,
     generateInvoiceBankSlip: dependencies.generateInvoiceBankSlip || generateInvoiceBankSlip,
     getInvoiceBankSlipPdf: dependencies.getInvoiceBankSlipPdf || getInvoiceBankSlipPdf,
     sendBillingEmail: dependencies.sendBillingEmail || sendBillingEmail,
@@ -411,6 +458,7 @@ module.exports = {
   fetchInvoiceScanPage,
   scanInvoices,
   pendingRecord,
+  buildDslDacteAttachment,
   processInvoiceEvent,
   runBillingCollection
 };

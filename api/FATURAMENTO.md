@@ -133,7 +133,8 @@ Em cada execução o servidor:
 1. consulta faturas em aberto emitidas no dia e reprocessa as que aguardavam
    DOCCOB;
 2. envia o aviso inicial somente quando consegue montar o PDF da fatura e, para
-   pagamentos que não sejam TED/DOC, anexar também o boleto;
+   pagamentos que não sejam TED/DOC, anexar também o boleto. Para faturas DSL,
+   reúne e anexa em um único PDF todos os DACTEs vinculados no DOCCOB;
 3. consulta as faturas em aberto com vencimento dois dias depois e envia o
    aviso **Perto do vencimento**;
 4. consulta faturas vencidas ainda em aberto e envia o aviso de vencida;
