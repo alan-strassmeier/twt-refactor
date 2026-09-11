@@ -78,10 +78,7 @@
     },
     "api/faturamento/cobranca.js": {
       "maxDuration": 60,
-      "includeFiles": [
-        "assets/twtlogo.png",
-        "server/faturamento/cobranca-contacts-seed.json"
-      ]
+      "includeFiles": "assets/twtlogo.png"
     },
     "api/whatsapp.mjs": {
       "maxDuration": 60,
