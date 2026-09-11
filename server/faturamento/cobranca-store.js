@@ -13,7 +13,9 @@ const KEYS = Object.freeze({
   pending: 'faturamento:cobranca:doccob-pendente:v1',
   deliveries: 'faturamento:cobranca:envios:v1',
   logs: 'faturamento:cobranca:logs:v1',
-  overdueCursor: 'faturamento:cobranca:cursor:vencidas:v1'
+  overdueCursor: 'faturamento:cobranca:cursor:vencidas:v1',
+  processing: 'faturamento:cobranca:processamento:v1',
+  lastRun: 'faturamento:cobranca:ultima-execucao:v1'
 });
 
 const parseRecord = (value, fallback = null) => {
@@ -229,6 +231,27 @@ const getOverdueCursor = async (command = redisCommand) =>
 const saveOverdueCursor = (cursor, command = redisCommand) =>
   command('SET', KEYS.overdueCursor, String(Math.max(0, Number(cursor) || 0)));
 
+const claimProcessingRun = async (runId, command = redisCommand) => (
+  await command('SET', KEYS.processing, String(runId), 'NX', 'EX', '90')
+) === 'OK';
+
+const releaseProcessingRun = (runId, command = redisCommand) => command(
+  'EVAL',
+  "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) end return 0",
+  '1',
+  KEYS.processing,
+  String(runId)
+);
+
+const saveLastRun = (record, command = redisCommand) => command(
+  'SET',
+  KEYS.lastRun,
+  JSON.stringify(record)
+);
+
+const getLastRun = async (command = redisCommand) =>
+  parseRecord(await command('GET', KEYS.lastRun));
+
 module.exports = {
   KEYS,
   parseRecord,
@@ -254,5 +277,9 @@ module.exports = {
   saoPauloDate,
   listLogs,
   getOverdueCursor,
-  saveOverdueCursor
+  saveOverdueCursor,
+  claimProcessingRun,
+  releaseProcessingRun,
+  saveLastRun,
+  getLastRun
 };

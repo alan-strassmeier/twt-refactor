@@ -151,7 +151,14 @@ const scanInvoices = async (filters, {
   return { invoices, pages, hasMore, nextSkip: hasMore ? skip : 0 };
 };
 
-const pendingRecord = (invoice, current, now, reason = 'doccob', message = '') => ({
+const pendingRecord = (
+  invoice,
+  current,
+  now,
+  reason = 'doccob',
+  message = '',
+  { source = 'manual', runId = '' } = {}
+) => ({
   invoiceId: String(invoice.id),
   clientCnpj: String(invoice.clientDocument || current?.clientCnpj || '').replace(/\D/g, ''),
   clientName: String(invoice.client || current?.clientName || 'Não informado'),
@@ -159,6 +166,8 @@ const pendingRecord = (invoice, current, now, reason = 'doccob', message = '') =
   dueAt: invoice.dueAt || current?.dueAt || null,
   firstSeenAt: current?.firstSeenAt || now,
   lastCheckedAt: now,
+  lastCheckSource: source === 'automatic' ? 'automatic' : 'manual',
+  ...(runId ? { lastRunId: String(runId) } : {}),
   attempts: Number(current?.attempts || 0) + 1,
   reason,
   ...(message ? { message: String(message).slice(0, 300) } : {})
@@ -241,7 +250,10 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
     const record = pendingRecord({
       ...invoice,
       client: invoice.client || category?.name || current?.clientName
-    }, current, now, 'doccob');
+    }, current, now, 'doccob', '', {
+      source: context.source,
+      runId: context.runId
+    });
     await context.savePending(record);
     context.pendingByInvoice.set(String(invoice.id), record);
     context.doccobPendingIds?.add(String(invoice.id));
@@ -259,7 +271,10 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
       ...invoice,
       client: data.client?.tradeName || data.client?.name || invoice.client,
       clientDocument: resolvedCnpj
-    }, current, now, 'contacts');
+    }, current, now, 'contacts', '', {
+      source: context.source,
+      runId: context.runId
+    });
     await context.savePending(record);
     context.pendingByInvoice.set(String(invoice.id), record);
     await logOnceWithoutContacts({
@@ -416,6 +431,7 @@ const runBillingCollection = async (dependencies = {}) => {
   });
 
   const summary = {
+    source: dependencies.source === 'automatic' ? 'automatic' : 'manual',
     currentDate,
     startedAt: startedAt.toISOString(),
     completedAt: null,
@@ -433,6 +449,8 @@ const runBillingCollection = async (dependencies = {}) => {
   const emailConfig = dependencies.emailConfig || zohoConfig();
   const transport = dependencies.transport || createZohoTransport(emailConfig);
   const context = {
+    source: summary.source,
+    runId: String(dependencies.runId || ''),
     now: nowFactory,
     summary,
     pendingByInvoice,
@@ -486,7 +504,11 @@ const runBillingCollection = async (dependencies = {}) => {
               current,
               context.now().toISOString(),
               'processing_error',
-              failure.message
+              failure.message,
+              {
+                source: context.source,
+                runId: context.runId
+              }
             );
             await context.savePending(record);
             context.pendingByInvoice.set(String(item.invoice.id), record);

@@ -11,7 +11,9 @@ const seed = require('../server/faturamento/cobranca-contacts-seed.json');
 const {
   normalizedContact,
   deliveryField,
-  saoPauloDate: logDate
+  saoPauloDate: logDate,
+  claimProcessingRun,
+  releaseProcessingRun
 } = require('../server/faturamento/cobranca-store');
 const {
   EVENT_TYPES,
@@ -25,6 +27,7 @@ const {
   billingEventForInvoice,
   buildBillingQueue,
   scanInvoices,
+  pendingRecord,
   processInvoiceEvent
 } = require('../server/faturamento/cobranca-processor');
 const {
@@ -265,6 +268,33 @@ test('mantém a fatura na fila enquanto o DOCCOB não chegou', async () => {
   assert.equal(saved.length, 1);
   assert.equal(saved[0].reason, 'doccob');
   assert.equal(context.summary.pendingDoccob, 1);
+});
+
+test('registra se a pendência foi conferida manualmente ou pelo agendador', () => {
+  const record = pendingRecord(
+    { id: '11756', clientDocument: '11280282000144', client: 'BHZ' },
+    { attempts: 2, firstSeenAt: '2026-09-10T12:00:00.000Z' },
+    '2026-09-11T12:00:00.000Z',
+    'doccob',
+    '',
+    { source: 'automatic', runId: 'execucao-1' }
+  );
+  assert.equal(record.attempts, 3);
+  assert.equal(record.lastCheckSource, 'automatic');
+  assert.equal(record.lastRunId, 'execucao-1');
+});
+
+test('trava execuções concorrentes da cobrança com expiração de segurança', async () => {
+  const calls = [];
+  const command = async (...args) => {
+    calls.push(args);
+    return args[0] === 'SET' ? 'OK' : 1;
+  };
+  assert.equal(await claimProcessingRun('execucao-1', command), true);
+  await releaseProcessingRun('execucao-1', command);
+  assert.deepEqual(calls[0].slice(-4), ['execucao-1', 'NX', 'EX', '90']);
+  assert.equal(calls[1][0], 'EVAL');
+  assert.equal(calls[1].at(-1), 'execucao-1');
 });
 
 test('fatura TED envia somente a fatura e não tenta gerar boleto', async () => {

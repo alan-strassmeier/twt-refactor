@@ -15,6 +15,7 @@
     categoryEmpty: document.getElementById('categoryEmpty'),
     pendingRows: document.getElementById('pendingRows'),
     pendingEmpty: document.getElementById('pendingEmpty'),
+    pendingRunStatus: document.getElementById('pendingRunStatus'),
     refreshPendingButton: document.getElementById('refreshPendingButton'),
     logsForm: document.getElementById('collectionLogsForm'),
     clearLogsButton: document.getElementById('clearCollectionLogs'),
@@ -260,6 +261,9 @@
       appendCell(row, formatDate(record.issuedAt));
       appendCell(row, formatDate(record.dueAt));
       appendCell(row, formatDateTime(record.lastCheckedAt));
+      appendCell(row, record.lastCheckSource === 'automatic'
+        ? 'Automática'
+        : record.lastCheckSource === 'manual' ? 'Manual' : 'Não registrada');
       appendCell(row, String(record.attempts || 0));
       return row;
     });
@@ -268,6 +272,16 @@
     elements.pendingCount.textContent = String(payload.doccobTotal ?? pending.filter(
       (record) => record.reason === 'doccob'
     ).length);
+    if (elements.pendingRunStatus) {
+      const lastRun = payload.lastRun;
+      if (!lastRun) {
+        elements.pendingRunStatus.textContent = 'Nenhuma execução registrada nesta versão. Use “Verificar agora” durante a etapa manual.';
+      } else {
+        const source = lastRun.source === 'automatic' ? 'automática' : 'manual';
+        const status = lastRun.status === 'completed' ? 'concluída' : 'falhou';
+        elements.pendingRunStatus.textContent = `Última execução ${source} ${status} em ${formatDateTime(lastRun.completedAt)}.`;
+      }
+    }
   };
 
   const loadPending = async () => renderPending(await requestJson(endpoint('pending')));
