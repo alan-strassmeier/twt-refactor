@@ -42,6 +42,58 @@ const addDays = (date, amount) => {
   return value.toISOString().slice(0, 10);
 };
 
+const EVENT_PRIORITY = Object.freeze({
+  [EVENT_TYPES.initial]: 1,
+  [EVENT_TYPES.reminder]: 2,
+  [EVENT_TYPES.overdue]: 3
+});
+
+const billingEventForInvoice = (invoice, currentDate) => {
+  const dueAt = String(invoice?.dueAt || '').slice(0, 10);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(dueAt)) {
+    if (dueAt < currentDate) return EVENT_TYPES.overdue;
+    if (dueAt <= addDays(currentDate, 2)) return EVENT_TYPES.reminder;
+  }
+  return EVENT_TYPES.initial;
+};
+
+const buildBillingQueue = ({ pending, today, reminder, overdue, currentDate }) => {
+  const queue = [];
+  const byInvoice = new Map();
+  const enqueue = (event, invoices, fromPending = false) => invoices.forEach((invoice) => {
+    const invoiceId = String(invoice?.id || '');
+    if (!invoiceId) return;
+    const current = byInvoice.get(invoiceId);
+    if (!current) {
+      const item = { key: `${event}:${invoiceId}`, event, invoice, fromPending };
+      byInvoice.set(invoiceId, item);
+      queue.push(item);
+      return;
+    }
+    current.fromPending ||= fromPending;
+    if ((EVENT_PRIORITY[event] || 0) >= (EVENT_PRIORITY[current.event] || 0)) {
+      current.event = event;
+      current.key = `${event}:${invoiceId}`;
+      current.invoice = invoice;
+    }
+  });
+
+  const pendingInvoices = pending.map((record) => ({
+    id: record.invoiceId,
+    clientDocument: record.clientCnpj,
+    client: record.clientName,
+    issuedAt: record.issuedAt,
+    dueAt: record.dueAt
+  }));
+  pendingInvoices.forEach((invoice) => {
+    enqueue(billingEventForInvoice(invoice, currentDate), [invoice], true);
+  });
+  enqueue(EVENT_TYPES.initial, today);
+  enqueue(EVENT_TYPES.reminder, reminder);
+  enqueue(EVENT_TYPES.overdue, overdue);
+  return queue;
+};
+
 const positiveInteger = (value, fallback, maximum) => {
   const number = Number(value);
   return Number.isSafeInteger(number) && number > 0 ? Math.min(number, maximum) : fallback;
@@ -158,6 +210,18 @@ const buildDslDacteAttachment = async ({ invoiceId, doccob, data, context }) => 
   return context.buildDactePdf(xmls.map(context.parseCteXml));
 };
 
+const initialDeliveryAlreadyCoveredEvent = async ({ event, invoiceId, email, dueAt, context }) => {
+  if (event === EVENT_TYPES.initial) return false;
+  const initial = await context.getDelivery(EVENT_TYPES.initial, invoiceId, email);
+  if (initial?.state !== 'sent') return false;
+  const sentTimestamp = new Date(initial.sentAt || '');
+  const sentAt = Number.isNaN(sentTimestamp.getTime()) ? '' : saoPauloDate(sentTimestamp);
+  const dueDate = String(dueAt || '').slice(0, 10);
+  if (!sentAt || !/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) return false;
+  if (event === EVENT_TYPES.overdue) return sentAt > dueDate;
+  return event === EVENT_TYPES.reminder && sentAt >= addDays(dueDate, -2);
+};
+
 const processInvoiceEvent = async ({ event, invoice, context }) => {
   const now = context.now().toISOString();
   if (context.doccobPendingIds?.has(String(invoice.id))) return;
@@ -210,12 +274,21 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
   }
 
   const unsentContacts = [];
+  let alreadyDelivered = 0;
   for (const contact of contacts) {
     const delivery = await context.getDelivery(event, invoice.id, contact.email);
-    if (!delivery) unsentContacts.push(contact);
+    const coveredByLateInitial = !delivery && await initialDeliveryAlreadyCoveredEvent({
+      event,
+      invoiceId: invoice.id,
+      email: contact.email,
+      dueAt: data.invoice?.dueAt || invoice.dueAt,
+      context
+    });
+    if (!delivery && !coveredByLateInitial) unsentContacts.push(contact);
+    else alreadyDelivered += 1;
   }
+  context.summary.alreadySent += alreadyDelivered;
   if (unsentContacts.length === 0) {
-    context.summary.alreadySent += contacts.length;
     if (context.pendingByInvoice.has(String(invoice.id))) {
       await context.removePending(invoice.id);
       context.pendingByInvoice.delete(String(invoice.id));
@@ -334,23 +407,13 @@ const runBillingCollection = async (dependencies = {}) => {
   ]);
   await (dependencies.saveOverdueCursor || store.saveOverdueCursor)(overdueScan.nextSkip);
 
-  const queue = [];
-  const enqueue = (event, invoices) => invoices.forEach((invoice) => {
-    const key = `${event}:${invoice.id}`;
-    if (!queue.some((item) => item.key === key)) queue.push({ key, event, invoice });
+  const queue = buildBillingQueue({
+    pending,
+    today: todayScan.invoices,
+    reminder: reminderScan.invoices,
+    overdue: overdueScan.invoices,
+    currentDate
   });
-  enqueue(EVENT_TYPES.initial, [
-    ...pending.map((record) => ({
-      id: record.invoiceId,
-      clientDocument: record.clientCnpj,
-      client: record.clientName,
-      issuedAt: record.issuedAt,
-      dueAt: record.dueAt
-    })),
-    ...todayScan.invoices
-  ]);
-  enqueue(EVENT_TYPES.reminder, reminderScan.invoices);
-  enqueue(EVENT_TYPES.overdue, overdueScan.invoices);
 
   const summary = {
     currentDate,
@@ -415,7 +478,7 @@ const runBillingCollection = async (dependencies = {}) => {
           message: String(error.message || error).slice(0, 300)
         };
         summary.errors.push(failure);
-        if (item.event === EVENT_TYPES.initial) {
+        if (item.fromPending || item.event === EVENT_TYPES.initial) {
           try {
             const current = context.pendingByInvoice.get(String(item.invoice.id));
             const record = pendingRecord(
@@ -454,11 +517,14 @@ module.exports = {
   PLACEHOLDER_EMAIL,
   saoPauloDate,
   addDays,
+  billingEventForInvoice,
+  buildBillingQueue,
   processorConfig,
   fetchInvoiceScanPage,
   scanInvoices,
   pendingRecord,
   buildDslDacteAttachment,
+  initialDeliveryAlreadyCoveredEvent,
   processInvoiceEvent,
   runBillingCollection
 };

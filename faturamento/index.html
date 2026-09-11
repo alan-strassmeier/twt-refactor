@@ -321,13 +321,13 @@
             <div class="collection-card-heading">
               <div>
                 <h2 id="pendingDoccobTitle">Faturas aguardando envio</h2>
-                <p>Inclui DOCCOB pendente, destinatários ausentes e falhas anteriores de processamento.</p>
+                <p>Revalidada automaticamente a cada hora. O total de verificações inclui execuções automáticas e manuais.</p>
               </div>
               <button class="button button-quiet" id="refreshPendingButton" type="button">Atualizar</button>
             </div>
             <div class="table-scroll collection-table-scroll">
               <table class="collection-table">
-                <thead><tr><th>Fatura</th><th>Cliente</th><th>Motivo</th><th>Emissão</th><th>Vencimento</th><th>Última verificação</th><th>Tentativas</th></tr></thead>
+                <thead><tr><th>Fatura</th><th>Cliente</th><th>Motivo</th><th>Emissão</th><th>Vencimento</th><th>Última verificação</th><th>Verificações</th></tr></thead>
                 <tbody id="pendingRows"></tbody>
               </table>
               <div class="collection-empty" id="pendingEmpty" hidden>
