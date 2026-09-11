@@ -111,13 +111,14 @@ const handleLogs = async (req, res, query) => {
     sendJson(res, 405, { message: 'Método não permitido.' });
     return;
   }
-  const logs = await store.listLogs({
+  const result = await store.listLogs({
     invoiceId: query.invoiceId,
     date: query.date,
     cnpj: query.cnpj,
+    page: query.page,
     limit: query.limit
   });
-  sendJson(res, 200, { logs, total: logs.length });
+  sendJson(res, 200, result);
 };
 
 const handleProcess = async (req, res) => {

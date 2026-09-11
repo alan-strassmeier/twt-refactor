@@ -21,12 +21,29 @@
     clearLogsButton: document.getElementById('clearCollectionLogs'),
     logRows: document.getElementById('collectionLogRows'),
     logsEmpty: document.getElementById('collectionLogsEmpty'),
+    previousLogPage: document.getElementById('previousLogPage'),
+    nextLogPage: document.getElementById('nextLogPage'),
+    logPageIndicator: document.getElementById('logPageIndicator'),
+    categoryDeleteModal: document.getElementById('categoryDeleteModal'),
+    categoryDeleteBackdrop: document.getElementById('categoryDeleteBackdrop'),
+    categoryDeleteDescription: document.getElementById('categoryDeleteDescription'),
+    cancelCategoryDelete: document.getElementById('cancelCategoryDelete'),
+    confirmCategoryDelete: document.getElementById('confirmCategoryDelete'),
     backToTopButton: document.getElementById('backToTopButton')
   };
 
   if (!elements.collectionWorkspace) return;
 
-  const state = { loaded: false, loading: false, categories: [] };
+  const state = {
+    loaded: false,
+    loading: false,
+    categories: [],
+    logFilters: {},
+    logPage: 1,
+    logTotalPages: 1,
+    categoryToDelete: null,
+    categoryDeleteTrigger: null
+  };
   const endpoint = (route, query = {}) => {
     const params = new URLSearchParams({ route, ...query });
     return `/api/faturamento/cobranca?${params}`;
@@ -91,6 +108,8 @@
     elements.collectionWorkspace.querySelectorAll('button, input').forEach((control) => {
       control.disabled = loading;
     });
+    elements.previousLogPage.disabled = loading || state.logPage <= 1;
+    elements.nextLogPage.disabled = loading || state.logPage >= state.logTotalPages;
   };
 
   const deleteContact = async (cnpj, id) => {
@@ -151,8 +170,26 @@
     }
   };
 
+  const closeCategoryDeleteModal = () => {
+    if (elements.categoryDeleteModal.hidden) return;
+    elements.categoryDeleteModal.hidden = true;
+    document.body.classList.remove('modal-open');
+    state.categoryDeleteTrigger?.focus();
+    state.categoryDeleteTrigger = null;
+    state.categoryToDelete = null;
+  };
+
+  const requestCategoryDeletion = (category, trigger) => {
+    state.categoryToDelete = category;
+    state.categoryDeleteTrigger = trigger;
+    elements.categoryDeleteDescription.textContent =
+      `Excluir ${category.name} e todos os seus contatos de cobrança?`;
+    elements.categoryDeleteModal.hidden = false;
+    document.body.classList.add('modal-open');
+    elements.cancelCategoryDelete.focus();
+  };
+
   const deleteCategory = async (category) => {
-    if (!window.confirm(`Excluir ${category.name} e todos os seus contatos de cobrança?`)) return;
     setLoading(true);
     try {
       await requestJson(endpoint('categories', { cnpj: category.cnpj }), { method: 'DELETE' });
@@ -214,7 +251,7 @@
     removeCategory.type = 'button';
     removeCategory.className = 'button button-quiet danger-button';
     removeCategory.textContent = 'Excluir empresa';
-    removeCategory.addEventListener('click', () => deleteCategory(category));
+    removeCategory.addEventListener('click', () => requestCategoryDeletion(category, removeCategory));
     const footer = document.createElement('div');
     footer.className = 'category-footer';
     footer.appendChild(removeCategory);
@@ -292,7 +329,10 @@
     overdue: 'Fatura vencida'
   };
   const STATUS_LABELS = {
-    accepted: 'Aceito pelo Zoho',
+    accepted: 'Aguardando confirmação',
+    submitted: 'Aguardando confirmação',
+    delivered: 'Entregue ao servidor destinatário',
+    bounced: 'Entrega recusada',
     review: 'Requer conferência',
     error: 'Erro',
     waiting_contacts: 'Sem destinatário'
@@ -319,6 +359,14 @@
     });
     elements.logRows.replaceChildren(...rows);
     elements.logsEmpty.hidden = logs.length > 0;
+    const pagination = payload.pagination || {};
+    state.logPage = Math.max(1, Number(pagination.page) || 1);
+    state.logTotalPages = Math.max(1, Number(pagination.totalPages) || 1);
+    const total = Math.max(0, Number(payload.total) || 0);
+    elements.previousLogPage.disabled = state.loading || !pagination.hasPrevious;
+    elements.nextLogPage.disabled = state.loading || !pagination.hasNext;
+    elements.logPageIndicator.textContent =
+      `Página ${state.logPage} de ${state.logTotalPages} · ${total} registro${total === 1 ? '' : 's'}`;
   };
 
   const logFilters = () => {
@@ -328,7 +376,15 @@
       .filter(([, value]) => value));
   };
 
-  const loadLogs = async () => renderLogs(await requestJson(endpoint('logs', logFilters())));
+  const loadLogs = async ({ filters = state.logFilters, page = state.logPage } = {}) => {
+    const payload = await requestJson(endpoint('logs', {
+      ...filters,
+      page: String(page),
+      limit: '10'
+    }));
+    state.logFilters = { ...filters };
+    renderLogs(payload);
+  };
 
   const loadCollection = async () => {
     if (state.loading) return;
@@ -383,9 +439,10 @@
 
   elements.logsForm.addEventListener('submit', async (event) => {
     event.preventDefault();
+    const filters = logFilters();
     setLoading(true);
     try {
-      await loadLogs();
+      await loadLogs({ filters, page: 1 });
       setMessage('Logs atualizados.', 'success');
     } catch (error) {
       setMessage(error.message, 'error');
@@ -396,9 +453,41 @@
 
   elements.clearLogsButton.addEventListener('click', async () => {
     elements.logsForm.reset();
+    state.logFilters = {};
+    state.logPage = 1;
     setLoading(true);
-    try { await loadLogs(); } catch (error) { setMessage(error.message, 'error'); }
+    try { await loadLogs({ filters: {}, page: 1 }); } catch (error) { setMessage(error.message, 'error'); }
     finally { setLoading(false); }
+  });
+
+  const changeLogPage = async (amount) => {
+    const page = Math.max(1, Math.min(state.logPage + amount, state.logTotalPages));
+    if (page === state.logPage) return;
+    setLoading(true);
+    try {
+      await loadLogs({ page });
+    } catch (error) {
+      setMessage(error.message, 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  elements.previousLogPage.addEventListener('click', () => changeLogPage(-1));
+  elements.nextLogPage.addEventListener('click', () => changeLogPage(1));
+
+  elements.categoryDeleteBackdrop.addEventListener('click', closeCategoryDeleteModal);
+  elements.cancelCategoryDelete.addEventListener('click', closeCategoryDeleteModal);
+  elements.confirmCategoryDelete.addEventListener('click', async () => {
+    const category = state.categoryToDelete;
+    if (!category) return;
+    closeCategoryDeleteModal();
+    await deleteCategory(category);
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && !elements.categoryDeleteModal.hidden) {
+      closeCategoryDeleteModal();
+    }
   });
 
   elements.refreshPendingButton.addEventListener('click', async () => {

@@ -341,7 +341,7 @@
             <div class="collection-card-heading">
               <div>
                 <h2 id="collectionLogsTitle">Logs de envio</h2>
-                <p>“Aceito pelo Zoho” confirma que o servidor de e-mail recebeu a mensagem para entrega.</p>
+                <p>“Aguardando confirmação” indica que o Zoho recebeu a mensagem, mas a entrega ao servidor do destinatário ainda não foi confirmada.</p>
               </div>
             </div>
             <form class="collection-form logs-form" id="collectionLogsForm">
@@ -366,6 +366,11 @@
                 <strong>Nenhum envio encontrado</strong>
                 <p>Os registros aparecerão aqui após o processamento das cobranças.</p>
               </div>
+              <nav class="pagination collection-log-pagination" aria-label="Paginação dos logs de envio">
+                <button class="button button-quiet" id="previousLogPage" type="button" disabled>Anterior</button>
+                <span id="logPageIndicator">Página 1 de 1 · 0 registros</span>
+                <button class="button button-quiet" id="nextLogPage" type="button" disabled>Próxima</button>
+              </nav>
             </div>
           </section>
         </section>
@@ -434,6 +439,20 @@
       <div class="nfse-confirm-actions">
         <button class="button" id="nfseCancelButton" type="button">Voltar</button>
         <button class="button button-primary" id="nfseIssueButton" type="button">Confirmar e emitir</button>
+      </div>
+    </section>
+  </div>
+  <div class="document-modal" id="categoryDeleteModal" hidden>
+    <button class="document-modal-backdrop" id="categoryDeleteBackdrop" type="button"
+      aria-label="Não excluir a empresa"></button>
+    <section class="document-modal-panel category-delete-panel" role="dialog" aria-modal="true"
+      aria-labelledby="categoryDeleteTitle" aria-describedby="categoryDeleteDescription">
+      <span class="document-modal-eyebrow">Confirmar exclusão</span>
+      <h2 id="categoryDeleteTitle">Excluir empresa?</h2>
+      <p id="categoryDeleteDescription">A empresa e todos os contatos de cobrança cadastrados nela serão excluídos.</p>
+      <div class="nfse-confirm-actions">
+        <button class="button" id="cancelCategoryDelete" type="button">Não</button>
+        <button class="button danger-button" id="confirmCategoryDelete" type="button">Sim</button>
       </div>
     </section>
   </div>

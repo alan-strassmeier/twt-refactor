@@ -12,6 +12,7 @@ const {
   normalizedContact,
   deliveryField,
   saoPauloDate: logDate,
+  listLogs,
   claimProcessingRun,
   releaseProcessingRun
 } = require('../server/faturamento/cobranca-store');
@@ -154,6 +155,9 @@ test('não inclui Adriano em cópia nas mensagens dos clientes', async () => {
   assert.equal(calls[0].cc, undefined);
   assert.equal(calls[1].cc, undefined);
   assert.equal(calls[2].cc, undefined);
+  assert.equal(calls[0].priority, undefined);
+  assert.equal(calls[1].priority, 'high');
+  assert.equal(calls[2].priority, 'high');
 });
 
 test('varre páginas e calcula o dia de lembrete sem depender do fuso do servidor', async () => {
@@ -490,6 +494,25 @@ test('chave de idempotência separa evento, fatura e destinatário', () => {
   assert.equal(logDate('2026-09-11T01:30:00.000Z'), '2026-09-10');
 });
 
+test('filtra os logs pela fatura e limita a página a dez registros', async () => {
+  const records = Array.from({ length: 17 }, (_, index) => JSON.stringify({
+    id: `log-${index}`,
+    invoiceId: index < 15 ? '11756' : '99999',
+    createdAt: `2026-09-11T12:${String(index).padStart(2, '0')}:00.000Z`
+  }));
+  const result = await listLogs({ invoiceId: '11756', page: 2 }, async (command) => {
+    assert.equal(command, 'ZREVRANGE');
+    return records;
+  });
+  assert.equal(result.total, 15);
+  assert.equal(result.logs.length, 5);
+  assert.equal(result.pagination.pageSize, 10);
+  assert.equal(result.pagination.page, 2);
+  assert.equal(result.pagination.hasPrevious, true);
+  assert.equal(result.pagination.hasNext, false);
+  assert.ok(result.logs.every((record) => record.invoiceId === '11756'));
+});
+
 test('endpoint do cron exige segredo longo e compara em tempo constante', () => {
   const secret = 'x'.repeat(40);
   assert.equal(constantTimeEqual(`Bearer ${secret}`, `Bearer ${secret}`), true);
@@ -510,8 +533,12 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(html, /id="categoryForm"/);
   assert.match(html, /id="pendingRows"/);
   assert.match(html, /id="collectionLogsForm"/);
+  assert.match(html, /id="previousLogPage"/);
+  assert.match(html, /id="categoryDeleteModal"/);
   assert.match(html, /href="#pendingDoccobSection"/);
   assert.match(html, /href="#collectionLogsSection"/);
   assert.match(source, /route, \.\.\.query/);
+  assert.match(source, /const filters = logFilters\(\);[\s\S]*setLoading\(true\)/);
+  assert.doesNotMatch(source, /window\.confirm\(`Excluir \$\{category\.name\}/);
   assert.equal(fs.existsSync(path.join(root, 'api', 'faturamento', 'cobranca.js')), true);
 });
