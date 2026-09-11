@@ -80,6 +80,19 @@ R2_NFSE_BUCKET_NAME=twt-brudam-documentos
 
 UPSTASH_REDIS_REST_URL=
 UPSTASH_REDIS_REST_TOKEN=
+
+ZOHO_SMTP_HOST=smtppro.zoho.com
+ZOHO_SMTP_PORT=465
+ZOHO_SMTP_SECURE=true
+ZOHO_SMTP_USER=faturamento@twt.com.br
+ZOHO_SMTP_PASSWORD=
+ZOHO_SMTP_FROM_EMAIL=faturamento@twt.com.br
+ZOHO_SMTP_FROM_NAME=TWT LOG
+BILLING_ALERT_COPY=adriano@twt.com.br
+BILLING_CRON_SECRET=
+BILLING_EMAIL_MAX_INVOICES_PER_RUN=12
+BILLING_EMAIL_SCAN_PAGES_PER_RUN=2
+BILLING_EMAIL_DEADLINE_MS=50000
 ```
 
 `FATURAMENTO_SESSION_SECRET` deve ser um valor aleatório com pelo menos 32
@@ -88,6 +101,63 @@ consistente entre as funções serverless. Sem Redis, há uma proteção local p
 instância.
 
 Depois de cadastrar ou alterar as variáveis, faça um novo deployment.
+
+## Cobrança automática por e-mail
+
+A aba **Cobrança de faturas** usa uma única função consolidada,
+`/api/faturamento/cobranca`, para permanecer dentro do limite de funções do
+plano Hobby. Nela é possível cadastrar e excluir empresas por CNPJ, cadastrar e
+excluir destinatários, consultar faturas aguardando DOCCOB e filtrar logs por
+fatura, data e CNPJ.
+
+A carga inicial contém somente os 107 contatos do arquivo LDIF do Zoho que
+possuíam `categories`. Categorias múltiplas foram expandidas, totalizando 115
+associações de contatos em 39 empresas. A carga é executada uma única vez no
+Redis; exclusões feitas pela interface não são recriadas em deployments
+posteriores. Para repetir deliberadamente a importação, remova no Redis as
+chaves `faturamento:cobranca:categorias:v1` e
+`faturamento:cobranca:categorias-seed:v1`.
+
+Se o primeiro nome for deixado vazio ao cadastrar uma pessoa, o sistema o
+deduz da parte anterior a `@`. Os separadores `.`, `-` e `_` dividem primeiro
+nome e sobrenome. Por exemplo, `jon.doe@empresa.com` resulta em `Jon Doe`.
+
+Use no Zoho uma senha específica de aplicativo quando a conta tiver
+autenticação em dois fatores. A senha fica somente em `ZOHO_SMTP_PASSWORD` na
+Vercel e nunca deve ser commitada. O log **Aceito pelo Zoho** significa que o
+servidor SMTP aceitou a mensagem para entrega; SMTP não confirma, sozinho, que
+a caixa do destinatário a recebeu ou abriu.
+
+Em cada execução o servidor:
+
+1. consulta faturas em aberto emitidas no dia e reprocessa as que aguardavam
+   DOCCOB;
+2. envia o aviso inicial somente quando consegue montar o PDF da fatura e, para
+   pagamentos que não sejam TED/DOC, anexar também o boleto;
+3. consulta as faturas em aberto com vencimento dois dias depois e envia o
+   aviso **Perto do vencimento**;
+4. consulta faturas vencidas ainda em aberto e envia o aviso de vencida;
+5. copia `BILLING_ALERT_COPY` nos avisos próximos do vencimento e vencidos.
+
+Cada combinação de evento, fatura e destinatário é reservada no Redis antes do
+envio. Atualizar a página ou executar a rotina novamente não envia uma segunda
+cópia. Em caso de resposta SMTP incerta, o registro fica como **Requer
+conferência**, sem tentativa automática que possa duplicar a cobrança.
+
+O plano Hobby da Vercel não executa cron a cada hora. O diretório
+`cloudflare/billing-cron` contém um Worker da Cloudflare configurado para chamar
+a rotina no início de cada hora. Troque o domínio em `wrangler.jsonc`, configure
+na Vercel um `BILLING_CRON_SECRET` aleatório com pelo menos 32 caracteres e
+cadastre exatamente o mesmo valor no Worker:
+
+```powershell
+cd cloudflare\billing-cron
+npx wrangler secret put BILLING_CRON_SECRET
+npx wrangler deploy
+```
+
+O botão **Verificar agora** usa a sessão administrativa e executa o mesmo fluxo
+sem depender do agendamento.
 
 ## Roteamento dos boletos
 

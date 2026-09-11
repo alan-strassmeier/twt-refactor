@@ -76,6 +76,13 @@
     "api/faturamento/nfse.js": {
       "maxDuration": 60
     },
+    "api/faturamento/cobranca.js": {
+      "maxDuration": 60,
+      "includeFiles": [
+        "assets/twtlogo.png",
+        "server/faturamento/cobranca-contacts-seed.json"
+      ]
+    },
     "api/whatsapp.mjs": {
       "maxDuration": 60,
       "memory": 1024,
