@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly DOCKER="${TWT_DOCKER:-/usr/bin/docker}"
+readonly PROJECT_DIR="${TWT_PROJECT_DIR:-/opt/twt/twt-refactor}"
+readonly COMPOSE_FILE="${TWT_COMPOSE_FILE:-${PROJECT_DIR}/compose.whatsapp.yaml}"
+readonly POSTGRES_CONTAINER="${TWT_POSTGRES_CONTAINER:-twt-postgres}"
+readonly TUNNEL_CONTAINER="${TWT_TUNNEL_CONTAINER:-twt-cloudflared-whatsapp}"
+readonly WAIT_ATTEMPTS="${TWT_WAIT_ATTEMPTS:-60}"
+readonly WAIT_INTERVAL_SECONDS="${TWT_WAIT_INTERVAL_SECONDS:-2}"
+
+compose() {
+  "$DOCKER" compose \
+    --project-directory "$PROJECT_DIR" \
+    -f "$COMPOSE_FILE" \
+    "$@"
+}
+
+container_state() {
+  "$DOCKER" inspect \
+    --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{if .State.Running}}running{{else}}stopped{{end}}{{end}}' \
+    "$1"
+}
+
+wait_for_state() {
+  local container="$1"
+  local expected="$2"
+  local label="$3"
+  local state=''
+
+  for ((attempt = 1; attempt <= WAIT_ATTEMPTS; attempt += 1)); do
+    state="$(container_state "$container" 2>/dev/null || true)"
+    if [[ "$state" == "$expected" ]]; then
+      printf '%s pronto: %s\n' "$label" "$state"
+      return 0
+    fi
+    sleep "$WAIT_INTERVAL_SECONDS"
+  done
+
+  printf '%s não ficou pronto; estado final: %s\n' \
+    "$label" "${state:-indisponível}" >&2
+  return 1
+}
+
+if [[ ! -x "$DOCKER" ]]; then
+  printf 'Docker não encontrado em %s.\n' "$DOCKER" >&2
+  exit 1
+fi
+
+if [[ ! -f "$COMPOSE_FILE" ]]; then
+  printf 'Compose não encontrado em %s.\n' "$COMPOSE_FILE" >&2
+  exit 1
+fi
+
+"$DOCKER" start "$POSTGRES_CONTAINER" >/dev/null
+wait_for_state "$POSTGRES_CONTAINER" healthy PostgreSQL
+
+compose up -d --no-build whatsapp-baixa
+app_container="$(compose ps --all -q whatsapp-baixa | head -n 1)"
+if [[ -z "$app_container" ]]; then
+  printf 'O Docker Compose não retornou o container whatsapp-baixa.\n' >&2
+  exit 1
+fi
+wait_for_state "$app_container" healthy 'Aplicação WhatsApp'
+
+"$DOCKER" start "$TUNNEL_CONTAINER" >/dev/null
+wait_for_state "$TUNNEL_CONTAINER" running 'Cloudflare Tunnel'
+
+printf 'Conjunto da baixa por WhatsApp iniciado com sucesso.\n'

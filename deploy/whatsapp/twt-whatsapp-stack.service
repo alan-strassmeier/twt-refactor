@@ -1,0 +1,24 @@
+[Unit]
+Description=TWT - baixa de entrega pelo WhatsApp
+Requires=docker.service
+Wants=network-online.target
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+User=twt
+Group=twt
+SupplementaryGroups=docker
+WorkingDirectory=/opt/twt/twt-refactor
+Environment=TWT_PROJECT_DIR=/opt/twt/twt-refactor
+Environment=TWT_COMPOSE_FILE=/opt/twt/twt-refactor/compose.whatsapp.yaml
+Environment=TWT_POSTGRES_CONTAINER=twt-postgres
+Environment=TWT_TUNNEL_CONTAINER=twt-cloudflared-whatsapp
+ExecStart=/usr/local/sbin/twt-whatsapp-stack-start
+RemainAfterExit=yes
+TimeoutStartSec=420
+Restart=on-failure
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target

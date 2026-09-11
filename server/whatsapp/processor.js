@@ -5,7 +5,9 @@ const {
   isDeliveryAlreadyRegistered
 } = require('./brudam');
 const { downloadMedia, sendText, sendButtons, sendImage, sendFlow } = require('./meta');
-const store = require('./redis-store');
+const { isSenderAllowed, redactedPhone } = require('./runtime');
+const store = require('./state-store');
+const imageStore = require('./image-store');
 
 const START_DELIVERY = 'start_delivery';
 const HUMAN_CONTACT = 'human_contact';
@@ -31,6 +33,10 @@ const EXAMPLE_IMAGE_URL = exampleImageUrl(process.env.WHATSAPP_EXAMPLE_IMAGE_URL
 const HUMAN_CONTACT_MESSAGE = 'Olá, gostaria de falar sobre uma entrega';
 const BRUDAM_UNAVAILABLE_MESSAGE =
   'O sistema da Brudam está com uma instabilidade momentânea. A baixa não foi confirmada; tente novamente em alguns minutos.';
+const EXAMPLE_CAPTION = [
+  'Por favor, envie uma foto igual ao exemplo acima.',
+  'Caso deseje cancelar a baixa, envie uma mensagem com *cancelar* e retorne ao início.'
+].join('\n\n');
 const humanContactUrl = () =>
   `https://wa.me/555193162358?text=${encodeURIComponent(HUMAN_CONTACT_MESSAGE)}`;
 
@@ -264,7 +270,7 @@ const sendDeliveryTimeQuestion = async (to) => sendButtons(
 );
 
 const startDeliveryTimeQuestion = async (message) => {
-  await store.clearDeliveryTimestamp(message.senderPhone);
+  await store.clearDeliveryAttempt(message.senderPhone);
   await store.saveConversationState(message.senderPhone, AWAITING_DELIVERY_CONFIRMATION);
   await sendDeliveryTimeQuestion(message.senderPhone);
 };
@@ -272,7 +278,7 @@ const startDeliveryTimeQuestion = async (message) => {
 const sendExample = (to) => sendImage(
   to,
   EXAMPLE_IMAGE_URL,
-  'Por favor, envie uma foto igual ao exemplo acima.'
+  EXAMPLE_CAPTION
 );
 
 const sendReceiverFlow = (to, cte, imageMessageId) => sendFlow(to, {
@@ -331,8 +337,7 @@ const processAction = async (action) => {
       await safeReply(action.senderPhone,
         'Esta pergunta não está mais ativa. Use a opção mais recente enviada na conversa.');
     } else if (action.actionId === HUMAN_CONTACT) {
-      await store.clearConversationState(action.senderPhone);
-      await store.clearDeliveryTimestamp(action.senderPhone);
+      await store.clearDeliveryAttempt(action.senderPhone);
       await sendText(action.senderPhone,
         `Para falar com nossa equipe de atendimento, toque no link:\n${humanContactUrl()}`);
     } else {
@@ -370,6 +375,11 @@ const processImage = async (image) => {
     }
 
     const media = await downloadMedia(image.mediaId);
+    await imageStore.saveProofImage({
+      messageId: image.messageId,
+      bytes: media.bytes,
+      mimeType: media.mimeType
+    });
     const barcode = await readBarcode(media.bytes);
     if (!barcode) {
       await store.markMessageDone(image.messageId);
@@ -387,13 +397,21 @@ const processImage = async (image) => {
       return;
     }
 
+    if (await store.getConversationState(image.senderPhone) !== AWAITING_PHOTO) {
+      await store.markMessageDone(image.messageId);
+      return;
+    }
+
     const alreadyRegistered = await store.hasDeliveredMinuta(resolved.minuta) ||
       await isDeliveryAlreadyRegistered(resolved.minuta);
+    if (await store.getConversationState(image.senderPhone) !== AWAITING_PHOTO) {
+      await store.markMessageDone(image.messageId);
+      return;
+    }
     if (alreadyRegistered) {
       await store.markDeliveredMinuta(resolved.minuta);
       await store.markMessageDone(image.messageId);
-      await store.clearConversationState(image.senderPhone);
-      await store.clearDeliveryTimestamp(image.senderPhone);
+      await store.clearDeliveryAttempt(image.senderPhone);
       await safeReply(image.senderPhone,
         `A entrega da minuta ${resolved.minuta} já foi baixada anteriormente. Não é necessário informar os dados do recebedor.`);
       return;
@@ -437,11 +455,12 @@ const processReceiverText = async (text, pending) => {
 
   let occurrenceCreated = false;
   try {
-    const media = await downloadMedia(pending.mediaId);
+    const archivedMedia = await imageStore.loadProofImage(pending.imageMessageId);
+    const media = archivedMedia || await downloadMedia(pending.mediaId);
     const latestLocation = await store.takeLocation(text.senderPhone);
     const occurrence = await createDeliveryOccurrence({
       minuta: pending.resolved.minuta,
-      clientCnpj: pending.resolved.clientCnpj,
+      clientDocument: pending.resolved.clientDocument || pending.resolved.clientCnpj,
       timestamp: timestampForPending(pending),
       driverName: pending.driverName,
       senderPhone: text.senderPhone,
@@ -453,15 +472,19 @@ const processReceiverText = async (text, pending) => {
       location: latestLocation || pending.location
     });
     occurrenceCreated = true;
-    await store.markDeliveredMinuta(pending.resolved.minuta);
+    if (!occurrence.simulated) {
+      await store.markDeliveredMinuta(pending.resolved.minuta);
+    }
     await store.completePendingDelivery(
       text.senderPhone,
       pending.imageMessageId,
       text.messageId
     );
-    await safeReply(text.senderPhone, occurrence.alreadyRegistered
-      ? `A entrega da minuta ${pending.resolved.minuta} já estava baixada no sistema. A baixa já foi confirmada.`
-      : `Entrega registrada com sucesso. Minuta ${pending.resolved.minuta}.`);
+    await safeReply(text.senderPhone, occurrence.simulated
+      ? `Simulação concluída sem registrar a entrega. Minuta ${pending.resolved.minuta}.`
+      : occurrence.alreadyRegistered
+        ? `A entrega da minuta ${pending.resolved.minuta} já estava baixada no sistema. A baixa já foi confirmada.`
+        : `Entrega registrada com sucesso. Minuta ${pending.resolved.minuta}.`);
   } catch (error) {
     console.error('[whatsapp:receiver]', { messageId: text.messageId, error });
     if (!occurrenceCreated) await store.releaseMessage(text.messageId).catch(() => {});
@@ -478,7 +501,8 @@ const processReceiverFlowReply = async (reply) => {
     if (!await store.claimMessage(reply.messageId)) return;
     await store.markMessageDone(reply.messageId);
     await safeReply(reply.senderPhone,
-      'Este formulário não está mais vinculado a um comprovante. Inicie uma nova baixa e envie a foto novamente.');
+      'Esta tentativa de baixa expirou ou foi cancelada. Inicie uma nova baixa para continuar.');
+    await sendMenu(reply);
     return;
   }
 
@@ -557,8 +581,27 @@ const processFlowReply = (reply) => isDeliveryTimeFlowReply(reply.responseJson)
   : processReceiverFlowReply(reply);
 
 const normalizedChoice = (body) => String(body || '').trim().toLocaleLowerCase('pt-BR');
+const isCancelCommand = (body) => normalizedChoice(body) === 'cancelar';
+
+const cancelDeliveryAttempt = async (message) => {
+  await store.clearDeliveryAttempt(message.senderPhone);
+  await safeReply(message.senderPhone, 'Baixa cancelada. Você retornou ao início.');
+  await sendMenu(message);
+};
 
 const processText = async (text) => {
+  if (isCancelCommand(text.body)) {
+    if (!await store.claimMessage(text.messageId)) return;
+    try {
+      await cancelDeliveryAttempt(text);
+      await store.markMessageDone(text.messageId);
+    } catch (error) {
+      console.error('[whatsapp:cancel]', { messageId: text.messageId, error });
+      await store.releaseMessage(text.messageId).catch(() => {});
+    }
+    return;
+  }
+
   const pending = await store.getPendingDelivery(text.senderPhone);
   if (pending) {
     if (!await store.claimMessage(text.messageId)) return;
@@ -587,8 +630,7 @@ const processText = async (text) => {
     } else if (state === AWAITING_DELIVERY_CONFIRMATION && (choice === 'não' || choice === 'nao')) {
       await requestPastDeliveryTime(text);
     } else if (choice === 'entre em contato' || choice === 'entre em contato conosco') {
-      await store.clearConversationState(text.senderPhone);
-      await store.clearDeliveryTimestamp(text.senderPhone);
+      await store.clearDeliveryAttempt(text.senderPhone);
       await sendText(text.senderPhone,
         `Para falar com nossa equipe de atendimento, toque no link:\n${humanContactUrl()}`);
     } else if (state === AWAITING_PHOTO) {
@@ -608,7 +650,21 @@ const processText = async (text) => {
 };
 
 const processWebhook = async (payload) => {
-  const { images, locations, texts, actions, flowReplies } = parseWebhook(payload);
+  const parsed = parseWebhook(payload);
+  const rejectedSenders = new Set();
+  const allowed = (items) => items.filter((item) => {
+    if (isSenderAllowed(item.senderPhone)) return true;
+    rejectedSenders.add(redactedPhone(item.senderPhone));
+    return false;
+  });
+  const images = allowed(parsed.images);
+  const locations = allowed(parsed.locations);
+  const texts = allowed(parsed.texts);
+  const actions = allowed(parsed.actions);
+  const flowReplies = allowed(parsed.flowReplies);
+  for (const sender of rejectedSenders) {
+    console.warn('[whatsapp:allowlist]', { sender, status: 'ignored' });
+  }
   await Promise.all(locations.map((item) => store.saveLocation(item.senderPhone, item.location)));
   await Promise.all(actions.map(processAction));
   await Promise.all(images.map(processImage));
@@ -617,6 +673,7 @@ const processWebhook = async (payload) => {
 };
 
 module.exports = {
+  EXAMPLE_CAPTION,
   formatTimestamp,
   timestampForPending,
   greetingFor,
@@ -631,5 +688,6 @@ module.exports = {
   processingFailureMessage,
   flowTokenFor,
   deliveryTimeFlowTokenFor,
+  isCancelCommand,
   processWebhook
 };
