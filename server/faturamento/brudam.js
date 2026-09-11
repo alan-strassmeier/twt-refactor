@@ -68,10 +68,15 @@ const getAccessToken = async (forceRefresh = false) => {
   return token;
 };
 
-const authenticatedGet = async (path) => {
+const authenticatedRequest = async (path, options = {}) => {
   let token = await getAccessToken();
   let result = await brudamRequest(path, {
-    headers: { Accept: 'application/json', Authorization: `Bearer ${token}` }
+    ...options,
+    headers: {
+      Accept: 'application/json',
+      ...(options.headers || {}),
+      Authorization: `Bearer ${token}`
+    }
   });
   if (result.response.status !== 401) return result;
 
@@ -79,9 +84,22 @@ const authenticatedGet = async (path) => {
   cachedTokenExpiresAt = 0;
   token = await getAccessToken(true);
   return brudamRequest(path, {
-    headers: { Accept: 'application/json', Authorization: `Bearer ${token}` }
+    ...options,
+    headers: {
+      Accept: 'application/json',
+      ...(options.headers || {}),
+      Authorization: `Bearer ${token}`
+    }
   });
 };
+
+const authenticatedGet = (path) => authenticatedRequest(path);
+
+const authenticatedPatch = (path, body) => authenticatedRequest(path, {
+  method: 'PATCH',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(body)
+});
 
 const requestInvoices = async (query) =>
   authenticatedGet(`/financeiro/faturas?${query}`);
@@ -872,11 +890,14 @@ const fetchInvoices = async (input) => {
 
 module.exports = {
   STATUS_LABELS,
+  authenticatedRequest,
   authenticatedGet,
+  authenticatedPatch,
   buildInvoiceQuery,
   normalizeInvoice,
   normalizeVisibleInvoices,
   validCnpj,
+  companyRecordsFromPayload,
   companyTradeNameFromPayload,
   companyLookupPath,
   shouldRetryCompanyLookup,

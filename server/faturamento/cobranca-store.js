@@ -55,7 +55,9 @@ const normalizedEmail = (value) => {
 const normalizedCategory = (value) => ({
   cnpj: requiredCnpj(value?.cnpj),
   name: requiredText(value?.name, 'Nome fantasia', 160),
-  contacts: Array.isArray(value?.contacts) ? value.contacts : []
+  contacts: Array.isArray(value?.contacts)
+    ? value.contacts.map((contact) => ({ ...contact, enabled: contact?.enabled !== false }))
+    : []
 });
 
 const normalizedContact = (cnpj, value) => {
@@ -72,7 +74,8 @@ const normalizedContact = (cnpj, value) => {
     id: String(value?.id || contactId(cnpj, email)).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64),
     firstName: names.firstName.slice(0, 80),
     lastName: names.lastName.slice(0, 120),
-    email
+    email,
+    enabled: value?.enabled !== false
   };
 };
 
@@ -131,6 +134,45 @@ const saveContact = async (cnpj, input, command = redisCommand) => {
   );
   contacts.push(contact);
   category.contacts = contacts.sort((left, right) => left.firstName.localeCompare(right.firstName, 'pt-BR'));
+  await command('HSET', KEYS.categories, category.cnpj, JSON.stringify(category));
+  return { category, contact };
+};
+
+const mergeContacts = async (cnpj, inputs, command = redisCommand) => {
+  const category = await getCategory(cnpj, command);
+  if (!category) throw Object.assign(new Error('Empresa não encontrada.'), { statusCode: 404 });
+  const knownEmails = new Set(category.contacts.map((contact) =>
+    String(contact.email || '').trim().toLocaleLowerCase('pt-BR')));
+  const added = [];
+  for (const input of Array.isArray(inputs) ? inputs : []) {
+    let contact;
+    try {
+      contact = normalizedContact(category.cnpj, input);
+    } catch {
+      continue;
+    }
+    if (knownEmails.has(contact.email)) continue;
+    knownEmails.add(contact.email);
+    category.contacts.push(contact);
+    added.push(contact);
+  }
+  if (added.length) {
+    category.contacts.sort((left, right) => left.firstName.localeCompare(right.firstName, 'pt-BR'));
+    await command('HSET', KEYS.categories, category.cnpj, JSON.stringify(category));
+  }
+  return { category, added };
+};
+
+const setContactEnabled = async (cnpj, id, enabled, command = redisCommand) => {
+  const category = await getCategory(cnpj, command);
+  if (!category) throw Object.assign(new Error('Empresa não encontrada.'), { statusCode: 404 });
+  if (typeof enabled !== 'boolean') {
+    throw Object.assign(new Error('Informe se o contato deve receber os envios.'), { statusCode: 422 });
+  }
+  const contactIdValue = requiredText(id, 'Contato', 64);
+  const contact = category.contacts.find((item) => item.id === contactIdValue);
+  if (!contact) throw Object.assign(new Error('Contato não encontrado.'), { statusCode: 404 });
+  contact.enabled = enabled;
   await command('HSET', KEYS.categories, category.cnpj, JSON.stringify(category));
   return { category, contact };
 };
@@ -322,6 +364,8 @@ module.exports = {
   saveCategory,
   deleteCategory,
   saveContact,
+  mergeContacts,
+  setContactEnabled,
   deleteContact,
   listPending,
   savePending,

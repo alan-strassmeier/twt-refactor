@@ -7,6 +7,7 @@ const {
   sendJson
 } = require('../../server/faturamento/http');
 const store = require('../../server/faturamento/cobranca-store');
+const brudamContacts = require('../../server/faturamento/cobranca-brudam-contacts');
 const { runBillingCollection } = require('../../server/faturamento/cobranca-processor');
 const {
   readWebhookBody,
@@ -49,15 +50,23 @@ const handleCategories = async (req, res, query) => {
       categories,
       totals: {
         categories: categories.length,
-        contacts: categories.reduce((total, category) => total + category.contacts.length, 0)
+        contacts: categories.reduce((total, category) => total + category.contacts.filter(
+          (contact) => contact.enabled !== false
+        ).length, 0),
+        registeredContacts: categories.reduce((total, category) => total + category.contacts.length, 0)
       }
     });
     return;
   }
   if (!requireSameOrigin(req, res)) return;
   if (req.method === 'POST') {
-    const category = await store.saveCategory(await parseJsonBody(req, 8192));
-    sendJson(res, 200, { category });
+    const result = await brudamContacts.registerCompany(await parseJsonBody(req, 8192));
+    sendJson(res, 200, {
+      ...result,
+      message: result.imported
+        ? `Empresa salva e ${result.imported} contato(s) importado(s) da Brudam.`
+        : 'Empresa salva. Nenhum contato novo foi encontrado na Brudam.'
+    });
     return;
   }
   if (req.method === 'DELETE') {
@@ -81,16 +90,44 @@ const handleContacts = async (req, res, query) => {
     sendJson(res, 200, result);
     return;
   }
+  if (req.method === 'PATCH') {
+    const body = await parseJsonBody(req, 8192);
+    const result = await store.setContactEnabled(body.cnpj, body.id, body.enabled);
+    sendJson(res, 200, result);
+    return;
+  }
   if (req.method === 'DELETE') {
-    const deleted = await store.deleteContact(query.cnpj, query.id);
-    sendJson(res, deleted ? 200 : 404, {
-      deleted,
-      message: deleted ? 'Contato excluído.' : 'Contato não encontrado.'
+    const result = await brudamContacts.deleteContact(query.cnpj, query.id);
+    sendJson(res, result.deleted ? 200 : 404, {
+      ...result,
+      message: result.deleted
+        ? result.remoteRemoved
+          ? 'Contato excluído deste sistema e da Brudam.'
+          : 'Contato excluído. Ele não estava cadastrado na Brudam.'
+        : 'Contato não encontrado.'
     });
     return;
   }
-  res.setHeader('Allow', 'POST, DELETE');
+  res.setHeader('Allow', 'POST, PATCH, DELETE');
   sendJson(res, 405, { message: 'Método não permitido.' });
+};
+
+const handleContactSync = async (req, res) => {
+  if (!requireSession(req, res)) return;
+  if (!requireSameOrigin(req, res)) return;
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', 'POST');
+    sendJson(res, 405, { message: 'Método não permitido.' });
+    return;
+  }
+  const body = await parseJsonBody(req, 8192);
+  const result = await brudamContacts.syncCompanyContacts(body.cnpj);
+  sendJson(res, 200, {
+    ...result,
+    message: result.imported
+      ? `${result.imported} contato(s) novo(s) importado(s) da Brudam.`
+      : 'Os contatos já estão atualizados.'
+  });
 };
 
 const handlePending = async (req, res) => {
@@ -223,6 +260,7 @@ module.exports = async (req, res) => {
     query = queryFromRequest(req);
     if (query.route === 'categories') return await handleCategories(req, res, query);
     if (query.route === 'contacts') return await handleContacts(req, res, query);
+    if (query.route === 'contacts-sync') return await handleContactSync(req, res);
     if (query.route === 'pending') return await handlePending(req, res);
     if (query.route === 'logs') return await handleLogs(req, res, query);
     if (query.route === 'process') return await handleProcess(req, res);

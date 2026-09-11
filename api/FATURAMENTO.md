@@ -108,9 +108,23 @@ Depois de cadastrar ou alterar as variáveis, faça um novo deployment.
 
 A aba **Cobrança de faturas** usa uma única função consolidada,
 `/api/faturamento/cobranca`, para permanecer dentro do limite de funções do
-plano Hobby. Nela é possível cadastrar e excluir empresas por CNPJ, cadastrar e
-excluir destinatários, consultar faturas aguardando DOCCOB e filtrar logs por
-fatura, data e CNPJ.
+plano Hobby. Nela é possível cadastrar e excluir empresas por CNPJ, cadastrar,
+habilitar, desabilitar e excluir destinatários, consultar faturas aguardando
+DOCCOB e filtrar logs por fatura, data e CNPJ.
+
+Ao cadastrar uma empresa, o sistema consulta `GET /cadastro/empresas` da
+Brudam pelo CNPJ e importa os contatos com e-mail existentes em `xGrupo`. O
+botão **Atualizar Contatos** repete a consulta e inclui somente os e-mails que
+ainda não estão na lista, preservando nomes e escolhas locais. O controle
+**Envio ✔️ / Envio ❌** determina se cada contato recebe as cobranças; contatos
+desabilitados permanecem cadastrados, mas não entram na fila de destinatários.
+
+Ao excluir uma pessoa, o servidor consulta a versão mais recente da empresa,
+envia ao `PATCH /cadastro/empresas` a lista `xGrupo` sem aquele e-mail e faz um
+novo GET para confirmar a remoção. O registro local só é apagado depois dessa
+confirmação, evitando divergência silenciosa entre a Brudam e o sistema de
+cobrança. Os demais contatos e os campos documentados de cada item de `xGrupo`
+são preservados na atualização.
 
 A carga inicial contém somente os 107 contatos do arquivo LDIF do Zoho que
 possuíam `categories`. Categorias múltiplas foram expandidas, totalizando 115
