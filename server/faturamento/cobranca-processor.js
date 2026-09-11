@@ -265,7 +265,8 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
   const resolvedCnpj = String(data.client?.document || clientCnpj).replace(/\D/g, '');
   const category = await context.getCategory(resolvedCnpj);
   const contacts = Array.isArray(category?.contacts) ? category.contacts : [];
-  if (contacts.length === 0) {
+  const missingCustomerContacts = contacts.length === 0;
+  if (missingCustomerContacts) {
     const current = context.pendingByInvoice.get(String(invoice.id));
     const record = pendingRecord({
       ...invoice,
@@ -285,13 +286,46 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
       now
     });
     context.summary.waitingContacts += 1;
-    return;
   }
+
+  const alertEmail = String(
+    context.emailConfig.alertEmail || context.emailConfig.alertCopy || ''
+  ).trim().toLocaleLowerCase('pt-BR');
+  const knownDeliveries = new Map();
+  let legacyAlertAlreadySent = false;
+  if (event !== EVENT_TYPES.initial && alertEmail) {
+    for (const contact of contacts) {
+      const email = String(contact.email).toLocaleLowerCase('pt-BR');
+      const delivery = await context.getDelivery(event, invoice.id, email);
+      knownDeliveries.set(email, delivery);
+      if (delivery && delivery.alertDeliveryMode !== 'separate') {
+        legacyAlertAlreadySent = true;
+      }
+    }
+  }
+  const recipients = [...contacts];
+  if (
+    event !== EVENT_TYPES.initial
+    && alertEmail
+    && !legacyAlertAlreadySent
+    && !recipients.some((contact) => String(contact.email).toLocaleLowerCase('pt-BR') === alertEmail)
+  ) {
+    recipients.push({
+      id: '__alerta_interno__',
+      firstName: 'Adriano',
+      lastName: '',
+      email: alertEmail
+    });
+  }
+  if (recipients.length === 0) return;
 
   const unsentContacts = [];
   let alreadyDelivered = 0;
-  for (const contact of contacts) {
-    const delivery = await context.getDelivery(event, invoice.id, contact.email);
+  for (const contact of recipients) {
+    const normalizedEmail = String(contact.email).toLocaleLowerCase('pt-BR');
+    const delivery = knownDeliveries.has(normalizedEmail)
+      ? knownDeliveries.get(normalizedEmail)
+      : await context.getDelivery(event, invoice.id, contact.email);
     const coveredByLateInitial = !delivery && await initialDeliveryAlreadyCoveredEvent({
       event,
       invoiceId: invoice.id,
@@ -304,7 +338,7 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
   }
   context.summary.alreadySent += alreadyDelivered;
   if (unsentContacts.length === 0) {
-    if (context.pendingByInvoice.has(String(invoice.id))) {
+    if (!missingCustomerContacts && context.pendingByInvoice.has(String(invoice.id))) {
       await context.removePending(invoice.id);
       context.pendingByInvoice.delete(String(invoice.id));
     }
@@ -332,9 +366,14 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
   }
 
   for (const contact of unsentContacts) {
+    const internalAlert = contact.id === '__alerta_interno__';
+    const deliveryMetadata = internalAlert
+      ? { recipientRole: 'internal_alert' }
+      : event === EVENT_TYPES.initial ? {} : { alertDeliveryMode: 'separate' };
     const claimed = await context.claimDelivery(event, invoice.id, contact.email, {
       state: 'processing',
-      createdAt: now
+      createdAt: now,
+      ...deliveryMetadata
     });
     if (!claimed) {
       context.summary.alreadySent += 1;
@@ -356,7 +395,8 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
         sentAt: context.now().toISOString(),
         messageId: result.messageId,
         accepted: result.accepted,
-        rejected: result.rejected
+        rejected: result.rejected,
+        ...deliveryMetadata
       };
       await context.saveDelivery(event, invoice.id, contact.email, record);
       await context.addLog({
@@ -368,6 +408,7 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
         clientName: data.client?.tradeName || data.client?.name || invoice.client,
         contactName: [contact.firstName, contact.lastName].filter(Boolean).join(' '),
         email: contact.email,
+        ...(internalAlert ? { recipientRole: 'internal_alert' } : {}),
         messageId: result.messageId,
         message: 'Mensagem aceita pelo servidor SMTP do Zoho.'
       });
@@ -378,7 +419,8 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
       await context.saveDelivery(event, invoice.id, contact.email, {
         state: 'review',
         failedAt,
-        message: String(error.message || error).slice(0, 300)
+        message: String(error.message || error).slice(0, 300),
+        ...deliveryMetadata
       });
       await context.addLog({
         createdAt: failedAt,
@@ -389,12 +431,13 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
         clientName: data.client?.tradeName || data.client?.name || invoice.client,
         contactName: [contact.firstName, contact.lastName].filter(Boolean).join(' '),
         email: contact.email,
+        ...(internalAlert ? { recipientRole: 'internal_alert' } : {}),
         message: 'O resultado do envio precisa de conferência manual para evitar duplicidade.'
       });
       context.summary.review += 1;
     }
   }
-  if (context.pendingByInvoice.has(String(invoice.id))) {
+  if (!missingCustomerContacts && context.pendingByInvoice.has(String(invoice.id))) {
     await context.removePending(invoice.id);
     context.pendingByInvoice.delete(String(invoice.id));
   }

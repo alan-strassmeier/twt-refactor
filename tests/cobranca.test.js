@@ -131,7 +131,7 @@ test('anexa DACTEs em um único PDF quando o documento é informado', () => {
   ]);
 });
 
-test('copia Adriano nos avisos próximos e vencidos', async () => {
+test('não inclui Adriano em cópia nas mensagens dos clientes', async () => {
   const calls = [];
   const transport = { sendMail: async (message) => {
     calls.push(message);
@@ -145,15 +145,15 @@ test('copia Adriano nos avisos próximos e vencidos', async () => {
     config: {
       fromName: 'TWT LOG',
       fromEmail: 'faturamento@twt.com.br',
-      alertCopy: 'adriano@twt.com.br'
+      alertEmail: 'adriano@twt.com.br'
     }
   };
   await sendBillingEmail({ ...input, event: EVENT_TYPES.initial });
   await sendBillingEmail({ ...input, event: EVENT_TYPES.reminder });
   await sendBillingEmail({ ...input, event: EVENT_TYPES.overdue });
   assert.equal(calls[0].cc, undefined);
-  assert.equal(calls[1].cc, 'adriano@twt.com.br');
-  assert.equal(calls[2].cc, 'adriano@twt.com.br');
+  assert.equal(calls[1].cc, undefined);
+  assert.equal(calls[2].cc, undefined);
 });
 
 test('varre páginas e calcula o dia de lembrete sem depender do fuso do servidor', async () => {
@@ -231,7 +231,7 @@ const processorContext = (overrides = {}) => {
     now: () => new Date('2026-09-10T12:00:00Z'),
     summary,
     pendingByInvoice: new Map(),
-    emailConfig: { fromName: 'TWT', fromEmail: 'faturamento@twt.com.br', alertCopy: 'adriano@twt.com.br' },
+    emailConfig: { fromName: 'TWT', fromEmail: 'faturamento@twt.com.br', alertEmail: 'adriano@twt.com.br' },
     transport: {},
     findDoccobForInvoice: async () => ({}),
     fetchInvoicePdfData: async () => invoiceData({ type: 'ted_doc' }),
@@ -317,6 +317,66 @@ test('fatura TED envia somente a fatura e não tenta gerar boleto', async () => 
   assert.equal(context.summary.sent, 1);
 });
 
+test('envia aviso de vencimento separado para o cliente e para Adriano', async () => {
+  const recipients = [];
+  const context = processorContext({
+    sendBillingEmail: async ({ contact }) => {
+      recipients.push(contact.email);
+      return { messageId: `m-${recipients.length}`, accepted: [contact.email], rejected: [] };
+    }
+  });
+  await processInvoiceEvent({
+    event: EVENT_TYPES.reminder,
+    invoice: { id: '11756', clientDocument: '11280282000144', client: 'BHZ' },
+    context
+  });
+  assert.deepEqual(recipients, ['maria@example.com', 'adriano@twt.com.br']);
+  assert.equal(context.summary.sent, 2);
+});
+
+test('não repete para Adriano um aviso antigo que já foi enviado em cópia', async () => {
+  const recipients = [];
+  const context = processorContext({
+    getDelivery: async (event, _invoiceId, email) => (
+      event === EVENT_TYPES.reminder && email === 'maria@example.com'
+        ? { state: 'sent', sentAt: '2026-09-10T12:00:00.000Z' }
+        : null
+    ),
+    sendBillingEmail: async ({ contact }) => {
+      recipients.push(contact.email);
+      return { messageId: 'inesperado', accepted: [contact.email], rejected: [] };
+    }
+  });
+  await processInvoiceEvent({
+    event: EVENT_TYPES.reminder,
+    invoice: { id: '11756', clientDocument: '11280282000144', client: 'BHZ' },
+    context
+  });
+  assert.deepEqual(recipients, []);
+  assert.equal(context.summary.alreadySent, 1);
+});
+
+test('avisa Adriano mesmo quando ainda não existe destinatário do cliente', async () => {
+  const recipients = [];
+  const saved = [];
+  const context = processorContext({
+    getCategory: async () => null,
+    savePending: async (record) => saved.push(record),
+    sendBillingEmail: async ({ contact }) => {
+      recipients.push(contact.email);
+      return { messageId: 'm-alerta', accepted: [contact.email], rejected: [] };
+    }
+  });
+  await processInvoiceEvent({
+    event: EVENT_TYPES.overdue,
+    invoice: { id: '11756', clientDocument: '11280282000144', client: 'BHZ' },
+    context
+  });
+  assert.deepEqual(recipients, ['adriano@twt.com.br']);
+  assert.equal(saved.at(-1).reason, 'contacts');
+  assert.equal(context.pendingByInvoice.has('11756'), true);
+});
+
 test('fatura DSL envia todos os DACTEs em um único anexo', async () => {
   const cteKey = '43260797434690000129570000000151221704715130';
   let sentInput;
@@ -375,8 +435,8 @@ test('fatura DSL não é enviada sem chave CT-e para o DACTE', async () => {
   assert.equal(sent, false);
 });
 
-test('não duplica aviso vencido quando o envio inicial ocorreu após o vencimento', async () => {
-  let sent = false;
+test('não repete o cliente vencido, mas envia o alerta separado para Adriano', async () => {
+  const recipients = [];
   const context = processorContext({
     fetchInvoicePdfData: async () => ({
       ...invoiceData({ type: 'ted_doc' }),
@@ -385,10 +445,13 @@ test('não duplica aviso vencido quando o envio inicial ocorreu após o vencimen
         dueAt: '2025-07-07'
       }
     }),
-    getDelivery: async (event) => event === EVENT_TYPES.initial
+    getDelivery: async (event, _invoiceId, email) => event === EVENT_TYPES.initial && email === 'maria@example.com'
       ? { state: 'sent', sentAt: '2026-09-11T16:14:00.000Z' }
       : null,
-    sendBillingEmail: async () => { sent = true; }
+    sendBillingEmail: async ({ contact }) => {
+      recipients.push(contact.email);
+      return { messageId: 'm-alerta', accepted: [contact.email], rejected: [] };
+    }
   });
   await processInvoiceEvent({
     event: EVENT_TYPES.overdue,
@@ -400,7 +463,7 @@ test('não duplica aviso vencido quando o envio inicial ocorreu após o vencimen
     },
     context
   });
-  assert.equal(sent, false);
+  assert.deepEqual(recipients, ['adriano@twt.com.br']);
   assert.equal(context.summary.alreadySent, 1);
 });
 
