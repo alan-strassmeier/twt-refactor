@@ -132,12 +132,17 @@ const billingHtml = (event, data, contact) => {
 </html>`;
 };
 
-const billingAttachments = ({ invoiceId, invoicePdf, bankSlipPdf }) => [
+const billingAttachments = ({ invoiceId, invoicePdf, dactePdf, bankSlipPdf }) => [
   {
     filename: `fatura-${invoiceId}.pdf`,
     content: invoicePdf,
     contentType: 'application/pdf'
   },
+  ...(dactePdf ? [{
+    filename: `dactes-fatura-${invoiceId}.pdf`,
+    content: dactePdf,
+    contentType: 'application/pdf'
+  }] : []),
   ...(bankSlipPdf ? [{
     filename: `boleto-fatura-${invoiceId}.pdf`,
     content: bankSlipPdf,
@@ -150,6 +155,7 @@ const sendBillingEmail = async ({
   data,
   contact,
   invoicePdf,
+  dactePdf = null,
   bankSlipPdf = null,
   transport,
   config = zohoConfig()
@@ -168,6 +174,7 @@ const sendBillingEmail = async ({
     attachments: billingAttachments({
       invoiceId: data.invoice.id,
       invoicePdf,
+      dactePdf,
       bankSlipPdf
     })
   });
