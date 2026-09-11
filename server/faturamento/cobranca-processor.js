@@ -19,6 +19,7 @@ const {
   EVENT_TYPES,
   zohoConfig,
   createZohoTransport,
+  billingEmailPreview,
   sendBillingEmail
 } = require('./cobranca-email');
 const { deliveryReference } = require('./cobranca-webhook');
@@ -232,6 +233,48 @@ const initialDeliveryAlreadyCoveredEvent = async ({ event, invoiceId, email, due
   return event === EVENT_TYPES.reminder && sentAt >= addDays(dueDate, -2);
 };
 
+const existingDeliveryPlan = async ({ event, invoiceId, category, context }) => {
+  const contacts = Array.isArray(category?.contacts) ? category.contacts : [];
+  if (contacts.length === 0) return { fullyClaimed: false, recipientCount: 0 };
+
+  const deliveries = new Map();
+  let legacyAlertAlreadySent = false;
+  for (const contact of contacts) {
+    const email = String(contact.email || '').trim().toLocaleLowerCase('pt-BR');
+    const delivery = email ? await context.getDelivery(event, invoiceId, email) : null;
+    deliveries.set(email, delivery);
+    if (event !== EVENT_TYPES.initial && delivery && delivery.alertDeliveryMode !== 'separate') {
+      legacyAlertAlreadySent = true;
+    }
+  }
+
+  const recipients = [...contacts];
+  const alertEmail = String(
+    context.emailConfig.alertEmail || context.emailConfig.alertCopy || ''
+  ).trim().toLocaleLowerCase('pt-BR');
+  if (
+    event !== EVENT_TYPES.initial
+    && alertEmail
+    && !legacyAlertAlreadySent
+    && !recipients.some((contact) => String(contact.email || '').toLocaleLowerCase('pt-BR') === alertEmail)
+  ) {
+    recipients.push({ email: alertEmail });
+  }
+
+  for (const contact of recipients) {
+    const email = String(contact.email || '').trim().toLocaleLowerCase('pt-BR');
+    if (!deliveries.has(email)) {
+      deliveries.set(email, email ? await context.getDelivery(event, invoiceId, email) : null);
+    }
+  }
+  return {
+    fullyClaimed: recipients.length > 0 && recipients.every((contact) => (
+      Boolean(deliveries.get(String(contact.email || '').trim().toLocaleLowerCase('pt-BR')))
+    )),
+    recipientCount: recipients.length
+  };
+};
+
 const processInvoiceEvent = async ({ event, invoice, context }) => {
   const now = context.now().toISOString();
   if (context.doccobPendingIds?.has(String(invoice.id))) return;
@@ -262,9 +305,27 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
     return;
   }
 
+  const categoryBeforeInvoiceLookup = clientCnpj ? await context.getCategory(clientCnpj) : null;
+  const existingPlan = await existingDeliveryPlan({
+    event,
+    invoiceId: invoice.id,
+    category: categoryBeforeInvoiceLookup,
+    context
+  });
+  if (existingPlan.fullyClaimed) {
+    context.summary.alreadySent += existingPlan.recipientCount;
+    if (context.pendingByInvoice.has(String(invoice.id))) {
+      await context.removePending(invoice.id);
+      context.pendingByInvoice.delete(String(invoice.id));
+    }
+    return;
+  }
+
   const data = await context.fetchInvoicePdfData(invoice.id);
   const resolvedCnpj = String(data.client?.document || clientCnpj).replace(/\D/g, '');
-  const category = await context.getCategory(resolvedCnpj);
+  const category = resolvedCnpj === clientCnpj
+    ? categoryBeforeInvoiceLookup
+    : await context.getCategory(resolvedCnpj);
   const contacts = Array.isArray(category?.contacts) ? category.contacts : [];
   const missingCustomerContacts = contacts.length === 0;
   if (missingCustomerContacts) {
@@ -373,6 +434,14 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
     const deliveryMetadata = internalAlert
       ? { recipientRole: 'internal_alert' }
       : event === EVENT_TYPES.initial ? {} : { alertDeliveryMode: 'separate' };
+    const emailPreview = billingEmailPreview({
+      event,
+      data,
+      contact,
+      dactePdf,
+      bankSlipPdf,
+      config: context.emailConfig
+    });
     const claimed = await context.claimDelivery(event, invoice.id, contact.email, {
       state: 'processing',
       createdAt: now,
@@ -391,6 +460,7 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
         clientName: data.client?.tradeName || data.client?.name || invoice.client,
         contactName,
         email: contact.email,
+        emailPreview,
         ...(internalAlert ? { recipientRole: 'internal_alert' } : {})
       });
       const result = await context.sendBillingEmail({
@@ -411,6 +481,7 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
         accepted: result.accepted,
         rejected: result.rejected,
         clientReference,
+        emailPreview,
         ...deliveryMetadata
       };
       await context.saveDelivery(event, invoice.id, contact.email, record);
@@ -426,6 +497,7 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
         ...(internalAlert ? { recipientRole: 'internal_alert' } : {}),
         clientReference,
         messageId: result.messageId,
+        emailPreview,
         message: 'Mensagem aceita pelo SMTP do Zoho; a confirmação de entrega ainda está pendente.'
       });
       context.summary.sent += 1;
@@ -436,6 +508,7 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
         state: 'review',
         failedAt,
         clientReference,
+        emailPreview,
         message: String(error.message || error).slice(0, 300),
         ...deliveryMetadata
       });
@@ -450,6 +523,7 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
         email: contact.email,
         ...(internalAlert ? { recipientRole: 'internal_alert' } : {}),
         clientReference,
+        emailPreview,
         message: 'O resultado do envio precisa de conferência manual para evitar duplicidade.'
       });
       context.summary.review += 1;
@@ -609,6 +683,7 @@ module.exports = {
   pendingRecord,
   buildDslDacteAttachment,
   initialDeliveryAlreadyCoveredEvent,
+  existingDeliveryPlan,
   processInvoiceEvent,
   runBillingCollection
 };

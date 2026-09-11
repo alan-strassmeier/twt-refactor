@@ -29,6 +29,18 @@
     categoryDeleteDescription: document.getElementById('categoryDeleteDescription'),
     cancelCategoryDelete: document.getElementById('cancelCategoryDelete'),
     confirmCategoryDelete: document.getElementById('confirmCategoryDelete'),
+    emailLogModal: document.getElementById('emailLogModal'),
+    emailLogBackdrop: document.getElementById('emailLogBackdrop'),
+    emailLogClose: document.getElementById('emailLogClose'),
+    emailLogTitle: document.getElementById('emailLogTitle'),
+    emailLogContent: document.getElementById('emailLogContent'),
+    emailLogFrom: document.getElementById('emailLogFrom'),
+    emailLogTo: document.getElementById('emailLogTo'),
+    emailLogSubject: document.getElementById('emailLogSubject'),
+    emailLogPriority: document.getElementById('emailLogPriority'),
+    emailLogBody: document.getElementById('emailLogBody'),
+    emailLogAttachments: document.getElementById('emailLogAttachments'),
+    emailLogUnavailable: document.getElementById('emailLogUnavailable'),
     backToTopButton: document.getElementById('backToTopButton')
   };
 
@@ -42,7 +54,8 @@
     logPage: 1,
     logTotalPages: 1,
     categoryToDelete: null,
-    categoryDeleteTrigger: null
+    categoryDeleteTrigger: null,
+    emailLogTrigger: null
   };
   const endpoint = (route, query = {}) => {
     const params = new URLSearchParams({ route, ...query });
@@ -187,6 +200,41 @@
     elements.categoryDeleteModal.hidden = false;
     document.body.classList.add('modal-open');
     elements.cancelCategoryDelete.focus();
+  };
+
+  const emailParty = (name, email) => [name, email && `<${email}>`].filter(Boolean).join(' ') || '—';
+
+  const closeEmailLogModal = () => {
+    if (elements.emailLogModal.hidden) return;
+    elements.emailLogModal.hidden = true;
+    document.body.classList.remove('modal-open');
+    state.emailLogTrigger?.focus();
+    state.emailLogTrigger = null;
+  };
+
+  const openEmailLogModal = (record, trigger) => {
+    const preview = record.emailPreview;
+    const available = Boolean(preview && preview.subject && preview.text);
+    state.emailLogTrigger = trigger;
+    elements.emailLogTitle.textContent = `E-mail da fatura ${record.invoiceId || '—'}`;
+    elements.emailLogContent.hidden = !available;
+    elements.emailLogUnavailable.hidden = available;
+    if (available) {
+      elements.emailLogFrom.textContent = emailParty(preview.fromName, preview.fromEmail);
+      elements.emailLogTo.textContent = emailParty(preview.toName, preview.toEmail || record.email);
+      elements.emailLogSubject.textContent = preview.subject;
+      elements.emailLogPriority.textContent = preview.priority === 'high' ? 'Alta' : 'Normal';
+      elements.emailLogBody.textContent = preview.text;
+      const attachments = Array.isArray(preview.attachments) ? preview.attachments : [];
+      elements.emailLogAttachments.replaceChildren(...attachments.map((filename) => {
+        const item = document.createElement('li');
+        item.textContent = filename;
+        return item;
+      }));
+    }
+    elements.emailLogModal.hidden = false;
+    document.body.classList.add('modal-open');
+    elements.emailLogClose.focus();
   };
 
   const deleteCategory = async (category) => {
@@ -358,6 +406,14 @@
       const status = appendCell(row, STATUS_LABELS[record.status] || record.status || '—');
       status.className = `collection-status status-${record.status || 'unknown'}`;
       if (record.message) status.title = record.message;
+      const action = document.createElement('td');
+      const previewButton = document.createElement('button');
+      previewButton.type = 'button';
+      previewButton.className = 'button button-quiet log-preview-button';
+      previewButton.textContent = 'Visualizar';
+      previewButton.addEventListener('click', () => openEmailLogModal(record, previewButton));
+      action.appendChild(previewButton);
+      row.appendChild(action);
       return row;
     });
     elements.logRows.replaceChildren(...rows);
@@ -491,7 +547,12 @@
     if (event.key === 'Escape' && !elements.categoryDeleteModal.hidden) {
       closeCategoryDeleteModal();
     }
+    if (event.key === 'Escape' && !elements.emailLogModal.hidden) {
+      closeEmailLogModal();
+    }
   });
+  elements.emailLogBackdrop.addEventListener('click', closeEmailLogModal);
+  elements.emailLogClose.addEventListener('click', closeEmailLogModal);
 
   elements.refreshPendingButton.addEventListener('click', async () => {
     setLoading(true);

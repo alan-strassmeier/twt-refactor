@@ -154,6 +154,28 @@ const billingAttachments = ({ invoiceId, invoicePdf, dactePdf, bankSlipPdf }) =>
   }] : [])
 ];
 
+const billingEmailPreview = ({
+  event,
+  data,
+  contact,
+  dactePdf = null,
+  bankSlipPdf = null,
+  config = zohoConfig()
+}) => ({
+  fromName: String(config.fromName || 'TWT LOG'),
+  fromEmail: String(config.fromEmail || ''),
+  toName: [contact.firstName, contact.lastName].filter(Boolean).join(' '),
+  toEmail: String(contact.email || ''),
+  subject: billingSubject(event, data),
+  text: billingText(event, data, contact),
+  priority: event === EVENT_TYPES.reminder || event === EVENT_TYPES.overdue ? 'high' : 'normal',
+  attachments: [
+    `fatura-${data.invoice.id}.pdf`,
+    ...(dactePdf ? [`dactes-fatura-${data.invoice.id}.pdf`] : []),
+    ...(bankSlipPdf ? [`boleto-fatura-${data.invoice.id}.pdf`] : [])
+  ]
+});
+
 const sendBillingEmail = async ({
   event,
   data,
@@ -214,5 +236,6 @@ module.exports = {
   billingText,
   billingHtml,
   billingAttachments,
+  billingEmailPreview,
   sendBillingEmail
 };

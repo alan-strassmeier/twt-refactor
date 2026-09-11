@@ -288,6 +288,7 @@ const processWebhookPayload = async (payload, dependencies = {}) => {
         email: reference.email || event.email,
         ...(reference.recipientRole ? { recipientRole: reference.recipientRole } : {}),
         clientReference: event.clientReference,
+        ...(reference.emailPreview ? { emailPreview: reference.emailPreview } : {}),
         ...(event.emailReference ? { emailReference: event.emailReference } : {}),
         ...(event.providerEventAt ? { providerEventAt: event.providerEventAt } : {}),
         message: statusMessage(event.status, event.diagnostic)

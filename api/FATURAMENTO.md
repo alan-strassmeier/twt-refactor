@@ -164,6 +164,11 @@ spam e quarentena são decisões posteriores do provedor do destinatário. Bounc
 temporários e definitivos aparecem no mesmo registro do envio, e o motivo
 enviado pelo ZeptoMail fica disponível ao passar o mouse sobre o status.
 
+O botão **Visualizar** dos logs abre uma cópia textual do e-mail com remetente,
+destinatário, assunto, prioridade, mensagem e nomes dos anexos. Os PDFs não são
+duplicados no Redis. Registros anteriores à implantação deste recurso não têm
+essa cópia e são identificados como conteúdo indisponível.
+
 Em cada execução o servidor:
 
 1. consulta faturas em aberto emitidas no dia e reprocessa as que aguardavam
