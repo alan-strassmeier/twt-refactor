@@ -145,6 +145,11 @@ envio. Atualizar a página ou executar a rotina novamente não envia uma segunda
 cópia. Em caso de resposta SMTP incerta, o registro fica como **Requer
 conferência**, sem tentativa automática que possa duplicar a cobrança.
 
+Ao reprocessar uma fatura que aguardava alguma pendência, o evento é definido
+pelo estado atual: vencida tem prioridade sobre perto do vencimento, e perto do
+vencimento tem prioridade sobre o envio inicial. O contador **Verificações** da
+fila inclui tanto a rotina horária quanto o botão **Verificar agora**.
+
 O plano Hobby da Vercel não executa cron a cada hora. O diretório
 `cloudflare/billing-cron` contém um Worker da Cloudflare configurado para chamar
 a rotina no início de cada hora. Troque o domínio em `wrangler.jsonc`, configure

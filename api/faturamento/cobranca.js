@@ -1,4 +1,4 @@
-const { timingSafeEqual } = require('node:crypto');
+const { randomUUID, timingSafeEqual } = require('node:crypto');
 const { sessionFromRequest } = require('../../server/faturamento/auth');
 const {
   parseJsonBody,
@@ -92,9 +92,13 @@ const handlePending = async (req, res) => {
     sendJson(res, 405, { message: 'Método não permitido.' });
     return;
   }
-  const pending = await store.listPending();
+  const [pending, lastRun] = await Promise.all([
+    store.listPending(),
+    store.getLastRun()
+  ]);
   sendJson(res, 200, {
     pending,
+    lastRun,
     total: pending.length,
     doccobTotal: pending.filter((record) => record.reason === 'doccob').length
   });
@@ -126,8 +130,55 @@ const handleProcess = async (req, res) => {
   if (!cron) {
     if (!requireSession(req, res) || !requireSameOrigin(req, res)) return;
   }
-  const result = await runBillingCollection();
-  sendJson(res, 200, result);
+  const source = cron ? 'automatic' : 'manual';
+  const runId = randomUUID();
+  if (!await store.claimProcessingRun(runId)) {
+    sendJson(res, 409, {
+      message: 'Já existe uma verificação de cobrança em andamento. Aguarde a conclusão.'
+    });
+    return;
+  }
+
+  const startedAt = new Date().toISOString();
+  try {
+    const result = await runBillingCollection({ source, runId });
+    const run = {
+      runId,
+      source,
+      status: 'completed',
+      startedAt,
+      completedAt: result.completedAt,
+      scanned: result.scanned,
+      processed: result.processed,
+      sent: result.sent,
+      errors: result.errors.length
+    };
+    await store.saveLastRun(run);
+    console.info('[faturamento:cobranca:execucao]', run);
+    sendJson(res, 200, { ...result, runId, source });
+  } catch (error) {
+    const run = {
+      runId,
+      source,
+      status: 'failed',
+      startedAt,
+      completedAt: new Date().toISOString(),
+      message: String(error.message || error).slice(0, 300)
+    };
+    try {
+      await store.saveLastRun(run);
+    } catch (storeError) {
+      console.error('[faturamento:cobranca:registro-execucao]', storeError);
+    }
+    console.error('[faturamento:cobranca:execucao]', run);
+    throw error;
+  } finally {
+    try {
+      await store.releaseProcessingRun(runId);
+    } catch (error) {
+      console.error('[faturamento:cobranca:liberacao]', error);
+    }
+  }
 };
 
 module.exports = async (req, res) => {

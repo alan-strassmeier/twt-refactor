@@ -11,7 +11,9 @@ const seed = require('../server/faturamento/cobranca-contacts-seed.json');
 const {
   normalizedContact,
   deliveryField,
-  saoPauloDate: logDate
+  saoPauloDate: logDate,
+  claimProcessingRun,
+  releaseProcessingRun
 } = require('../server/faturamento/cobranca-store');
 const {
   EVENT_TYPES,
@@ -22,7 +24,10 @@ const {
 } = require('../server/faturamento/cobranca-email');
 const {
   addDays,
+  billingEventForInvoice,
+  buildBillingQueue,
   scanInvoices,
+  pendingRecord,
   processInvoiceEvent
 } = require('../server/faturamento/cobranca-processor');
 const {
@@ -168,6 +173,52 @@ test('varre páginas e calcula o dia de lembrete sem depender do fuso do servido
   assert.equal(addDays('2026-09-10', 2), '2026-09-12');
 });
 
+test('classifica pendências pela proximidade do vencimento', () => {
+  const today = '2026-09-11';
+  assert.equal(
+    billingEventForInvoice({ issuedAt: today, dueAt: '2026-10-01' }, today),
+    EVENT_TYPES.initial
+  );
+  assert.equal(
+    billingEventForInvoice({ issuedAt: '2026-09-01', dueAt: '2026-09-13' }, today),
+    EVENT_TYPES.reminder
+  );
+  assert.equal(
+    billingEventForInvoice({ issuedAt: '2026-09-01', dueAt: '2026-09-12' }, today),
+    EVENT_TYPES.reminder
+  );
+  assert.equal(
+    billingEventForInvoice({ issuedAt: '2025-05-07', dueAt: '2025-07-07' }, today),
+    EVENT_TYPES.overdue
+  );
+});
+
+test('mantém somente o evento mais urgente para cada fatura', () => {
+  const queue = buildBillingQueue({
+    currentDate: '2026-09-11',
+    pending: [
+      { invoiceId: '10630', issuedAt: '2025-05-07', dueAt: '2025-07-07' },
+      { invoiceId: '11780', issuedAt: '2026-09-10', dueAt: '2026-09-13' }
+    ],
+    today: [
+      { id: '11781', issuedAt: '2026-09-11', dueAt: '2026-10-01' },
+      { id: '11782', issuedAt: '2026-09-11', dueAt: '2026-09-13' }
+    ],
+    reminder: [
+      { id: '11780', issuedAt: '2026-09-10', dueAt: '2026-09-13' },
+      { id: '11782', issuedAt: '2026-09-11', dueAt: '2026-09-13' }
+    ],
+    overdue: [{ id: '10630', issuedAt: '2025-05-07', dueAt: '2025-07-07' }]
+  });
+  assert.deepEqual(queue.map(({ invoice, event }) => [invoice.id, event]), [
+    ['10630', EVENT_TYPES.overdue],
+    ['11780', EVENT_TYPES.reminder],
+    ['11781', EVENT_TYPES.initial],
+    ['11782', EVENT_TYPES.reminder]
+  ]);
+  assert.equal(queue.find((item) => item.invoice.id === '10630').fromPending, true);
+});
+
 const processorContext = (overrides = {}) => {
   const summary = {
     pendingDoccob: 0,
@@ -217,6 +268,33 @@ test('mantém a fatura na fila enquanto o DOCCOB não chegou', async () => {
   assert.equal(saved.length, 1);
   assert.equal(saved[0].reason, 'doccob');
   assert.equal(context.summary.pendingDoccob, 1);
+});
+
+test('registra se a pendência foi conferida manualmente ou pelo agendador', () => {
+  const record = pendingRecord(
+    { id: '11756', clientDocument: '11280282000144', client: 'BHZ' },
+    { attempts: 2, firstSeenAt: '2026-09-10T12:00:00.000Z' },
+    '2026-09-11T12:00:00.000Z',
+    'doccob',
+    '',
+    { source: 'automatic', runId: 'execucao-1' }
+  );
+  assert.equal(record.attempts, 3);
+  assert.equal(record.lastCheckSource, 'automatic');
+  assert.equal(record.lastRunId, 'execucao-1');
+});
+
+test('trava execuções concorrentes da cobrança com expiração de segurança', async () => {
+  const calls = [];
+  const command = async (...args) => {
+    calls.push(args);
+    return args[0] === 'SET' ? 'OK' : 1;
+  };
+  assert.equal(await claimProcessingRun('execucao-1', command), true);
+  await releaseProcessingRun('execucao-1', command);
+  assert.deepEqual(calls[0].slice(-4), ['execucao-1', 'NX', 'EX', '90']);
+  assert.equal(calls[1][0], 'EVAL');
+  assert.equal(calls[1].at(-1), 'execucao-1');
 });
 
 test('fatura TED envia somente a fatura e não tenta gerar boleto', async () => {
@@ -295,6 +373,35 @@ test('fatura DSL não é enviada sem chave CT-e para o DACTE', async () => {
     /não possui chave CT-e/
   );
   assert.equal(sent, false);
+});
+
+test('não duplica aviso vencido quando o envio inicial ocorreu após o vencimento', async () => {
+  let sent = false;
+  const context = processorContext({
+    fetchInvoicePdfData: async () => ({
+      ...invoiceData({ type: 'ted_doc' }),
+      invoice: {
+        ...invoiceData({ type: 'ted_doc' }).invoice,
+        dueAt: '2025-07-07'
+      }
+    }),
+    getDelivery: async (event) => event === EVENT_TYPES.initial
+      ? { state: 'sent', sentAt: '2026-09-11T16:14:00.000Z' }
+      : null,
+    sendBillingEmail: async () => { sent = true; }
+  });
+  await processInvoiceEvent({
+    event: EVENT_TYPES.overdue,
+    invoice: {
+      id: '10630',
+      clientDocument: '35820448001884',
+      client: 'BSB WHITE MARTINS',
+      dueAt: '2025-07-07'
+    },
+    context
+  });
+  assert.equal(sent, false);
+  assert.equal(context.summary.alreadySent, 1);
 });
 
 test('mantém na fila a fatura que ainda não possui destinatário', async () => {
