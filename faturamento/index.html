@@ -7,7 +7,7 @@
   <meta name="theme-color" content="#112a40">
   <title>Faturamento | TWT Airpack</title>
   <link rel="icon" href="/favicon.ico">
-  <link rel="stylesheet" href="/faturamento/styles.css?v=10">
+  <link rel="stylesheet" href="/faturamento/styles.css?v=11">
   <script src="/faturamento/sort.js?v=1" defer></script>
   <script src="/faturamento/app.js?v=14" defer></script>
   <script src="/faturamento/cobranca.js?v=1" defer></script>
@@ -281,13 +281,20 @@
 
           <p class="dashboard-message collection-message" id="collectionMessage" role="status" aria-live="polite"></p>
 
+          <nav class="collection-quick-nav" aria-label="Navegação rápida da cobrança">
+            <span>Ir para</span>
+            <a href="#collectionContactsSection">E-mails cadastrados</a>
+            <a href="#pendingDoccobSection">Aguardando pendência</a>
+            <a href="#collectionLogsSection">Logs de envio</a>
+          </nav>
+
           <section class="collection-summary" aria-label="Resumo das cobranças">
             <article><span>Empresas cadastradas</span><strong id="collectionCompanyCount">0</strong></article>
             <article><span>Destinatários</span><strong id="collectionContactCount">0</strong></article>
             <article><span>Aguardando DOCCOB</span><strong id="collectionPendingCount">0</strong></article>
           </section>
 
-          <section class="collection-card" aria-labelledby="collectionContactsTitle">
+          <section class="collection-card collection-anchor-target" id="collectionContactsSection" aria-labelledby="collectionContactsTitle">
             <div class="collection-card-heading">
               <div>
                 <h2 id="collectionContactsTitle">E-mails para cobrança</h2>
@@ -310,7 +317,7 @@
             </div>
           </section>
 
-          <section class="collection-card" aria-labelledby="pendingDoccobTitle">
+          <section class="collection-card collection-anchor-target" id="pendingDoccobSection" aria-labelledby="pendingDoccobTitle">
             <div class="collection-card-heading">
               <div>
                 <h2 id="pendingDoccobTitle">Faturas aguardando envio</h2>
@@ -330,7 +337,7 @@
             </div>
           </section>
 
-          <section class="collection-card" aria-labelledby="collectionLogsTitle">
+          <section class="collection-card collection-anchor-target" id="collectionLogsSection" aria-labelledby="collectionLogsTitle">
             <div class="collection-card-heading">
               <div>
                 <h2 id="collectionLogsTitle">Logs de envio</h2>

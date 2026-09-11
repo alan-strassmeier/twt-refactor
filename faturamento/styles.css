@@ -1223,6 +1223,55 @@ body.modal-open {
 
 .collection-heading { margin-bottom: 0; }
 
+.collection-quick-nav {
+  position: sticky;
+  top: 12px;
+  z-index: 8;
+  width: fit-content;
+  max-width: 100%;
+  padding: 6px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  overflow-x: auto;
+  border: 1px solid #cbd9e4;
+  border-radius: 13px;
+  background: rgb(255 255 255 / 94%);
+  box-shadow: 0 8px 24px rgb(15 42 63 / 10%);
+  backdrop-filter: blur(10px);
+}
+
+.collection-quick-nav > span {
+  padding: 0 10px;
+  color: var(--muted);
+  font-size: .76rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.collection-quick-nav a {
+  min-height: 38px;
+  padding: 8px 12px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 9px;
+  color: var(--navy-800);
+  font-size: .8rem;
+  font-weight: 800;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: color .15s ease, background .15s ease;
+}
+
+.collection-quick-nav a:hover {
+  color: var(--blue-600);
+  background: var(--blue-50);
+}
+
+.collection-anchor-target {
+  scroll-margin-top: 84px;
+}
+
 .collection-message {
   min-height: 0;
   padding: 0;
@@ -1675,6 +1724,15 @@ body.modal-open {
   .area-tab {
     flex: 1;
     padding-inline: 10px;
+  }
+
+  .collection-quick-nav {
+    top: 8px;
+    width: 100%;
+  }
+
+  .collection-quick-nav > span {
+    display: none;
   }
 
   .collection-card-heading {

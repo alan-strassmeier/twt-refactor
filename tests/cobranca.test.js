@@ -264,6 +264,8 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(html, /id="categoryForm"/);
   assert.match(html, /id="pendingRows"/);
   assert.match(html, /id="collectionLogsForm"/);
+  assert.match(html, /href="#pendingDoccobSection"/);
+  assert.match(html, /href="#collectionLogsSection"/);
   assert.match(source, /route, \.\.\.query/);
   assert.equal(fs.existsSync(path.join(root, 'api', 'faturamento', 'cobranca.js')), true);
 });
