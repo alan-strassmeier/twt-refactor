@@ -124,9 +124,12 @@ nome e sobrenome. Por exemplo, `jon.doe@empresa.com` resulta em `Jon Doe`.
 
 Use no Zoho uma senha específica de aplicativo quando a conta tiver
 autenticação em dois fatores. A senha fica somente em `ZOHO_SMTP_PASSWORD` na
-Vercel e nunca deve ser commitada. O log **Aceito pelo Zoho** significa que o
-servidor SMTP aceitou a mensagem para entrega; SMTP não confirma, sozinho, que
-a caixa do destinatário a recebeu ou abriu.
+Vercel e nunca deve ser commitada. O log **Aguardando confirmação** significa
+que o servidor SMTP do Zoho aceitou a mensagem. Essa resposta não comprova que
+o servidor do destinatário a aceitou nem que ela entrou na caixa de entrada.
+Uma confirmação posterior exige um serviço transacional com evento de entrega,
+como o webhook do ZeptoMail; mesmo esse evento confirma o servidor destinatário,
+não a separação posterior entre caixa de entrada, spam e quarentena.
 
 Em cada execução o servidor:
 
@@ -136,8 +139,9 @@ Em cada execução o servidor:
    pagamentos que não sejam TED/DOC, anexar também o boleto. Para faturas DSL,
    reúne e anexa em um único PDF todos os DACTEs vinculados no DOCCOB;
 3. consulta as faturas em aberto com vencimento dois dias depois e envia o
-   aviso **Perto do vencimento**;
-4. consulta faturas vencidas ainda em aberto e envia o aviso de vencida;
+   aviso **Perto do vencimento** com prioridade alta;
+4. consulta faturas vencidas ainda em aberto e envia o aviso de vencida com
+   prioridade alta;
 5. envia uma mensagem separada para `BILLING_ALERT_EMAIL` nos avisos próximos
    do vencimento e vencidos, sem incluir o endereço em cópia nas mensagens dos
    clientes.

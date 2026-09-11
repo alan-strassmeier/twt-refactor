@@ -165,11 +165,13 @@ const sendBillingEmail = async ({
   config = zohoConfig()
 }) => {
   const activeTransport = transport || createZohoTransport(config);
+  const highPriority = event === EVENT_TYPES.reminder || event === EVENT_TYPES.overdue;
   const info = await activeTransport.sendMail({
     disableFileAccess: true,
     disableUrlAccess: true,
     from: { name: config.fromName, address: config.fromEmail },
     to: { name: [contact.firstName, contact.lastName].filter(Boolean).join(' '), address: contact.email },
+    ...(highPriority ? { priority: 'high' } : {}),
     subject: billingSubject(event, data),
     text: billingText(event, data, contact),
     html: billingHtml(event, data, contact),

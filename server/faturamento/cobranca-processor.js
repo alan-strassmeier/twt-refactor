@@ -402,7 +402,7 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
       await context.addLog({
         createdAt: record.sentAt,
         event,
-        status: 'accepted',
+        status: 'submitted',
         invoiceId: String(invoice.id),
         clientCnpj: resolvedCnpj,
         clientName: data.client?.tradeName || data.client?.name || invoice.client,
@@ -410,7 +410,7 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
         email: contact.email,
         ...(internalAlert ? { recipientRole: 'internal_alert' } : {}),
         messageId: result.messageId,
-        message: 'Mensagem aceita pelo servidor SMTP do Zoho.'
+        message: 'Mensagem aceita pelo SMTP do Zoho; a confirmação de entrega ainda está pendente.'
       });
       context.summary.sent += 1;
       context.sentInvoiceIds?.add(String(invoice.id));

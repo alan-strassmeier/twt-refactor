@@ -211,7 +211,7 @@ const saoPauloDate = (value) => {
   return `${parts.year}-${parts.month}-${parts.day}`;
 };
 
-const listLogs = async ({ invoiceId = '', date = '', cnpj = '', limit = 250 } = {}, command = redisCommand) => {
+const filteredLogs = async ({ invoiceId = '', date = '', cnpj = '' } = {}, command = redisCommand) => {
   const values = await command('ZREVRANGE', KEYS.logs, '0', '999') || [];
   const normalizedInvoice = String(invoiceId || '').replace(/\D/g, '');
   const normalizedCnpj = digits(cnpj);
@@ -219,10 +219,29 @@ const listLogs = async ({ invoiceId = '', date = '', cnpj = '', limit = 250 } = 
   return values
     .map((value) => parseRecord(value))
     .filter(Boolean)
-    .filter((record) => !normalizedInvoice || String(record.invoiceId) === normalizedInvoice)
+    .filter((record) => !normalizedInvoice || digits(record.invoiceId) === normalizedInvoice)
     .filter((record) => !normalizedCnpj || digits(record.clientCnpj) === normalizedCnpj)
-    .filter((record) => !normalizedDate || saoPauloDate(record.createdAt) === normalizedDate)
-    .slice(0, Math.max(1, Math.min(Number(limit) || 250, 500)));
+    .filter((record) => !normalizedDate || saoPauloDate(record.createdAt) === normalizedDate);
+};
+
+const listLogs = async ({ invoiceId = '', date = '', cnpj = '', page = 1, limit = 10 } = {}, command = redisCommand) => {
+  const records = await filteredLogs({ invoiceId, date, cnpj }, command);
+  const pageSize = Math.max(1, Math.min(Number(limit) || 10, 50));
+  const total = records.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const currentPage = Math.max(1, Math.min(Number(page) || 1, totalPages));
+  const start = (currentPage - 1) * pageSize;
+  return {
+    logs: records.slice(start, start + pageSize),
+    total,
+    pagination: {
+      page: currentPage,
+      pageSize,
+      totalPages,
+      hasPrevious: currentPage > 1,
+      hasNext: currentPage < totalPages
+    }
+  };
 };
 
 const getOverdueCursor = async (command = redisCommand) =>
