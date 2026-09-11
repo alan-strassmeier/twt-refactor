@@ -92,6 +92,36 @@ const webhookConfig = (env = process.env) => {
   return { authenticationKey, maxAgeMs };
 };
 
+const webhookTokenAuthorized = (headers = {}, config = webhookConfig()) => {
+  const authorization = String(headers.authorization || '');
+  const candidates = [
+    authorization.startsWith('Bearer ') ? authorization.slice(7) : '',
+    headers['x-twt-webhook-token'],
+    headers.zoho_webhook_auth_key,
+    headers['zoho-webhook-auth-key']
+  ].map((value) => Buffer.from(String(value || ''), 'utf8'));
+  const expected = Buffer.from(config.authenticationKey, 'utf8');
+  return candidates.some((candidate) => (
+    candidate.length === expected.length
+    && candidate.length > 0
+    && timingSafeEqual(candidate, expected)
+  ));
+};
+
+const parseWebhookPayload = (body) => {
+  let payload;
+  try {
+    payload = JSON.parse(signedPayloadText(body));
+  } catch (error) {
+    if (error.statusCode) throw error;
+    throw Object.assign(new Error('Conteúdo do webhook inválido.'), { statusCode: 400 });
+  }
+  if (!payload || typeof payload !== 'object') {
+    throw Object.assign(new Error('Conteúdo do webhook inválido.'), { statusCode: 400 });
+  }
+  return payload;
+};
+
 const validateWebhook = ({ body, signatureHeader, config = webhookConfig(), now = Date.now() }) => {
   const parts = signatureParts(signatureHeader);
   const timestamp = Number(parts.ts);
@@ -119,16 +149,7 @@ const validateWebhook = ({ body, signatureHeader, config = webhookConfig(), now 
     throw Object.assign(new Error('Assinatura do webhook inválida.'), { statusCode: 401 });
   }
 
-  let payload;
-  try {
-    payload = JSON.parse(payloadText);
-  } catch {
-    throw Object.assign(new Error('Conteúdo do webhook inválido.'), { statusCode: 400 });
-  }
-  if (!payload || typeof payload !== 'object') {
-    throw Object.assign(new Error('Conteúdo do webhook inválido.'), { statusCode: 400 });
-  }
-  return payload;
+  return parseWebhookPayload(payloadText);
 };
 
 const firstValue = (value) => Array.isArray(value) ? value[0] : value;
@@ -292,6 +313,8 @@ module.exports = {
   signedPayloadText,
   signatureParts,
   webhookConfig,
+  webhookTokenAuthorized,
+  parseWebhookPayload,
   validateWebhook,
   webhookStatus,
   eventDate,

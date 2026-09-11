@@ -26,6 +26,7 @@ const {
 } = require('../server/faturamento/cobranca-email');
 const {
   deliveryReference,
+  webhookTokenAuthorized,
   validateWebhook,
   extractWebhookEvents,
   processWebhookPayload
@@ -576,6 +577,23 @@ test('valida a assinatura HMAC do formulário enviado pelo ZeptoMail', () => {
   }), /Assinatura do webhook inválida/);
 });
 
+test('aceita o segredo do webhook em Authorization ou cabeçalho personalizado', () => {
+  const authenticationKey = 'chave-de-webhook-com-32-caracteres';
+  const config = { authenticationKey, maxAgeMs: 300_000 };
+  assert.equal(webhookTokenAuthorized({
+    authorization: `Bearer ${authenticationKey}`
+  }, config), true);
+  assert.equal(webhookTokenAuthorized({
+    'x-twt-webhook-token': authenticationKey
+  }, config), true);
+  assert.equal(webhookTokenAuthorized({
+    zoho_webhook_auth_key: authenticationKey
+  }, config), true);
+  assert.equal(webhookTokenAuthorized({
+    authorization: 'Bearer chave-incorreta'
+  }, config), false);
+});
+
 test('interpreta entrega e bounce com a referência e diagnóstico do ZeptoMail', () => {
   const events = extractWebhookEvents({
     event_name: ['hardbounce'],
@@ -670,5 +688,6 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(source, /const filters = logFilters\(\);[\s\S]*setLoading\(true\)/);
   assert.doesNotMatch(source, /window\.confirm\(`Excluir \$\{category\.name\}/);
   assert.match(apiSource, /query\.route === 'webhook'/);
+  assert.match(apiSource, /req\.method === 'GET' \|\| req\.method === 'HEAD'/);
   assert.equal(fs.existsSync(path.join(root, 'api', 'faturamento', 'cobranca.js')), true);
 });
