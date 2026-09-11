@@ -142,14 +142,15 @@
   const setContactEnabled = async (category, contact, enabled) => {
     setLoading(true);
     try {
-      await requestJson(endpoint('contacts'), {
+      const result = await requestJson(endpoint('contacts'), {
         method: 'PATCH',
         body: JSON.stringify({ cnpj: category.cnpj, id: contact.id, enabled })
       });
       setMessage(enabled ? 'Contato habilitado para envio.' : 'Contato desabilitado para envio.', 'success');
-      await loadCategories();
+      return result.contact || { ...contact, enabled };
     } catch (error) {
       setMessage(error.message, 'error');
+      return null;
     } finally {
       setLoading(false);
     }
@@ -171,11 +172,9 @@
     }
   };
 
-  const createContactItem = (category, contact) => {
+  const createContactItem = (category, contact, onStatusChange) => {
     const item = document.createElement('li');
     item.className = 'contact-item';
-    const enabled = contact.enabled !== false;
-    item.classList.toggle('is-disabled', !enabled);
     const identity = document.createElement('div');
     identity.className = 'contact-identity';
     const name = document.createElement('strong');
@@ -188,11 +187,24 @@
     actions.className = 'contact-actions';
     const toggle = document.createElement('button');
     toggle.type = 'button';
-    toggle.className = `contact-send-toggle ${enabled ? 'is-enabled' : 'is-disabled'}`;
-    toggle.setAttribute('aria-pressed', String(enabled));
-    toggle.setAttribute('aria-label', `${enabled ? 'Desabilitar' : 'Habilitar'} envio para ${name.textContent}`);
-    toggle.textContent = enabled ? 'Envio ✔️' : 'Envio ❌';
-    toggle.addEventListener('click', () => setContactEnabled(category, contact, !enabled));
+    toggle.className = 'contact-send-toggle';
+    const renderStatus = () => {
+      const enabled = contact.enabled !== false;
+      item.classList.toggle('is-disabled', !enabled);
+      toggle.classList.toggle('is-enabled', enabled);
+      toggle.classList.toggle('is-disabled', !enabled);
+      toggle.setAttribute('aria-pressed', String(enabled));
+      toggle.setAttribute('aria-label', `${enabled ? 'Desabilitar' : 'Habilitar'} envio para ${name.textContent}`);
+      toggle.textContent = enabled ? 'Envio ✔️' : 'Envio ❌';
+    };
+    renderStatus();
+    toggle.addEventListener('click', async () => {
+      const saved = await setContactEnabled(category, contact, contact.enabled === false);
+      if (!saved) return;
+      Object.assign(contact, saved);
+      renderStatus();
+      onStatusChange();
+    });
     const remove = document.createElement('button');
     remove.type = 'button';
     remove.className = 'icon-action danger-action';
@@ -307,10 +319,17 @@
     company.append(name, cnpj);
     const count = document.createElement('span');
     count.className = 'category-count';
-    const enabledTotal = category.contacts.filter((contact) => contact.enabled !== false).length;
-    count.textContent = enabledTotal === category.contacts.length
-      ? `${enabledTotal} destinatário${enabledTotal === 1 ? '' : 's'}`
-      : `${enabledTotal} de ${category.contacts.length} com envio`;
+    const updateCounts = () => {
+      const enabledTotal = category.contacts.filter((contact) => contact.enabled !== false).length;
+      count.textContent = enabledTotal === category.contacts.length
+        ? `${enabledTotal} destinatário${enabledTotal === 1 ? '' : 's'}`
+        : `${enabledTotal} de ${category.contacts.length} com envio`;
+      elements.contactCount.textContent = String(state.categories.reduce(
+        (total, item) => total + item.contacts.filter((contact) => contact.enabled !== false).length,
+        0
+      ));
+    };
+    updateCounts();
     summary.append(company, count);
 
     const content = document.createElement('div');
@@ -318,7 +337,7 @@
     const contacts = document.createElement('ul');
     contacts.className = 'contact-list';
     if (category.contacts.length) {
-      contacts.append(...category.contacts.map((contact) => createContactItem(category, contact)));
+      contacts.append(...category.contacts.map((contact) => createContactItem(category, contact, updateCounts)));
     } else {
       const empty = document.createElement('li');
       empty.className = 'contact-list-empty';
@@ -367,7 +386,7 @@
     elements.categoryEmpty.hidden = state.categories.length > 0;
     elements.companyCount.textContent = String(payload.totals?.categories ?? state.categories.length);
     elements.contactCount.textContent = String(payload.totals?.contacts ?? state.categories.reduce(
-      (total, category) => total + category.contacts.length,
+      (total, category) => total + category.contacts.filter((contact) => contact.enabled !== false).length,
       0
     ));
   };

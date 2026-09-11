@@ -103,7 +103,7 @@ test('interpreta os contatos de xGrupo retornados pela Brudam', () => {
     firstName: 'MARIA SILVA',
     lastName: '',
     email: 'maria@example.com',
-    enabled: true
+    enabled: false
   }]);
 });
 
@@ -953,6 +953,8 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(source, /Envio ✔️/);
   assert.match(source, /Envio ❌/);
   assert.match(source, /method: 'PATCH'/);
+  assert.match(source, /Object\.assign\(contact, saved\)/);
+  assert.doesNotMatch(source, /const setContactEnabled[\s\S]*?await loadCategories\(\);[\s\S]*?const syncContacts/);
   assert.match(apiSource, /query\.route === 'webhook'/);
   assert.match(apiSource, /query\.route === 'contacts-sync'/);
   assert.match(apiSource, /req\.method === 'GET' \|\| req\.method === 'HEAD'/);

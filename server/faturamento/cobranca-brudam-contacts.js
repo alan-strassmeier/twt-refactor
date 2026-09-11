@@ -44,7 +44,7 @@ const contactsFromCompany = (company) => groupContacts(company).map((contact) =>
   firstName: String(field(contact, ['xNome', 'nome']) || '').trim(),
   lastName: '',
   email: emailKey(field(contact, ['email'])),
-  enabled: true
+  enabled: false
 })).filter((contact) => contact.email);
 
 const fetchCompany = async (cnpj, get = authenticatedGet) => {

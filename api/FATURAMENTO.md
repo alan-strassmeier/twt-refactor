@@ -115,7 +115,8 @@ DOCCOB e filtrar logs por fatura, data e CNPJ.
 Ao cadastrar uma empresa, o sistema consulta `GET /cadastro/empresas` da
 Brudam pelo CNPJ e importa os contatos com e-mail existentes em `xGrupo`. O
 botão **Atualizar Contatos** repete a consulta e inclui somente os e-mails que
-ainda não estão na lista, preservando nomes e escolhas locais. O controle
+ainda não estão na lista, inicialmente com o envio desabilitado, preservando
+nomes e escolhas dos contatos que já existiam. O controle
 **Envio ✔️ / Envio ❌** determina se cada contato recebe as cobranças; contatos
 desabilitados permanecem cadastrados, mas não entram na fila de destinatários.
 
