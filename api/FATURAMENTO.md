@@ -88,7 +88,7 @@ ZOHO_SMTP_USER=faturamento@twt.com.br
 ZOHO_SMTP_PASSWORD=
 ZOHO_SMTP_FROM_EMAIL=faturamento@twt.com.br
 ZOHO_SMTP_FROM_NAME=TWT LOG
-BILLING_ALERT_COPY=adriano@twt.com.br
+BILLING_ALERT_EMAIL=adriano@twt.com.br
 BILLING_CRON_SECRET=
 BILLING_EMAIL_MAX_INVOICES_PER_RUN=12
 BILLING_EMAIL_SCAN_PAGES_PER_RUN=2
@@ -138,7 +138,12 @@ Em cada execução o servidor:
 3. consulta as faturas em aberto com vencimento dois dias depois e envia o
    aviso **Perto do vencimento**;
 4. consulta faturas vencidas ainda em aberto e envia o aviso de vencida;
-5. copia `BILLING_ALERT_COPY` nos avisos próximos do vencimento e vencidos.
+5. envia uma mensagem separada para `BILLING_ALERT_EMAIL` nos avisos próximos
+   do vencimento e vencidos, sem incluir o endereço em cópia nas mensagens dos
+   clientes.
+
+O nome antigo `BILLING_ALERT_COPY` continua aceito para não interromper
+ambientes que já o configuraram, mas `BILLING_ALERT_EMAIL` é o nome recomendado.
 
 Cada combinação de evento, fatura e destinatário é reservada no Redis antes do
 envio. Atualizar a página ou executar a rotina novamente não envia uma segunda

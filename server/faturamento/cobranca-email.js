@@ -37,7 +37,9 @@ const zohoConfig = (env = process.env) => {
   const password = String(env.ZOHO_SMTP_PASSWORD || '').trim();
   const fromEmail = String(env.ZOHO_SMTP_FROM_EMAIL || user).trim();
   const fromName = String(env.ZOHO_SMTP_FROM_NAME || 'TWT LOG').trim();
-  const alertCopy = String(env.BILLING_ALERT_COPY || 'adriano@twt.com.br').trim();
+  const alertEmail = String(
+    env.BILLING_ALERT_EMAIL || env.BILLING_ALERT_COPY || 'adriano@twt.com.br'
+  ).trim();
   if (!host || !Number.isInteger(port) || port < 1 || port > 65535 || !user || !password || !fromEmail) {
     throw Object.assign(new Error('Envio de cobrança pelo Zoho não configurado.'), {
       statusCode: 503,
@@ -52,7 +54,9 @@ const zohoConfig = (env = process.env) => {
     password,
     fromEmail,
     fromName: fromName || 'TWT LOG',
-    alertCopy
+    alertEmail,
+    // Mantido para instalações que ainda usam o nome anterior da variável.
+    alertCopy: alertEmail
   };
 };
 
@@ -161,13 +165,11 @@ const sendBillingEmail = async ({
   config = zohoConfig()
 }) => {
   const activeTransport = transport || createZohoTransport(config);
-  const copyAlert = event === EVENT_TYPES.reminder || event === EVENT_TYPES.overdue;
   const info = await activeTransport.sendMail({
     disableFileAccess: true,
     disableUrlAccess: true,
     from: { name: config.fromName, address: config.fromEmail },
     to: { name: [contact.firstName, contact.lastName].filter(Boolean).join(' '), address: contact.email },
-    ...(copyAlert && config.alertCopy ? { cc: config.alertCopy } : {}),
     subject: billingSubject(event, data),
     text: billingText(event, data, contact),
     html: billingHtml(event, data, contact),
