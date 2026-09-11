@@ -379,6 +379,41 @@ test('fatura TED envia somente a fatura e não tenta gerar boleto', async () => 
   assert.equal(context.summary.sent, 1);
 });
 
+test('não consulta novamente na Brudam uma fatura inicial já enviada', async () => {
+  let invoiceLookups = 0;
+  const removed = [];
+  const context = processorContext({
+    fetchInvoicePdfData: async () => {
+      invoiceLookups += 1;
+      throw new Error('A consulta não deveria ser executada.');
+    },
+    getDelivery: async (event, invoiceId, email) => (
+      event === EVENT_TYPES.initial
+      && invoiceId === '11779'
+      && email === 'maria@example.com'
+        ? { state: 'sent', sentAt: '2026-09-11T15:00:00.000Z' }
+        : null
+    ),
+    removePending: async (invoiceId) => removed.push(String(invoiceId))
+  });
+  context.pendingByInvoice.set('11779', { invoiceId: '11779', reason: 'processing_error' });
+
+  await processInvoiceEvent({
+    event: EVENT_TYPES.initial,
+    invoice: {
+      id: '11779',
+      clientDocument: '41870054000276',
+      client: 'JIMI BRASIL'
+    },
+    context
+  });
+
+  assert.equal(invoiceLookups, 0);
+  assert.deepEqual(removed, ['11779']);
+  assert.equal(context.pendingByInvoice.has('11779'), false);
+  assert.equal(context.summary.alreadySent, 1);
+});
+
 test('envia aviso de vencimento separado para o cliente e para Adriano', async () => {
   const recipients = [];
   const context = processorContext({
