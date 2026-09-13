@@ -63,6 +63,11 @@
     nfseChoice: document.getElementById('nfseChoice'),
     nfseChoiceTitle: document.getElementById('nfseChoiceTitle'),
     nfseChoiceDescription: document.getElementById('nfseChoiceDescription'),
+    doccobMissingModal: document.getElementById('doccobMissingModal'),
+    doccobMissingBackdrop: document.getElementById('doccobMissingBackdrop'),
+    doccobMissingClose: document.getElementById('doccobMissingClose'),
+    doccobMissingConfirm: document.getElementById('doccobMissingConfirm'),
+    doccobMissingInvoice: document.getElementById('doccobMissingInvoice'),
     nfseConfirmModal: document.getElementById('nfseConfirmModal'),
     nfseConfirmBackdrop: document.getElementById('nfseConfirmBackdrop'),
     nfseConfirmClose: document.getElementById('nfseConfirmClose'),
@@ -365,6 +370,22 @@
     modalPreviousFocus = null;
   };
 
+  const closeDoccobMissingModal = () => {
+    if (elements.doccobMissingModal.hidden) return;
+    elements.doccobMissingModal.hidden = true;
+    document.body.classList.remove('modal-open');
+    modalPreviousFocus?.focus();
+    modalPreviousFocus = null;
+  };
+
+  const showDoccobMissingModal = (invoiceId, trigger) => {
+    modalPreviousFocus = trigger;
+    elements.doccobMissingInvoice.textContent = `Fatura ${invoiceId}`;
+    elements.doccobMissingModal.hidden = false;
+    document.body.classList.add('modal-open');
+    elements.doccobMissingClose.focus();
+  };
+
   const closeNfseConfirm = (returnToDocuments = true) => {
     if (elements.nfseConfirmModal.hidden) return;
     elements.nfseConfirmModal.hidden = true;
@@ -381,6 +402,7 @@
   const closeAllDocumentModals = () => {
     elements.nfseConfirmModal.hidden = true;
     elements.documentModal.hidden = true;
+    elements.doccobMissingModal.hidden = true;
     document.body.classList.remove('modal-open');
     modalPreviousFocus?.focus();
     modalPreviousFocus = null;
@@ -671,6 +693,10 @@
       const payload = await requestJson(
         `/api/faturamento/documentos?id=${encodeURIComponent(invoiceId)}`
       );
+      if (payload.doccobFound === false) {
+        showDoccobMissingModal(invoiceId, trigger);
+        return;
+      }
       if (payload.hasCte || payload.bankSlipEligible || payload.nfseEligible) {
         showDocumentModal(invoiceId, {
           hasCte: Boolean(payload.hasCte),
@@ -1436,6 +1462,9 @@
 
   elements.documentModalClose.addEventListener('click', closeDocumentModal);
   elements.documentModalBackdrop.addEventListener('click', closeDocumentModal);
+  elements.doccobMissingClose.addEventListener('click', closeDoccobMissingModal);
+  elements.doccobMissingBackdrop.addEventListener('click', closeDoccobMissingModal);
+  elements.doccobMissingConfirm.addEventListener('click', closeDoccobMissingModal);
   elements.bankSlipChoice.addEventListener('click', generateBankSlip);
   elements.nfseChoice.addEventListener('click', prepareNfse);
   elements.nfseIssueButton.addEventListener('click', issueNfse);
@@ -1463,6 +1492,7 @@
     if (event.key !== 'Escape') return;
     if (!elements.nfseConfirmModal.hidden) closeNfseConfirm(true);
     else if (!elements.documentModal.hidden) closeDocumentModal();
+    else if (!elements.doccobMissingModal.hidden) closeDoccobMissingModal();
     else if (!elements.invoiceDetail.hidden) closeInvoiceDetail();
   });
 

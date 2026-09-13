@@ -534,7 +534,14 @@ const requestExactInvoice = async (invoiceId) => {
   });
 };
 
-const fetchInvoicePdfData = async (invoiceId) => {
+const ensureDoccobForPdf = (doccob) => {
+  if (doccob) return doccob;
+  throw Object.assign(new Error(
+    'O DOCCOB desta fatura ainda não foi localizado. Aguarde o recebimento antes de gerar o PDF.'
+  ), { statusCode: 409, code: 'DOCCOB_NOT_FOUND' });
+};
+
+const fetchInvoicePdfData = async (invoiceId, options = {}) => {
   if (!/^\d{1,20}$/.test(String(invoiceId || '')) || Number(invoiceId) < 1) {
     throw Object.assign(new Error('Número da fatura inválido.'), { statusCode: 422 });
   }
@@ -565,6 +572,7 @@ const fetchInvoicePdfData = async (invoiceId) => {
       error: error.message
     });
   }
+  if (options.requireDoccob) ensureDoccobForPdf(doccob);
 
   const issuerDocument = digits(doccob?.invoice?.issuerCnpj || COMPANY.document);
   let issuerRecord = null;
@@ -630,6 +638,7 @@ const fetchInvoicePdfData = async (invoiceId) => {
     client,
     issuer,
     shipments,
+    doccobFound: Boolean(doccob),
     detailAvailable: shipments.some((shipment) => shipment.minute !== '-' || shipment.cte !== '-'),
     source: doccobDocuments.length ? 'doccob' : 'brudam'
   };
@@ -1109,6 +1118,7 @@ module.exports = {
   resolveDoccobTransportDetail,
   shipmentFromDetail,
   requestExactInvoice,
+  ensureDoccobForPdf,
   fetchInvoicePdfData,
   buildInvoicePdf
 };

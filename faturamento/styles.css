@@ -1109,6 +1109,32 @@ body.modal-open {
   color: var(--muted);
 }
 
+.doccob-missing-panel {
+  width: min(500px, 100%);
+}
+
+.doccob-missing-notice {
+  display: grid;
+  gap: 6px;
+  margin-top: 20px;
+  padding: 16px;
+  border: 1px solid #f0d29b;
+  border-radius: 14px;
+  color: #815716;
+  background: #fff8e9;
+  line-height: 1.45;
+}
+
+.doccob-missing-notice strong {
+  color: var(--navy-900);
+}
+
+.doccob-missing-confirm {
+  display: block;
+  min-width: 140px;
+  margin: 20px auto 0;
+}
+
 .document-modal-actions {
   display: grid;
   grid-template-columns: repeat(2, 1fr);

@@ -7,9 +7,9 @@
   <meta name="theme-color" content="#112a40">
   <title>Faturamento | TWT Airpack</title>
   <link rel="icon" href="/favicon.ico">
-  <link rel="stylesheet" href="/faturamento/styles.css?v=12">
+  <link rel="stylesheet" href="/faturamento/styles.css?v=13">
   <script src="/faturamento/sort.js?v=1" defer></script>
-  <script src="/faturamento/app.js?v=15" defer></script>
+  <script src="/faturamento/app.js?v=16" defer></script>
   <script src="/faturamento/cobranca.js?v=2" defer></script>
 </head>
 <body>
@@ -425,6 +425,27 @@
           <span><strong id="nfseChoiceTitle">Gerar NFS-e</strong><small id="nfseChoiceDescription">Nota fiscal de serviço da TWT</small></span>
         </button>
       </div>
+    </section>
+  </div>
+  <div class="document-modal" id="doccobMissingModal" hidden>
+    <button class="document-modal-backdrop" id="doccobMissingBackdrop" type="button"
+      aria-label="Fechar aviso de DOCCOB pendente"></button>
+    <section class="document-modal-panel doccob-missing-panel" role="dialog" aria-modal="true"
+      aria-labelledby="doccobMissingTitle" aria-describedby="doccobMissingDescription">
+      <button class="document-modal-close" id="doccobMissingClose" type="button"
+        aria-label="Fechar aviso de DOCCOB pendente">
+        <svg aria-hidden="true" viewBox="0 0 24 24" focusable="false">
+          <path d="M6 6l12 12M18 6L6 18"></path>
+        </svg>
+      </button>
+      <span class="document-modal-eyebrow">Documento pendente</span>
+      <h2 id="doccobMissingTitle">DOCCOB não localizado</h2>
+      <p id="doccobMissingDescription">O PDF não pode ser gerado porque os dados completos da fatura ainda não foram recebidos.</p>
+      <div class="doccob-missing-notice">
+        <strong id="doccobMissingInvoice">Fatura</strong>
+        <span>Aguarde o envio do DOCCOB pela Brudam ao SFTP. Depois, tente visualizar novamente.</span>
+      </div>
+      <button class="button button-primary doccob-missing-confirm" id="doccobMissingConfirm" type="button">Entendi</button>
     </section>
   </div>
   <div class="document-modal" id="nfseConfirmModal" hidden>

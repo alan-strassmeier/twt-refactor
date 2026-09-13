@@ -182,6 +182,7 @@ test('coluna Visualizar oferece Fatura, DACTE, boleto e NFS-e conforme o emitent
   assert.match(source, /\/api\/faturamento\/dacte-pdf\?id=/);
   assert.match(source, /\/api\/faturamento\/boleto-pdf\?id=/);
   assert.match(source, /if \(payload\.hasCte \|\| payload\.bankSlipEligible \|\| payload\.nfseEligible\)/);
+  assert.match(source, /if \(payload\.doccobFound === false\)/);
   assert.match(source, /method: 'POST'/);
   assert.match(source, /\/api\/faturamento\/boleto/);
   assert.match(source, /\/api\/faturamento\/nfse/);
@@ -199,6 +200,8 @@ test('coluna Visualizar oferece Fatura, DACTE, boleto e NFS-e conforme o emitent
   assert.match(html, /id="bankSlipChoice"[^>]*hidden/);
   assert.match(html, /id="nfseChoice"[^>]*hidden/);
   assert.match(html, /id="nfseConfirmModal"[^>]*hidden/);
+  assert.match(html, /id="doccobMissingModal"[^>]*hidden/);
+  assert.match(html, /DOCCOB não localizado/);
   assert.match(html, /id="bankSlipBankIcon"/);
   assert.match(html, />Fatura<\/strong>/);
   assert.match(html, />DACTE<\/strong>/);
@@ -207,10 +210,13 @@ test('coluna Visualizar oferece Fatura, DACTE, boleto e NFS-e conforme o emitent
   assert.match(html, /Conferindo faturas e empresas/);
   const boletoApi = readFileSync(require.resolve('../api/faturamento/boleto.js'), 'utf8');
   const documentosApi = readFileSync(require.resolve('../api/faturamento/documentos.js'), 'utf8');
+  const faturaPdfApi = readFileSync(require.resolve('../api/faturamento/fatura-pdf.js'), 'utf8');
   assert.match(boletoApi, /hasSameOrigin\(req\)/);
   assert.match(boletoApi, /sessionFromRequest\(req\)/);
   assert.match(documentosApi, /requiresTedDocPayment/);
   assert.match(documentosApi, /bankSlipEligible: Boolean\(bank\) && !tedDocPayment/);
+  assert.match(documentosApi, /doccobFound: false/);
+  assert.match(faturaPdfApi, /requireDoccob: true/);
 });
 
 test('centraliza o X dentro do botão de fechar o modal', () => {
@@ -225,8 +231,8 @@ test('centraliza o X dentro do botão de fechar o modal', () => {
   assert.match(closeButton, /padding:\s*0/);
   assert.match(closeButton, /font-size:\s*0/);
   assert.match(closeButton, /\.document-modal-close svg/);
-  assert.equal((html.match(/class="document-modal-close"/g) || []).length, 3);
-  assert.equal((html.match(/<svg aria-hidden="true" viewBox="0 0 24 24"/g) || []).length, 3);
+  assert.equal((html.match(/class="document-modal-close"/g) || []).length, 4);
+  assert.equal((html.match(/<svg aria-hidden="true" viewBox="0 0 24 24"/g) || []).length, 4);
   assert.doesNotMatch(html, />×<\/button>/);
 });
 
