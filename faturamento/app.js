@@ -91,8 +91,10 @@
     invoiceDetailContent: document.getElementById('invoiceDetailContent'),
     invoiceDetailSummary: document.getElementById('invoiceDetailSummary'),
     invoiceControlGrid: document.getElementById('invoiceControlGrid'),
+    invoiceDetailActionMessage: document.getElementById('invoiceDetailActionMessage'),
+    invoiceDetailResend: document.getElementById('invoiceDetailResend'),
     invoiceDetailDocuments: document.getElementById('invoiceDetailDocuments'),
-    invoiceDetailLogs: document.getElementById('invoiceDetailLogs'),
+    invoiceDetailWhatsApp: document.getElementById('invoiceDetailWhatsApp'),
     invoiceTimeline: document.getElementById('invoiceTimeline'),
     invoiceDetailError: document.getElementById('invoiceDetailError')
   };
@@ -347,6 +349,7 @@
   let modalPreviousFocus = null;
   let invoiceDetailPreviousFocus = null;
   let invoiceDetailId = '';
+  let invoiceDetailWhatsappMessage = '';
 
   const invoicePdfUrl = (invoiceId) =>
     `/api/faturamento/fatura-pdf?id=${encodeURIComponent(invoiceId)}`;
@@ -815,7 +818,13 @@
       return item;
     }));
     elements.invoiceDetailDocuments.disabled = false;
-    elements.invoiceDetailLogs.disabled = false;
+    const actions = payload.actions || {};
+    elements.invoiceDetailResend.disabled = actions.canResend === false;
+    elements.invoiceDetailResend.title = actions.resendBlockedReason || '';
+    invoiceDetailWhatsappMessage = String(actions.whatsappMessage || '');
+    elements.invoiceDetailWhatsApp.disabled = !invoiceDetailWhatsappMessage;
+    elements.invoiceDetailActionMessage.textContent = '';
+    elements.invoiceDetailActionMessage.dataset.tone = '';
     elements.invoiceDetailLoading.hidden = true;
     elements.invoiceDetailContent.hidden = false;
   };
@@ -828,6 +837,8 @@
     elements.invoiceDetailLoading.hidden = false;
     elements.invoiceDetailContent.hidden = true;
     elements.invoiceDetailError.hidden = true;
+    elements.invoiceDetailActionMessage.textContent = '';
+    invoiceDetailWhatsappMessage = '';
     elements.invoiceDetail.hidden = false;
     document.body.classList.add('modal-open');
     elements.invoiceDetailClose.focus();
@@ -1187,15 +1198,18 @@
     renderAgingSummary(payload.agingBuckets);
 
     const totalPending = Number(payload.totalPending) || 0;
+    const totalOverdue = Number(payload.totalOverdue) || 0;
     const largestDebtor = payload.largestDebtor;
     elements.chartTotalPending.textContent = currency.format(totalPending);
     elements.invoiceCountLabel.textContent = 'Faturas pendentes';
     elements.invoiceCount.textContent = String(payload.invoiceCount || 0);
-    elements.totalAmountLabel.textContent = 'Empresas devedoras';
-    elements.totalAmount.textContent = String(payload.companyCount || debtors.length);
-    elements.paidAmountLabel.textContent = 'Total pendente';
-    elements.paidAmount.textContent = currency.format(totalPending);
-    elements.balanceAmountLabel.textContent = 'Maior devedor';
+    elements.totalAmountLabel.textContent = 'Total pendente';
+    elements.totalAmount.textContent = currency.format(totalPending);
+    elements.paidAmountLabel.textContent = 'Total vencido';
+    elements.paidAmount.textContent = currency.format(totalOverdue);
+    elements.balanceAmountLabel.textContent = largestDebtor
+      ? `Maior saldo · ${largestDebtor.name || formatCnpj(largestDebtor.cnpj)}`
+      : 'Maior saldo';
     elements.balanceAmount.textContent = largestDebtor
       ? currency.format(largestDebtor.value)
       : currency.format(0);
@@ -1481,12 +1495,56 @@
     closeInvoiceDetail();
     openInvoiceDocuments(invoiceId, trigger);
   });
-  elements.invoiceDetailLogs.addEventListener('click', () => {
-    const invoiceId = invoiceDetailId;
-    closeInvoiceDetail();
-    window.dispatchEvent(new CustomEvent('billing:navigate-logs', {
-      detail: { invoiceId }
-    }));
+  elements.invoiceDetailResend.addEventListener('click', async () => {
+    if (elements.invoiceDetailResend.disabled || !invoiceDetailId) return;
+    if (!window.confirm(`Reenviar agora a cobrança da fatura ${invoiceDetailId} para todos os destinatários ativos?`)) return;
+    const originalText = elements.invoiceDetailResend.textContent;
+    elements.invoiceDetailResend.disabled = true;
+    elements.invoiceDetailResend.textContent = 'Reenviando…';
+    elements.invoiceDetailActionMessage.textContent = '';
+    try {
+      const result = await requestJson('/api/faturamento/cobranca?route=resend', {
+        method: 'POST',
+        body: JSON.stringify({ invoiceId: invoiceDetailId })
+      });
+      elements.invoiceDetailActionMessage.dataset.tone = 'success';
+      elements.invoiceDetailActionMessage.textContent = result.message;
+      const refreshed = await requestJson(
+        `/api/faturamento/cobranca?route=invoice-detail&id=${encodeURIComponent(invoiceDetailId)}`
+      );
+      if (!elements.invoiceDetail.hidden) renderInvoiceDetail(refreshed);
+      elements.invoiceDetailActionMessage.dataset.tone = 'success';
+      elements.invoiceDetailActionMessage.textContent = result.message;
+    } catch (error) {
+      elements.invoiceDetailActionMessage.dataset.tone = 'error';
+      elements.invoiceDetailActionMessage.textContent = error.message;
+      elements.invoiceDetailResend.disabled = false;
+    } finally {
+      elements.invoiceDetailResend.textContent = originalText;
+    }
+  });
+  elements.invoiceDetailWhatsApp.addEventListener('click', async () => {
+    if (!invoiceDetailWhatsappMessage) return;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(invoiceDetailWhatsappMessage);
+      } else {
+        const field = document.createElement('textarea');
+        field.value = invoiceDetailWhatsappMessage;
+        field.setAttribute('readonly', '');
+        field.style.position = 'fixed';
+        field.style.opacity = '0';
+        document.body.appendChild(field);
+        field.select();
+        document.execCommand('copy');
+        field.remove();
+      }
+      elements.invoiceDetailActionMessage.dataset.tone = 'success';
+      elements.invoiceDetailActionMessage.textContent = 'Mensagem copiada. Abra o WhatsApp e cole no atendimento do cliente.';
+    } catch {
+      elements.invoiceDetailActionMessage.dataset.tone = 'error';
+      elements.invoiceDetailActionMessage.textContent = 'Não foi possível copiar automaticamente a mensagem.';
+    }
   });
   window.addEventListener('billing:open-documents', (event) => {
     const invoiceId = String(event.detail?.invoiceId || '').replace(/\D/g, '');

@@ -2029,9 +2029,30 @@ body.modal-open {
 }
 
 .invoice-detail-actions {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
-  margin: 18px 0 26px;
+  margin: 8px 0 26px;
+}
+
+.invoice-detail-actions .button {
+  min-height: 44px;
+  white-space: normal;
+}
+
+.invoice-detail-action-message {
+  min-height: 20px;
+  margin: 14px 0 0;
+  font-size: .8rem;
+  font-weight: 750;
+}
+
+.invoice-detail-action-message[data-tone="success"] {
+  color: var(--success);
+}
+
+.invoice-detail-action-message[data-tone="error"] {
+  color: var(--danger);
 }
 
 .invoice-timeline h3 { margin: 0 0 16px; }
@@ -2134,11 +2155,13 @@ body.modal-open {
 }
 
 @media (max-width: 620px) {
+  .invoice-detail-actions {
+    grid-template-columns: 1fr;
+  }
   .invoice-detail-panel { padding: 28px 20px 36px; }
   .invoice-detail-close { top: 18px; right: 18px; }
   .invoice-detail-summary,
   .invoice-control-grid { grid-template-columns: 1fr; }
-  .invoice-detail-actions { flex-direction: column; }
   .invoice-detail-actions .button { width: 100%; }
 }
 

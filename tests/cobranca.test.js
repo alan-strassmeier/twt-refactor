@@ -48,7 +48,8 @@ const {
   scanInvoices,
   pendingRecord,
   isTerminalBillingFailure,
-  processInvoiceEvent
+  processInvoiceEvent,
+  resendBillingInvoice
 } = require('../server/faturamento/cobranca-processor');
 const {
   constantTimeEqual,
@@ -57,7 +58,8 @@ const {
 const {
   invoiceControl,
   buildUnifiedIssues,
-  buildInvoiceTimeline
+  buildInvoiceTimeline,
+  billingWhatsappText
 } = require('../server/faturamento/invoice-control');
 
 const invoiceData = (payment = null) => ({
@@ -382,6 +384,23 @@ test('envia ao ZeptoMail uma referência determinística sem expor o e-mail', as
   assert.equal(calls[0].headers['X-TM-CLIENT-REF'], reference);
   assert.match(reference, /^twt-initial-11756-[a-f0-9]{16}$/);
   assert.doesNotMatch(reference, /maria|example/i);
+  assert.notEqual(
+    deliveryReference(EVENT_TYPES.initial, '11756', 'maria@example.com', 'reenvio-1'),
+    deliveryReference(EVENT_TYPES.initial, '11756', 'maria@example.com', 'reenvio-2')
+  );
+});
+
+test('monta mensagem de WhatsApp adequada para uma fatura vencida', () => {
+  const message = billingWhatsappText({
+    id: '11756',
+    dueAt: '2026-09-10',
+    balance: 2193.61,
+    client: 'CLIENTE TESTE'
+  }, new Date('2026-09-13T12:00:00Z'));
+  assert.match(message, /fatura 11756/);
+  assert.match(message, /10\/09\/2026/);
+  assert.match(message, /R\$\s*2\.193,61/);
+  assert.match(message, /previsão de pagamento/);
 });
 
 test('varre páginas e calcula o dia de lembrete sem depender do fuso do servidor', async () => {
@@ -936,6 +955,80 @@ test('endpoint do cron exige segredo longo e compara em tempo constante', () => 
   }), false);
 });
 
+test('reenvio manual ignora a trava do envio anterior e cria referência exclusiva', async () => {
+  const sent = [];
+  const references = [];
+  const savedDeliveries = [];
+  const fixedNow = () => new Date('2026-09-13T12:00:00.000Z');
+  const result = await resendBillingInvoice('11756', {
+    runId: 'reenvio-manual-1',
+    now: fixedNow,
+    currentTime: fixedNow(),
+    transport: {},
+    emailConfig: {
+      fromName: 'TWT',
+      fromEmail: 'faturamento@twt.com.br',
+      alertEmail: ''
+    },
+    fetchInvoice: async () => ({
+      invoices: [{
+        id: '11756',
+        clientDocument: '11280282000144',
+        client: 'CLIENTE TESTE',
+        issuedAt: '2026-09-01',
+        dueAt: '2026-09-30',
+        balance: 100,
+        status: 0,
+        statusLabel: 'Em aberto'
+      }]
+    }),
+    listPending: async () => [],
+    findDoccobForInvoice: async () => ({}),
+    fetchInvoicePdfData: async () => invoiceData({ type: 'ted_doc' }),
+    buildInvoicePdf: async () => Buffer.from('fatura'),
+    getCategory: async () => ({
+      contacts: [{ id: '1', firstName: 'Maria', lastName: '', email: 'maria@example.com' }]
+    }),
+    getDelivery: async () => ({ state: 'sent' }),
+    claimDelivery: async () => false,
+    saveDelivery: async (...args) => savedDeliveries.push(args),
+    saveDeliveryReference: async (reference, record) => references.push({ reference, record }),
+    sendBillingEmail: async (input) => {
+      sent.push(input);
+      return { messageId: 'm-reenvio', accepted: [input.contact.email], rejected: [] };
+    },
+    addLog: async () => {},
+    removePending: async () => {}
+  });
+  assert.equal(result.sent, 1);
+  assert.equal(sent.length, 1);
+  assert.match(savedDeliveries[0][0], /^manual_/);
+  assert.equal(savedDeliveries[0][3].manualResend, true);
+  assert.equal(references[0].record.manualResend, true);
+  assert.match(references[0].reference, /^twt-initial-11756-[a-f0-9]{16}$/);
+});
+
+test('reenvio manual não inicia envio sem destinatário ativo', async () => {
+  await assert.rejects(() => resendBillingInvoice('11756', {
+    fetchInvoice: async () => ({
+      invoices: [{
+        id: '11756',
+        clientDocument: '11280282000144',
+        balance: 100,
+        status: 0,
+        statusLabel: 'Em aberto'
+      }]
+    }),
+    getCategory: async () => ({
+      contacts: [{ email: 'financeiro@example.com', enabled: false }]
+    })
+  }), (error) => {
+    assert.equal(error.statusCode, 409);
+    assert.match(error.message, /destinatário ativo/i);
+    return true;
+  });
+});
+
 test('mantém estados financeiro, documental, de cobrança e pagamento independentes', () => {
   const invoice = {
     id: '11756',
@@ -1048,6 +1141,7 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   const root = path.resolve(__dirname, '..');
   const html = fs.readFileSync(path.join(root, 'faturamento', 'index.html'), 'utf8');
   const source = fs.readFileSync(path.join(root, 'faturamento', 'cobranca.js'), 'utf8');
+  const appSource = fs.readFileSync(path.join(root, 'faturamento', 'app.js'), 'utf8');
   const apiSource = fs.readFileSync(path.join(root, 'api', 'faturamento', 'cobranca.js'), 'utf8');
   assert.match(html, /data-billing-area="collection"/);
   assert.match(html, /id="categoryForm"/);
@@ -1058,6 +1152,9 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(html, /id="emailLogModal"/);
   assert.match(html, /id="emailLogBody"/);
   assert.match(html, /id="invoiceDetail"/);
+  assert.match(html, /id="invoiceDetailResend"/);
+  assert.match(html, /id="invoiceDetailDocuments"/);
+  assert.match(html, /id="invoiceDetailWhatsApp"/);
   assert.match(html, /id="pendingIssueSummary"/);
   assert.match(html, /data-collection-section="collectionContactsSection"/);
   assert.match(html, /data-collection-section="pendingDoccobSection"/);
@@ -1084,9 +1181,12 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(source, /className = 'pending-summary-filter'/);
   assert.match(source, /aria-pressed/);
   assert.match(source, /record\.priority === 'critical'/);
+  assert.match(appSource, /route=resend/);
+  assert.match(appSource, /navigator\.clipboard/);
   assert.match(apiSource, /query\.route === 'webhook'/);
   assert.match(apiSource, /query\.route === 'contacts-sync'/);
   assert.match(apiSource, /query\.route === 'invoice-detail'/);
+  assert.match(apiSource, /query\.route === 'resend'/);
   assert.match(apiSource, /req\.method === 'GET' \|\| req\.method === 'HEAD'/);
   assert.equal(fs.existsSync(path.join(root, 'api', 'faturamento', 'cobranca.js')), true);
 });

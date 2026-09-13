@@ -3,7 +3,9 @@ const {
   buildInvoiceQuery,
   invoiceListFromPayload,
   normalizeVisibleInvoices,
-  invoiceMatchesQuery
+  invoiceMatchesQuery,
+  fetchInvoices,
+  isPendingInvoice
 } = require('./brudam');
 const { findDoccobForInvoice } = require('./r2-doccob');
 const { fetchInvoicePdfData, buildInvoicePdf } = require('./invoice-pdf');
@@ -435,10 +437,20 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
   for (const contact of unsentContacts) {
     const internalAlert = contact.id === '__alerta_interno__';
     const contactName = [contact.firstName, contact.lastName].filter(Boolean).join(' ');
-    const clientReference = deliveryReference(event, invoice.id, contact.email);
+    const deliveryEvent = context.deliveryEvent ? context.deliveryEvent(event) : event;
+    const clientReference = (context.deliveryReference || deliveryReference)(
+      event,
+      invoice.id,
+      contact.email
+    );
+    const manualMetadata = context.manualResend
+      ? { manualResend: true, manualAttemptId: context.runId }
+      : {};
     const deliveryMetadata = internalAlert
-      ? { recipientRole: 'internal_alert' }
-      : event === EVENT_TYPES.initial ? {} : { alertDeliveryMode: 'separate' };
+      ? { recipientRole: 'internal_alert', ...manualMetadata }
+      : event === EVENT_TYPES.initial
+        ? manualMetadata
+        : { alertDeliveryMode: 'separate', ...manualMetadata };
     const emailPreview = billingEmailPreview({
       event,
       data,
@@ -447,7 +459,7 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
       bankSlipPdf,
       config: context.emailConfig
     });
-    const claimed = await context.claimDelivery(event, invoice.id, contact.email, {
+    const claimed = await context.claimDelivery(deliveryEvent, invoice.id, contact.email, {
       state: 'processing',
       createdAt: now,
       clientReference,
@@ -459,13 +471,15 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
     }
     try {
       await context.saveDeliveryReference(clientReference, {
-        event,
+        event: deliveryEvent,
+        billingEvent: event,
         invoiceId: String(invoice.id),
         clientCnpj: resolvedCnpj,
         clientName: data.client?.tradeName || data.client?.name || invoice.client,
         contactName,
         email: contact.email,
         emailPreview,
+        ...manualMetadata,
         ...(internalAlert ? { recipientRole: 'internal_alert' } : {})
       });
       const result = await context.sendBillingEmail({
@@ -489,7 +503,7 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
         emailPreview,
         ...deliveryMetadata
       };
-      await context.saveDelivery(event, invoice.id, contact.email, record);
+      await context.saveDelivery(deliveryEvent, invoice.id, contact.email, record);
       await context.addLog({
         createdAt: record.sentAt,
         event,
@@ -503,13 +517,14 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
         clientReference,
         messageId: result.messageId,
         emailPreview,
+        ...manualMetadata,
         message: 'Mensagem aceita pelo SMTP do Zoho; a confirmação de entrega ainda está pendente.'
       });
       context.summary.sent += 1;
       context.sentInvoiceIds?.add(String(invoice.id));
     } catch (error) {
       const failedAt = context.now().toISOString();
-      await context.saveDelivery(event, invoice.id, contact.email, {
+      await context.saveDelivery(deliveryEvent, invoice.id, contact.email, {
         state: 'review',
         failedAt,
         clientReference,
@@ -529,6 +544,7 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
         ...(internalAlert ? { recipientRole: 'internal_alert' } : {}),
         clientReference,
         emailPreview,
+        ...manualMetadata,
         message: 'O resultado do envio precisa de conferência manual para evitar duplicidade.'
       });
       context.summary.review += 1;
@@ -538,6 +554,157 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
     await context.removePending(invoice.id);
     context.pendingByInvoice.delete(String(invoice.id));
   }
+};
+
+const createProcessorContext = ({
+  summary,
+  pendingByInvoice,
+  emailConfig,
+  transport,
+  nowFactory,
+  dependencies = {}
+}) => ({
+  source: summary.source,
+  runId: String(dependencies.runId || ''),
+  now: nowFactory,
+  summary,
+  pendingByInvoice,
+  emailConfig,
+  transport,
+  manualResend: Boolean(dependencies.manualResend),
+  sentInvoiceIds: new Set(),
+  doccobPendingIds: new Set(),
+  findDoccobForInvoice: dependencies.findDoccobForInvoice || findDoccobForInvoice,
+  fetchInvoicePdfData: dependencies.fetchInvoicePdfData || fetchInvoicePdfData,
+  buildInvoicePdf: dependencies.buildInvoicePdf || buildInvoicePdf,
+  resolveInvoiceCteKeys: dependencies.resolveInvoiceCteKeys || resolveInvoiceCteKeys,
+  fetchCteXmls: dependencies.fetchCteXmls || fetchCteXmls,
+  parseCteXml: dependencies.parseCteXml || parseCteXml,
+  buildDactePdf: dependencies.buildDactePdf || buildDactePdf,
+  generateInvoiceBankSlip: dependencies.generateInvoiceBankSlip || generateInvoiceBankSlip,
+  getInvoiceBankSlipPdf: dependencies.getInvoiceBankSlipPdf || getInvoiceBankSlipPdf,
+  sendBillingEmail: dependencies.sendBillingEmail || sendBillingEmail,
+  deliveryReference: dependencies.deliveryReference || deliveryReference,
+  deliveryEvent: dependencies.deliveryEvent || ((event) => event),
+  getCategory: dependencies.getCategory || store.getCategory,
+  savePending: dependencies.savePending || store.savePending,
+  removePending: dependencies.removePending || store.removePending,
+  getDelivery: dependencies.getDelivery || store.getDelivery,
+  claimDelivery: dependencies.claimDelivery || store.claimDelivery,
+  saveDelivery: dependencies.saveDelivery || store.saveDelivery,
+  saveDeliveryReference: dependencies.saveDeliveryReference || store.saveDeliveryReference,
+  addLog: dependencies.addLog || store.addLog
+});
+
+const resendBillingInvoice = async (invoiceId, dependencies = {}) => {
+  const normalizedId = String(invoiceId || '').trim().replace(/^0+(?=\d)/, '');
+  if (!/^\d{1,20}$/.test(normalizedId) || Number(normalizedId) <= 0) {
+    throw Object.assign(new Error('Informe o número da fatura.'), { statusCode: 422, expose: true });
+  }
+  const fetch = dependencies.fetchInvoice || fetchInvoices;
+  const result = await fetch({ id: normalizedId, limit: 1 });
+  const invoice = result.invoices?.find((item) => String(item.id) === normalizedId);
+  if (!invoice) {
+    throw Object.assign(new Error('Fatura não encontrada na Brudam.'), {
+      statusCode: 404,
+      expose: true
+    });
+  }
+  if (!isPendingInvoice(invoice)) {
+    throw Object.assign(new Error('Somente faturas em aberto podem ser reenviadas.'), {
+      statusCode: 409,
+      expose: true
+    });
+  }
+
+  const getCategory = dependencies.getCategory || store.getCategory;
+  const clientCnpj = String(invoice.clientDocument || '').replace(/\D/g, '');
+  const category = clientCnpj ? await getCategory(clientCnpj) : null;
+  if (enabledContacts(category).length === 0) {
+    throw Object.assign(new Error('Não há destinatário ativo para reenviar esta cobrança.'), {
+      statusCode: 409,
+      expose: true
+    });
+  }
+
+  const nowFactory = dependencies.now || (() => new Date());
+  const currentDate = saoPauloDate(dependencies.currentTime || nowFactory());
+  const pending = await (dependencies.listPending || store.listPending)();
+  const pendingByInvoice = new Map(pending.map((record) => [String(record.invoiceId), record]));
+  const summary = {
+    source: 'manual',
+    currentDate,
+    startedAt: nowFactory().toISOString(),
+    completedAt: null,
+    scanned: 1,
+    processed: 0,
+    sent: 0,
+    alreadySent: 0,
+    pendingDoccob: 0,
+    waitingContacts: 0,
+    review: 0,
+    errors: [],
+    stoppedByLimit: false
+  };
+  const emailConfig = dependencies.emailConfig || zohoConfig();
+  const transport = dependencies.transport || createZohoTransport(emailConfig);
+  const attemptId = String(dependencies.runId || `manual-${Date.now()}`);
+  const contextDependencies = {
+    ...dependencies,
+    getCategory: async (cnpj) => (
+      String(cnpj || '').replace(/\D/g, '') === clientCnpj ? category : getCategory(cnpj)
+    ),
+    runId: attemptId,
+    manualResend: true,
+    getDelivery: async () => null,
+    claimDelivery: async () => true,
+    deliveryReference: (event, id, email) => deliveryReference(event, id, email, attemptId),
+    deliveryEvent: () => `manual_${attemptId.replace(/[^a-zA-Z0-9]/g, '').slice(-20).toLowerCase()}`
+  };
+  const context = createProcessorContext({
+    summary,
+    pendingByInvoice,
+    emailConfig,
+    transport,
+    nowFactory,
+    dependencies: contextDependencies
+  });
+  try {
+    await processInvoiceEvent({
+      event: billingEventForInvoice(invoice, currentDate),
+      invoice,
+      context
+    });
+    summary.processed = 1;
+  } finally {
+    if (!dependencies.transport && typeof transport.close === 'function') transport.close();
+  }
+  summary.completedAt = nowFactory().toISOString();
+  if (summary.pendingDoccob) {
+    throw Object.assign(new Error('O DOCCOB ainda não foi localizado. A cobrança não foi reenviada.'), {
+      statusCode: 409,
+      expose: true
+    });
+  }
+  if (summary.waitingContacts) {
+    throw Object.assign(new Error('Não há destinatário ativo para reenviar esta cobrança.'), {
+      statusCode: 409,
+      expose: true
+    });
+  }
+  if (!summary.sent) {
+    throw Object.assign(new Error('O reenvio precisa de conferência nos logs antes de uma nova tentativa.'), {
+      statusCode: 502,
+      expose: true
+    });
+  }
+  return {
+    invoiceId: normalizedId,
+    event: billingEventForInvoice(invoice, currentDate),
+    sent: summary.sent,
+    review: summary.review,
+    completedAt: summary.completedAt
+  };
 };
 
 const runBillingCollection = async (dependencies = {}) => {
@@ -588,35 +755,14 @@ const runBillingCollection = async (dependencies = {}) => {
 
   const emailConfig = dependencies.emailConfig || zohoConfig();
   const transport = dependencies.transport || createZohoTransport(emailConfig);
-  const context = {
-    source: summary.source,
-    runId: String(dependencies.runId || ''),
-    now: nowFactory,
+  const context = createProcessorContext({
     summary,
     pendingByInvoice,
     emailConfig,
     transport,
-    sentInvoiceIds: new Set(),
-    doccobPendingIds: new Set(),
-    findDoccobForInvoice: dependencies.findDoccobForInvoice || findDoccobForInvoice,
-    fetchInvoicePdfData: dependencies.fetchInvoicePdfData || fetchInvoicePdfData,
-    buildInvoicePdf: dependencies.buildInvoicePdf || buildInvoicePdf,
-    resolveInvoiceCteKeys: dependencies.resolveInvoiceCteKeys || resolveInvoiceCteKeys,
-    fetchCteXmls: dependencies.fetchCteXmls || fetchCteXmls,
-    parseCteXml: dependencies.parseCteXml || parseCteXml,
-    buildDactePdf: dependencies.buildDactePdf || buildDactePdf,
-    generateInvoiceBankSlip: dependencies.generateInvoiceBankSlip || generateInvoiceBankSlip,
-    getInvoiceBankSlipPdf: dependencies.getInvoiceBankSlipPdf || getInvoiceBankSlipPdf,
-    sendBillingEmail: dependencies.sendBillingEmail || sendBillingEmail,
-    getCategory: dependencies.getCategory || store.getCategory,
-    savePending: dependencies.savePending || store.savePending,
-    removePending: dependencies.removePending || store.removePending,
-    getDelivery: dependencies.getDelivery || store.getDelivery,
-    claimDelivery: dependencies.claimDelivery || store.claimDelivery,
-    saveDelivery: dependencies.saveDelivery || store.saveDelivery,
-    saveDeliveryReference: dependencies.saveDeliveryReference || store.saveDeliveryReference,
-    addLog: dependencies.addLog || store.addLog
-  };
+    nowFactory,
+    dependencies
+  });
 
   try {
     for (const item of queue) {
@@ -698,5 +844,7 @@ module.exports = {
   existingDeliveryPlan,
   isTerminalBillingFailure,
   processInvoiceEvent,
+  createProcessorContext,
+  resendBillingInvoice,
   runBillingCollection
 };

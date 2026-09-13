@@ -7,9 +7,9 @@
   <meta name="theme-color" content="#112a40">
   <title>Faturamento | TWT Airpack</title>
   <link rel="icon" href="/favicon.ico">
-  <link rel="stylesheet" href="/faturamento/styles.css?v=14">
+  <link rel="stylesheet" href="/faturamento/styles.css?v=15">
   <script src="/faturamento/sort.js?v=1" defer></script>
-  <script src="/faturamento/app.js?v=17" defer></script>
+  <script src="/faturamento/app.js?v=18" defer></script>
   <script src="/faturamento/cobranca.js?v=4" defer></script>
 </head>
 <body>
@@ -157,7 +157,7 @@
               Lista
             </button>
             <button class="view-option" type="button" data-view-mode="debtors" aria-pressed="false">
-              Gráfico
+              Painel
             </button>
           </div>
         </div>
@@ -547,9 +547,11 @@
       <div id="invoiceDetailContent" hidden>
         <dl class="invoice-detail-summary" id="invoiceDetailSummary"></dl>
         <section class="invoice-control-grid" id="invoiceControlGrid" aria-label="Estados da fatura"></section>
+        <p class="invoice-detail-action-message" id="invoiceDetailActionMessage" role="status" aria-live="polite"></p>
         <div class="invoice-detail-actions">
+          <button class="button button-primary" id="invoiceDetailResend" type="button">Enviar cobrança novamente</button>
           <button class="button button-primary" id="invoiceDetailDocuments" type="button">Abrir documentos</button>
-          <button class="button button-quiet" id="invoiceDetailLogs" type="button">Ver logs de envio</button>
+          <button class="button button-quiet" id="invoiceDetailWhatsApp" type="button">Copiar mensagem para WhatsApp</button>
         </div>
         <section class="invoice-timeline" aria-labelledby="invoiceTimelineTitle">
           <h3 id="invoiceTimelineTitle">Histórico</h3>

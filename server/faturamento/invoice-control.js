@@ -22,6 +22,35 @@ const saoPauloToday = (now = new Date()) => {
   return `${parts.year}-${parts.month}-${parts.day}`;
 };
 
+const billingWhatsappText = (invoice, now = new Date()) => {
+  const invoiceId = String(invoice?.id || '').trim() || 'não informada';
+  const dueAt = String(invoice?.dueAt || '').slice(0, 10);
+  const formattedDueAt = /^\d{4}-\d{2}-\d{2}$/.test(dueAt)
+    ? dueAt.split('-').reverse().join('/')
+    : 'não informado';
+  const amount = new Intl.NumberFormat('pt-BR', {
+    style: 'currency',
+    currency: 'BRL'
+  }).format(Number(invoice?.balance) > 0 ? Number(invoice.balance) : Number(invoice?.total) || 0);
+  const client = String(invoice?.client || '').trim();
+  const overdue = dueAt && dueAt < saoPauloToday(now);
+  const lines = [
+    'Olá! Tudo bem?',
+    '',
+    overdue
+      ? `A fatura ${invoiceId}, com vencimento em ${formattedDueAt}, no valor de ${amount}, encontra-se em aberto.`
+      : `Segue um lembrete sobre a fatura ${invoiceId}, com vencimento em ${formattedDueAt}, no valor de ${amount}.`,
+    ...(client ? [`Cliente: ${client}.`] : []),
+    overdue
+      ? 'Poderia nos informar a previsão de pagamento?'
+      : 'Os documentos foram encaminhados por e-mail.',
+    '',
+    'Em caso de dúvidas, estamos à disposição.',
+    'TWT LOG'
+  ];
+  return lines.join('\n');
+};
+
 const financialState = (invoice, now = new Date()) => {
   const label = String(invoice?.statusLabel || '').toLocaleLowerCase('pt-BR');
   if (Number(invoice?.status) === 2 || label.includes('cancel')) {
@@ -276,6 +305,7 @@ const buildInvoiceTimeline = ({ invoice, pending = null, logs = [], bankRecord =
 
 module.exports = {
   saoPauloToday,
+  billingWhatsappText,
   financialState,
   documentState,
   collectionState,

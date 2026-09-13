@@ -712,6 +712,7 @@ test('resume somente saldos pendentes por empresa', () => {
   assert.equal(summary.debtors[0].value, 150.25);
   assert.equal(summary.debtors[0].percentage, 75.125);
   assert.equal(summary.debtors[1].value, 49.75);
+  assert.equal(summary.totalOverdue, 0);
 });
 
 test('agrupa os saldos pendentes por faixa de vencimento', () => {
@@ -743,6 +744,13 @@ test('agrupa os saldos pendentes por faixa de vencimento', () => {
   assert.equal(byKey.get('overdue_31_60').value, 50);
   assert.equal(byKey.get('overdue_61_plus').value, 60);
   assert.equal(byKey.has('unknown'), false);
+  const summary = buildDebtorSummary([
+    pendingInvoice('2026-09-13', 5),
+    pendingInvoice('2026-09-11', 20),
+    pendingInvoice('2026-08-27', 40)
+  ], { today: '2026-09-12' });
+  assert.equal(summary.totalPending, 65);
+  assert.equal(summary.totalOverdue, 60);
 });
 
 test('expõe o modo gráfico e envia a visualização de devedores à API', () => {
@@ -750,6 +758,7 @@ test('expõe o modo gráfico e envia a visualização de devedores à API', () =
   const source = readFileSync(require.resolve('../faturamento/app.js'), 'utf8');
   const styles = readFileSync(require.resolve('../faturamento/styles.css'), 'utf8');
   assert.match(html, /data-view-mode="debtors"/);
+  assert.match(html, />\s*Painel\s*</);
   assert.match(html, /id="debtorChart"/);
   assert.match(html, /id="chartTooltipPercentage"/);
   assert.match(html, /id="agingSummary"/);
@@ -763,6 +772,8 @@ test('expõe o modo gráfico e envia a visualização de devedores à API', () =
   assert.match(source, /segment\.addEventListener\('keydown'/);
   assert.match(source, /const invoiceDueTiming/);
   assert.match(source, /const renderAgingSummary/);
+  assert.match(source, /Total vencido/);
+  assert.match(source, /Maior saldo ·/);
   assert.match(source, /statusInput\.value = '0'/);
   assert.match(source, /setView\('list'\)/);
   assert.match(styles, /\.chart-legend li\.is-highlighted/);

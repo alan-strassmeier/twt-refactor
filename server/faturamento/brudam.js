@@ -761,14 +761,19 @@ const buildDebtorSummary = (invoices, options = {}) => {
       invoiceCount: debtor.invoiceCount
     }));
 
+  const agingBuckets = buildAgingBuckets(invoices, options.today || saoPauloDate(options.now));
+  const totalOverdue = agingBuckets
+    .filter((bucket) => bucket.key.startsWith('overdue_'))
+    .reduce((total, bucket) => total + bucket.value, 0);
   return {
     view: 'debtors',
     totalPending: totalInCents / 100,
+    totalOverdue,
     invoiceCount,
     companyCount: debtors.length,
     largestDebtor: debtors[0] || null,
     debtors,
-    agingBuckets: buildAgingBuckets(invoices, options.today || saoPauloDate(options.now))
+    agingBuckets
   };
 };
 

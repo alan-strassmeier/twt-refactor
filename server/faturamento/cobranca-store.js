@@ -209,7 +209,7 @@ const removePending = (invoiceId, command = redisCommand) =>
   command('HDEL', KEYS.pending, String(invoiceId));
 
 const deliveryField = (event, invoiceId, email) => [
-  String(event || '').replace(/[^a-z_]/g, ''),
+  String(event || '').toLocaleLowerCase('pt-BR').replace(/[^a-z0-9_]/g, '').slice(0, 48),
   String(invoiceId || '').replace(/\D/g, ''),
   String(email || '').trim().toLocaleLowerCase('pt-BR')
 ].join(':');

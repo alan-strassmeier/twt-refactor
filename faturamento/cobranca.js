@@ -569,7 +569,9 @@
       const email = document.createElement('small');
       email.textContent = record.email || record.message || '';
       recipient.appendChild(email);
-      appendCell(row, EVENT_LABELS[record.event] || record.event || '—');
+      appendCell(row, record.manualResend
+        ? 'Reenvio manual'
+        : EVENT_LABELS[record.event] || record.event || '—');
       const status = appendCell(row, STATUS_LABELS[record.status] || record.status || '—');
       status.className = `collection-status status-${record.status || 'unknown'}`;
       if (record.message) status.title = record.message;
