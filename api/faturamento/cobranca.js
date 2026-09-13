@@ -9,6 +9,16 @@ const {
 const store = require('../../server/faturamento/cobranca-store');
 const brudamContacts = require('../../server/faturamento/cobranca-brudam-contacts');
 const { runBillingCollection } = require('../../server/faturamento/cobranca-processor');
+const { fetchInvoices } = require('../../server/faturamento/brudam');
+const { findDoccobForInvoice } = require('../../server/faturamento/r2-doccob');
+const { getBankSlipRecord } = require('../../server/faturamento/boleto-store');
+const { isDslIssuer } = require('../../server/faturamento/billing-rules');
+const {
+  invoiceControl,
+  buildUnifiedIssues,
+  issueSummary,
+  buildInvoiceTimeline
+} = require('../../server/faturamento/invoice-control');
 const {
   readWebhookBody,
   webhookConfig,
@@ -137,15 +147,102 @@ const handlePending = async (req, res) => {
     sendJson(res, 405, { message: 'Método não permitido.' });
     return;
   }
-  const [pending, lastRun] = await Promise.all([
+  const [pending, logs, lastRun] = await Promise.all([
     store.listPending(),
+    store.filteredLogs(),
     store.getLastRun()
   ]);
+  const issues = buildUnifiedIssues({ pending, logs });
   sendJson(res, 200, {
     pending,
+    issues,
     lastRun,
-    total: pending.length,
-    doccobTotal: pending.filter((record) => record.reason === 'doccob').length
+    total: issues.length,
+    doccobTotal: issues.filter((issue) => (
+      issue.type === 'documents' && issue.title === 'Aguardando DOCCOB'
+    )).length,
+    summary: issueSummary(issues)
+  });
+};
+
+const handleInvoiceDetail = async (req, res, query) => {
+  if (!requireSession(req, res)) return;
+  if (req.method !== 'GET') {
+    res.setHeader('Allow', 'GET');
+    sendJson(res, 405, { message: 'Método não permitido.' });
+    return;
+  }
+  const rawInvoiceId = String(query.id || '').trim();
+  if (!/^\d{1,20}$/.test(rawInvoiceId) || Number(rawInvoiceId) <= 0) {
+    sendJson(res, 422, { message: 'Informe o número da fatura.' });
+    return;
+  }
+  const invoiceId = rawInvoiceId.replace(/^0+(?=\d)/, '');
+  const result = await fetchInvoices({ id: invoiceId, limit: 1 });
+  const invoice = result.invoices?.find((item) => String(item.id) === invoiceId);
+  if (!invoice) {
+    sendJson(res, 404, { message: 'Fatura não encontrada na Brudam.' });
+    return;
+  }
+  const [pendingRecords, logs, bankRecord] = await Promise.all([
+    store.listPending(),
+    store.filteredLogs({ invoiceId }),
+    getBankSlipRecord(invoiceId)
+  ]);
+  const pending = pendingRecords.find((record) => String(record.invoiceId) === invoiceId) || null;
+  let doccob = null;
+  let doccobError = '';
+  try {
+    doccob = await findDoccobForInvoice({
+      invoiceId,
+      clientCnpj: invoice.clientDocument
+    });
+  } catch (error) {
+    doccobError = error.message;
+  }
+  const cteCount = (Array.isArray(doccob?.transports) ? doccob.transports : [])
+    .filter((transport) => transport?.accessKey).length;
+  const controls = invoiceControl(invoice, { pending, logs, bankRecord });
+  if (doccob && isDslIssuer(doccob.invoice?.issuerCnpj) && cteCount === 0) {
+    controls.documents = {
+      code: 'dacte_unavailable',
+      label: 'DACTE indisponível',
+      tone: 'danger',
+      detail: 'O DOCCOB foi localizado, mas não contém chave CT-e para gerar o DACTE.'
+    };
+  } else if (doccob && controls.documents.code !== 'dacte_unavailable') {
+    controls.documents = {
+      code: 'complete',
+      label: 'Documentos prontos',
+      tone: 'success',
+      detail: cteCount
+        ? `DOCCOB localizado com ${cteCount} CT-e${cteCount === 1 ? '' : 's'}.`
+        : 'DOCCOB localizado; esta fatura não possui CT-e.'
+    };
+  } else if (!doccob && controls.documents.code === 'unchecked') {
+    controls.documents = {
+      code: 'awaiting_doccob',
+      label: 'DOCCOB não localizado',
+      tone: 'warning',
+      ...(doccobError ? { detail: doccobError } : {})
+    };
+  }
+  sendJson(res, 200, {
+    invoice,
+    controls,
+    documents: {
+      doccobFound: Boolean(doccob),
+      cteCount,
+      objectKey: doccob?.objectKey || ''
+    },
+    payment: bankRecord ? {
+      state: bankRecord.state || '',
+      bank: bankRecord.bank || '',
+      bankSlipId: bankRecord.bankSlipId || '',
+      createdAt: bankRecord.createdAt || bankRecord.startedAt || bankRecord.reviewedAt || ''
+    } : null,
+    pending,
+    timeline: buildInvoiceTimeline({ invoice, pending, logs, bankRecord })
   });
 };
 
@@ -262,6 +359,7 @@ module.exports = async (req, res) => {
     if (query.route === 'contacts') return await handleContacts(req, res, query);
     if (query.route === 'contacts-sync') return await handleContactSync(req, res);
     if (query.route === 'pending') return await handlePending(req, res);
+    if (query.route === 'invoice-detail') return await handleInvoiceDetail(req, res, query);
     if (query.route === 'logs') return await handleLogs(req, res, query);
     if (query.route === 'process') return await handleProcess(req, res);
     if (query.route === 'webhook') return await handleWebhook(req, res);

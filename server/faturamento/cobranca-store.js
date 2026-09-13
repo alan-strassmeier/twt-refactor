@@ -380,6 +380,7 @@ module.exports = {
   releaseWebhookEvent,
   addLog,
   saoPauloDate,
+  filteredLogs,
   listLogs,
   getOverdueCursor,
   saveOverdueCursor,

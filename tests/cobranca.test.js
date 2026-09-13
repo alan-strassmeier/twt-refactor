@@ -53,6 +53,11 @@ const {
   constantTimeEqual,
   hasCronAuthorization
 } = require('../api/faturamento/cobranca');
+const {
+  invoiceControl,
+  buildUnifiedIssues,
+  buildInvoiceTimeline
+} = require('../server/faturamento/invoice-control');
 
 const invoiceData = (payment = null) => ({
   invoice: {
@@ -930,6 +935,72 @@ test('endpoint do cron exige segredo longo e compara em tempo constante', () => 
   }), false);
 });
 
+test('mantém estados financeiro, documental, de cobrança e pagamento independentes', () => {
+  const invoice = {
+    id: '11756',
+    dueAt: '2026-09-10',
+    status: 0,
+    statusLabel: 'Em aberto',
+    client: 'BHZ',
+    clientDocument: '11280282000144'
+  };
+  const control = invoiceControl(invoice, {
+    now: new Date('2026-09-13T12:00:00Z'),
+    pending: { reason: 'doccob' },
+    logs: [{ status: 'delivered', email: 'financeiro@example.com' }],
+    bankRecord: { state: 'ready', bank: 'itau', bankSlipId: 'boleto-1' }
+  });
+  assert.equal(control.financial.code, 'overdue');
+  assert.equal(control.documents.code, 'awaiting_doccob');
+  assert.equal(control.collection.code, 'delivered');
+  assert.equal(control.payment.code, 'registered');
+
+  const ted = invoiceControl({
+    ...invoice,
+    client: 'RS WHITE MARTINS GASES INDUSTRIAIS LTDA'
+  });
+  assert.equal(ted.payment.code, 'ted_doc');
+});
+
+test('fila unificada prioriza vencidas e reúne falhas de documentos e entrega', () => {
+  const issues = buildUnifiedIssues({
+    now: new Date('2026-09-13T12:00:00Z'),
+    pending: [{
+      invoiceId: '100',
+      clientName: 'Cliente vencido',
+      clientCnpj: '11280282000144',
+      reason: 'doccob',
+      dueAt: '2026-09-10',
+      lastCheckedAt: '2026-09-13T10:00:00Z'
+    }],
+    logs: [{
+      id: 'log-1',
+      invoiceId: '101',
+      clientName: 'Cliente e-mail',
+      status: 'hard_bounce',
+      email: 'invalido@example.com',
+      createdAt: '2026-09-13T11:00:00Z'
+    }]
+  });
+  assert.equal(issues.length, 2);
+  assert.equal(issues[0].invoiceId, '100');
+  assert.equal(issues[0].priority, 'critical');
+  assert.equal(issues[1].type, 'email');
+  assert.equal(issues[1].action, 'logs');
+});
+
+test('histórico da fatura combina emissão, boleto, pendência, e-mails e vencimento', () => {
+  const timeline = buildInvoiceTimeline({
+    invoice: { id: '11756', issuedAt: '2026-09-01', dueAt: '2026-09-20' },
+    pending: { reason: 'contacts', lastCheckedAt: '2026-09-03T12:00:00Z' },
+    bankRecord: { state: 'ready', bank: 'itau', bankSlipId: 'boleto', createdAt: '2026-09-02T12:00:00Z' },
+    logs: [{ status: 'submitted', event: 'initial', createdAt: '2026-09-04T12:00:00Z', email: 'a@b.com' }]
+  });
+  assert.deepEqual(new Set(timeline.map((event) => event.type)), new Set([
+    'invoice', 'payment', 'pending', 'email', 'due'
+  ]));
+});
+
 test('interface expõe cadastro, pendências e logs sem criar várias funções serverless', () => {
   const root = path.resolve(__dirname, '..');
   const html = fs.readFileSync(path.join(root, 'faturamento', 'index.html'), 'utf8');
@@ -943,6 +1014,8 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(html, /id="categoryDeleteModal"/);
   assert.match(html, /id="emailLogModal"/);
   assert.match(html, /id="emailLogBody"/);
+  assert.match(html, /id="invoiceDetail"/);
+  assert.match(html, /id="pendingIssueSummary"/);
   assert.match(html, /data-collection-section="collectionContactsSection"/);
   assert.match(html, /data-collection-section="pendingDoccobSection"/);
   assert.match(html, /data-collection-section="collectionLogsSection"/);
@@ -962,6 +1035,7 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(source, /setCollectionSection\(state\.collectionSection\)/);
   assert.match(apiSource, /query\.route === 'webhook'/);
   assert.match(apiSource, /query\.route === 'contacts-sync'/);
+  assert.match(apiSource, /query\.route === 'invoice-detail'/);
   assert.match(apiSource, /req\.method === 'GET' \|\| req\.method === 'HEAD'/);
   assert.equal(fs.existsSync(path.join(root, 'api', 'faturamento', 'cobranca.js')), true);
 });

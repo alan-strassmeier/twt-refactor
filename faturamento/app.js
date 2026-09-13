@@ -76,7 +76,20 @@
     nfsePreviewService: document.getElementById('nfsePreviewService'),
     nfsePreviewDescription: document.getElementById('nfsePreviewDescription'),
     nfsePreviewTaxation: document.getElementById('nfsePreviewTaxation'),
-    nfseConfirmWarning: document.querySelector('.nfse-confirm-warning')
+    nfseConfirmWarning: document.querySelector('.nfse-confirm-warning'),
+    invoiceDetail: document.getElementById('invoiceDetail'),
+    invoiceDetailBackdrop: document.getElementById('invoiceDetailBackdrop'),
+    invoiceDetailClose: document.getElementById('invoiceDetailClose'),
+    invoiceDetailTitle: document.getElementById('invoiceDetailTitle'),
+    invoiceDetailSubtitle: document.getElementById('invoiceDetailSubtitle'),
+    invoiceDetailLoading: document.getElementById('invoiceDetailLoading'),
+    invoiceDetailContent: document.getElementById('invoiceDetailContent'),
+    invoiceDetailSummary: document.getElementById('invoiceDetailSummary'),
+    invoiceControlGrid: document.getElementById('invoiceControlGrid'),
+    invoiceDetailDocuments: document.getElementById('invoiceDetailDocuments'),
+    invoiceDetailLogs: document.getElementById('invoiceDetailLogs'),
+    invoiceTimeline: document.getElementById('invoiceTimeline'),
+    invoiceDetailError: document.getElementById('invoiceDetailError')
   };
 
   const state = {
@@ -327,6 +340,8 @@
   };
 
   let modalPreviousFocus = null;
+  let invoiceDetailPreviousFocus = null;
+  let invoiceDetailId = '';
 
   const invoicePdfUrl = (invoiceId) =>
     `/api/faturamento/fatura-pdf?id=${encodeURIComponent(invoiceId)}`;
@@ -684,9 +699,138 @@
     }
   };
 
+  const controlBadge = (control, fallback = 'A conferir') => {
+    const badge = document.createElement('span');
+    const tone = String(control?.tone || 'neutral').replace(/[^a-z_-]/g, '');
+    badge.className = `control-badge control-${tone || 'neutral'}`;
+    badge.textContent = control?.label || fallback;
+    if (control?.detail) badge.title = control.detail;
+    return badge;
+  };
+
+  const appendControlCell = (row, control, fallback) => {
+    const cell = document.createElement('td');
+    cell.className = 'control-cell';
+    cell.appendChild(controlBadge(control, fallback));
+    row.appendChild(cell);
+  };
+
+  const closeInvoiceDetail = () => {
+    if (!elements.invoiceDetail || elements.invoiceDetail.hidden) return;
+    elements.invoiceDetail.hidden = true;
+    document.body.classList.remove('modal-open');
+    invoiceDetailPreviousFocus?.focus();
+    invoiceDetailPreviousFocus = null;
+  };
+
+  const detailDateTime = (value) => {
+    const raw = String(value || '');
+    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return formatDate(raw);
+    const date = new Date(raw);
+    return Number.isNaN(date.getTime()) ? 'Data não registrada' : new Intl.DateTimeFormat('pt-BR', {
+      timeZone: 'America/Sao_Paulo',
+      dateStyle: 'short',
+      timeStyle: 'short'
+    }).format(date);
+  };
+
+  const appendDetailValue = (label, value) => {
+    const item = document.createElement('div');
+    const term = document.createElement('dt');
+    const description = document.createElement('dd');
+    term.textContent = label;
+    description.textContent = value || '—';
+    item.append(term, description);
+    elements.invoiceDetailSummary.appendChild(item);
+  };
+
+  const renderInvoiceDetail = (payload) => {
+    const invoice = payload.invoice || {};
+    invoiceDetailId = String(invoice.id || invoiceDetailId);
+    elements.invoiceDetailTitle.textContent = `Fatura ${invoiceDetailId}`;
+    elements.invoiceDetailSubtitle.textContent = `${invoice.client || 'Cliente não informado'} · ${formatCnpj(invoice.clientDocument)}`;
+    elements.invoiceDetailSummary.replaceChildren();
+    appendDetailValue('Emissão', formatDate(invoice.issuedAt));
+    appendDetailValue('Vencimento', formatDate(invoice.dueAt));
+    appendDetailValue('Valor', formatCurrency(invoice.total));
+    appendDetailValue('Saldo', formatCurrency(invoice.balance));
+
+    const labels = {
+      financial: 'Financeiro',
+      documents: 'Documentos',
+      collection: 'Cobrança',
+      payment: 'Pagamento'
+    };
+    elements.invoiceControlGrid.replaceChildren(...Object.entries(labels).map(([key, label]) => {
+      const card = document.createElement('article');
+      const title = document.createElement('span');
+      title.textContent = label;
+      card.append(title, controlBadge(payload.controls?.[key]));
+      const detail = payload.controls?.[key]?.detail;
+      if (detail) {
+        const description = document.createElement('small');
+        description.textContent = detail;
+        card.appendChild(description);
+      }
+      return card;
+    }));
+
+    const timeline = Array.isArray(payload.timeline) ? payload.timeline : [];
+    elements.invoiceTimeline.replaceChildren(...timeline.map((event) => {
+      const item = document.createElement('li');
+      item.dataset.type = event.type || 'event';
+      const time = document.createElement('time');
+      time.textContent = detailDateTime(event.at);
+      const title = document.createElement('strong');
+      title.textContent = event.title || 'Movimentação';
+      const description = document.createElement('p');
+      description.textContent = event.description || '';
+      item.append(time, title, description);
+      return item;
+    }));
+    elements.invoiceDetailDocuments.disabled = false;
+    elements.invoiceDetailLogs.disabled = false;
+    elements.invoiceDetailLoading.hidden = true;
+    elements.invoiceDetailContent.hidden = false;
+  };
+
+  const openInvoiceDetail = async (invoiceId, trigger) => {
+    invoiceDetailId = String(invoiceId || '');
+    invoiceDetailPreviousFocus = trigger;
+    elements.invoiceDetailTitle.textContent = `Fatura ${invoiceDetailId}`;
+    elements.invoiceDetailSubtitle.textContent = 'Conferindo o histórico financeiro…';
+    elements.invoiceDetailLoading.hidden = false;
+    elements.invoiceDetailContent.hidden = true;
+    elements.invoiceDetailError.hidden = true;
+    elements.invoiceDetail.hidden = false;
+    document.body.classList.add('modal-open');
+    elements.invoiceDetailClose.focus();
+    try {
+      const payload = await requestJson(
+        `/api/faturamento/cobranca?route=invoice-detail&id=${encodeURIComponent(invoiceDetailId)}`
+      );
+      if (!elements.invoiceDetail.hidden && invoiceDetailId === String(payload.invoice?.id || '')) {
+        renderInvoiceDetail(payload);
+      }
+    } catch (error) {
+      elements.invoiceDetailLoading.hidden = true;
+      elements.invoiceDetailError.textContent = error.message;
+      elements.invoiceDetailError.hidden = false;
+    }
+  };
+
   const createInvoiceRow = (invoice, today) => {
     const row = document.createElement('tr');
-    appendCell(row, String(invoice.id ?? '—'), 'invoice-id');
+    const invoiceCell = document.createElement('td');
+    invoiceCell.className = 'invoice-id';
+    const invoiceButton = document.createElement('button');
+    invoiceButton.type = 'button';
+    invoiceButton.className = 'invoice-detail-trigger';
+    invoiceButton.textContent = String(invoice.id ?? '—');
+    invoiceButton.title = `Abrir detalhes e histórico da fatura ${invoice.id}`;
+    invoiceButton.addEventListener('click', () => openInvoiceDetail(invoice.id, invoiceButton));
+    invoiceCell.appendChild(invoiceButton);
+    row.appendChild(invoiceCell);
     appendCell(row, formatDate(invoice.issuedAt));
     appendCell(row, formatDate(invoice.dueAt));
     row.appendChild(createDueTimingCell(invoice, today));
@@ -707,12 +851,13 @@
     appendCell(row, formatCurrency(invoice.total), 'numeric');
     appendCell(row, formatCurrency(invoice.paid), 'numeric');
     appendCell(row, formatCurrency(invoice.balance), 'numeric');
-    const statusCell = document.createElement('td');
-    const badge = document.createElement('span');
-    badge.className = `status-badge ${statusClass(invoice.status)}`;
-    badge.textContent = invoice.statusLabel;
-    statusCell.appendChild(badge);
-    row.appendChild(statusCell);
+    appendControlCell(row, invoice.control?.financial || {
+      label: invoice.statusLabel,
+      tone: ({ 0: 'warning', 1: 'success', 2: 'danger' }[invoice.status] || 'neutral')
+    }, invoice.statusLabel);
+    appendControlCell(row, invoice.control?.documents, 'A conferir');
+    appendControlCell(row, invoice.control?.collection, 'Não enviada');
+    appendControlCell(row, invoice.control?.payment, 'Não gerado');
     return row;
   };
 
@@ -786,6 +931,7 @@
     elements.resultRange.textContent = invoices.length
       ? `Exibindo ${start}–${end}`
       : 'Nenhum resultado nesta página';
+    if (payload.controlWarning) elements.dashboardMessage.textContent = payload.controlWarning;
     updatePaginationControls();
   };
 
@@ -1183,6 +1329,7 @@
 
   elements.logoutButton.addEventListener('click', async () => {
     closeAllDocumentModals();
+    closeInvoiceDetail();
     elements.logoutButton.disabled = true;
     try {
       await requestJson('/api/faturamento/logout', { method: 'POST' });
@@ -1297,10 +1444,26 @@
   elements.nfseCancelButton.addEventListener('click', () => closeNfseConfirm(true));
   elements.invoicePdfChoice.addEventListener('click', closeDocumentModal);
   elements.dactePdfChoice.addEventListener('click', closeDocumentModal);
+  elements.invoiceDetailClose.addEventListener('click', closeInvoiceDetail);
+  elements.invoiceDetailBackdrop.addEventListener('click', closeInvoiceDetail);
+  elements.invoiceDetailDocuments.addEventListener('click', () => {
+    const invoiceId = invoiceDetailId;
+    const trigger = invoiceDetailPreviousFocus || elements.invoiceDetailDocuments;
+    closeInvoiceDetail();
+    openInvoiceDocuments(invoiceId, trigger);
+  });
+  elements.invoiceDetailLogs.addEventListener('click', () => {
+    const invoiceId = invoiceDetailId;
+    closeInvoiceDetail();
+    window.dispatchEvent(new CustomEvent('billing:navigate-logs', {
+      detail: { invoiceId }
+    }));
+  });
   document.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape') return;
     if (!elements.nfseConfirmModal.hidden) closeNfseConfirm(true);
     else if (!elements.documentModal.hidden) closeDocumentModal();
+    else if (!elements.invoiceDetail.hidden) closeInvoiceDetail();
   });
 
   const start = async () => {

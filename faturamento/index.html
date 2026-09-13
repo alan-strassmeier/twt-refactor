@@ -7,10 +7,10 @@
   <meta name="theme-color" content="#112a40">
   <title>Faturamento | TWT Airpack</title>
   <link rel="icon" href="/favicon.ico">
-  <link rel="stylesheet" href="/faturamento/styles.css?v=11">
+  <link rel="stylesheet" href="/faturamento/styles.css?v=12">
   <script src="/faturamento/sort.js?v=1" defer></script>
-  <script src="/faturamento/app.js?v=14" defer></script>
-  <script src="/faturamento/cobranca.js?v=1" defer></script>
+  <script src="/faturamento/app.js?v=15" defer></script>
+  <script src="/faturamento/cobranca.js?v=2" defer></script>
 </head>
 <body>
   <div class="page-shell">
@@ -211,7 +211,10 @@
                   <th scope="col" class="numeric" aria-sort="none"><button class="sort-button" type="button" data-sort-key="total">Valor total <span class="sort-indicator" aria-hidden="true">↕</span></button></th>
                   <th scope="col" class="numeric" aria-sort="none"><button class="sort-button" type="button" data-sort-key="paid">Valor pago <span class="sort-indicator" aria-hidden="true">↕</span></button></th>
                   <th scope="col" class="numeric" aria-sort="none"><button class="sort-button" type="button" data-sort-key="balance">Saldo <span class="sort-indicator" aria-hidden="true">↕</span></button></th>
-                  <th scope="col" aria-sort="none"><button class="sort-button" type="button" data-sort-key="status">Status <span class="sort-indicator" aria-hidden="true">↕</span></button></th>
+                  <th scope="col" aria-sort="none"><button class="sort-button" type="button" data-sort-key="status">Financeiro <span class="sort-indicator" aria-hidden="true">↕</span></button></th>
+                  <th scope="col">Documentos</th>
+                  <th scope="col">Cobrança</th>
+                  <th scope="col">Pagamento</th>
                 </tr>
               </thead>
               <tbody id="invoiceRows"></tbody>
@@ -291,7 +294,7 @@
               aria-selected="true">E-mails cadastrados</button>
             <button class="collection-section-tab" type="button" role="tab"
               data-collection-section="pendingDoccobSection" aria-controls="pendingDoccobSection"
-              aria-selected="false" tabindex="-1">Aguardando pendência</button>
+              aria-selected="false" tabindex="-1">Pendências</button>
             <button class="collection-section-tab" type="button" role="tab"
               data-collection-section="collectionLogsSection" aria-controls="collectionLogsSection"
               aria-selected="false" tabindex="-1">Logs de envio</button>
@@ -300,7 +303,7 @@
           <section class="collection-summary" aria-label="Resumo das cobranças">
             <article><span>Empresas cadastradas</span><strong id="collectionCompanyCount">0</strong></article>
             <article><span>Destinatários</span><strong id="collectionContactCount">0</strong></article>
-            <article><span>Aguardando DOCCOB</span><strong id="collectionPendingCount">0</strong></article>
+            <article><span>Pendências abertas</span><strong id="collectionPendingCount">0</strong></article>
           </section>
 
           <section class="collection-card collection-anchor-target" id="collectionContactsSection"
@@ -331,19 +334,20 @@
             role="tabpanel" aria-labelledby="pendingDoccobTitle" hidden>
             <div class="collection-card-heading">
               <div>
-                <h2 id="pendingDoccobTitle">Faturas aguardando envio</h2>
+                <h2 id="pendingDoccobTitle">Central de pendências</h2>
                 <p id="pendingRunStatus">Nenhuma execução automática é iniciada por esta página. Use “Verificar agora” durante a etapa manual.</p>
               </div>
               <button class="button button-quiet" id="refreshPendingButton" type="button">Atualizar</button>
             </div>
+            <div class="pending-summary" id="pendingIssueSummary" aria-label="Resumo das pendências"></div>
             <div class="table-scroll collection-table-scroll">
-              <table class="collection-table">
-                <thead><tr><th>Fatura</th><th>Cliente</th><th>Motivo</th><th>Emissão</th><th>Vencimento</th><th>Última verificação</th><th>Origem</th><th>Verificações</th></tr></thead>
+              <table class="collection-table pending-table">
+                <thead><tr><th>Fatura</th><th>Cliente</th><th>Pendência</th><th>Prioridade</th><th>Vencimento</th><th>Atualização</th><th>Ação</th></tr></thead>
                 <tbody id="pendingRows"></tbody>
               </table>
               <div class="collection-empty" id="pendingEmpty" hidden>
-                <strong>Nenhuma fatura aguardando</strong>
-                <p>Todos os DOCCOB necessários foram localizados.</p>
+                <strong>Nenhuma pendência aberta</strong>
+                <p>Documentos, contatos, pagamentos e entregas estão sem alertas registrados.</p>
               </div>
             </div>
           </section>
@@ -501,6 +505,38 @@
         O conteúdo não foi armazenado neste registro antigo. A visualização estará disponível nos próximos envios.
       </p>
     </section>
+  </div>
+  <div class="invoice-detail" id="invoiceDetail" hidden>
+    <button class="invoice-detail-backdrop" id="invoiceDetailBackdrop" type="button"
+      aria-label="Fechar detalhes da fatura"></button>
+    <aside class="invoice-detail-panel" role="dialog" aria-modal="true"
+      aria-labelledby="invoiceDetailTitle">
+      <button class="invoice-detail-close" id="invoiceDetailClose" type="button"
+        aria-label="Fechar detalhes da fatura">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M6 6l12 12M18 6L6 18"></path>
+        </svg>
+      </button>
+      <span class="document-modal-eyebrow">Visão completa</span>
+      <h2 id="invoiceDetailTitle">Detalhes da fatura</h2>
+      <p id="invoiceDetailSubtitle">Conferindo o histórico financeiro…</p>
+      <div class="invoice-detail-loading" id="invoiceDetailLoading">
+        <span class="spinner" aria-hidden="true"></span> Carregando estados e movimentações
+      </div>
+      <div id="invoiceDetailContent" hidden>
+        <dl class="invoice-detail-summary" id="invoiceDetailSummary"></dl>
+        <section class="invoice-control-grid" id="invoiceControlGrid" aria-label="Estados da fatura"></section>
+        <div class="invoice-detail-actions">
+          <button class="button button-primary" id="invoiceDetailDocuments" type="button">Abrir documentos</button>
+          <button class="button button-quiet" id="invoiceDetailLogs" type="button">Ver logs de envio</button>
+        </div>
+        <section class="invoice-timeline" aria-labelledby="invoiceTimelineTitle">
+          <h3 id="invoiceTimelineTitle">Histórico</h3>
+          <ol id="invoiceTimeline"></ol>
+        </section>
+      </div>
+      <p class="invoice-detail-error" id="invoiceDetailError" hidden></p>
+    </aside>
   </div>
   <button class="back-to-top" id="backToTopButton" type="button"
     aria-label="Voltar ao topo da página" title="Voltar ao topo" hidden>
