@@ -5,6 +5,8 @@
     areaButtons: [...document.querySelectorAll('[data-billing-area]')],
     invoiceWorkspace: document.getElementById('invoiceWorkspace'),
     collectionWorkspace: document.getElementById('collectionWorkspace'),
+    collectionSectionButtons: [...document.querySelectorAll('[data-collection-section]')],
+    collectionSectionPanels: [...document.querySelectorAll('.collection-anchor-target')],
     message: document.getElementById('collectionMessage'),
     runButton: document.getElementById('runCollectionButton'),
     companyCount: document.getElementById('collectionCompanyCount'),
@@ -49,6 +51,7 @@
   const state = {
     loaded: false,
     loading: false,
+    collectionSection: 'collectionContactsSection',
     categories: [],
     logFilters: {},
     logPage: 1,
@@ -545,9 +548,44 @@
     if (collection && !state.loaded) loadCollection();
   };
 
+  const setCollectionSection = (sectionId, { focus = false } = {}) => {
+    const button = elements.collectionSectionButtons.find(
+      (item) => item.dataset.collectionSection === sectionId
+    );
+    if (!button) return;
+    state.collectionSection = sectionId;
+    elements.collectionSectionPanels.forEach((panel) => {
+      panel.hidden = panel.id !== sectionId;
+    });
+    elements.collectionSectionButtons.forEach((item) => {
+      const active = item === button;
+      item.classList.toggle('is-active', active);
+      item.setAttribute('aria-selected', String(active));
+      item.tabIndex = active ? 0 : -1;
+    });
+    if (focus) button.focus();
+  };
+
   elements.areaButtons.forEach((button) => {
     button.addEventListener('click', () => setArea(button.dataset.billingArea));
   });
+
+  elements.collectionSectionButtons.forEach((button, index) => {
+    button.addEventListener('click', () => setCollectionSection(button.dataset.collectionSection));
+    button.addEventListener('keydown', (event) => {
+      if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+      event.preventDefault();
+      const last = elements.collectionSectionButtons.length - 1;
+      const targetIndex = event.key === 'Home'
+        ? 0
+        : event.key === 'End'
+          ? last
+          : (index + (event.key === 'ArrowRight' ? 1 : -1) + last + 1) % (last + 1);
+      const target = elements.collectionSectionButtons[targetIndex];
+      setCollectionSection(target.dataset.collectionSection, { focus: true });
+    });
+  });
+  setCollectionSection(state.collectionSection);
 
   elements.categoryForm.addEventListener('submit', async (event) => {
     event.preventDefault();

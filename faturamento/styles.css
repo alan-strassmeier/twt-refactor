@@ -1249,23 +1249,37 @@ body.modal-open {
   white-space: nowrap;
 }
 
-.collection-quick-nav a {
+.collection-section-tab {
   min-height: 38px;
   padding: 8px 12px;
   display: inline-flex;
   align-items: center;
+  border: 0;
   border-radius: 9px;
   color: var(--navy-800);
+  background: transparent;
+  font-family: inherit;
   font-size: .8rem;
   font-weight: 800;
-  text-decoration: none;
   white-space: nowrap;
+  cursor: pointer;
   transition: color .15s ease, background .15s ease;
 }
 
-.collection-quick-nav a:hover {
+.collection-section-tab:hover {
   color: var(--blue-600);
   background: var(--blue-50);
+}
+
+.collection-section-tab.is-active {
+  color: #fff;
+  background: var(--navy-800);
+  box-shadow: 0 4px 12px rgb(17 42 64 / 18%);
+}
+
+.collection-section-tab:focus-visible {
+  outline: 3px solid rgb(50 138 229 / 30%);
+  outline-offset: 2px;
 }
 
 .collection-anchor-target {

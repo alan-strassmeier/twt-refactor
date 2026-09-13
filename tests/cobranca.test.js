@@ -943,8 +943,11 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(html, /id="categoryDeleteModal"/);
   assert.match(html, /id="emailLogModal"/);
   assert.match(html, /id="emailLogBody"/);
-  assert.match(html, /href="#pendingDoccobSection"/);
-  assert.match(html, /href="#collectionLogsSection"/);
+  assert.match(html, /data-collection-section="collectionContactsSection"/);
+  assert.match(html, /data-collection-section="pendingDoccobSection"/);
+  assert.match(html, /data-collection-section="collectionLogsSection"/);
+  assert.match(html, /id="pendingDoccobSection"[\s\S]*?hidden>/);
+  assert.match(html, /id="collectionLogsSection"[\s\S]*?hidden>/);
   assert.match(source, /route, \.\.\.query/);
   assert.match(source, /const filters = logFilters\(\);[\s\S]*setLoading\(true\)/);
   assert.doesNotMatch(source, /window\.confirm\(`Excluir \$\{category\.name\}/);
@@ -955,6 +958,8 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(source, /method: 'PATCH'/);
   assert.match(source, /Object\.assign\(contact, saved\)/);
   assert.doesNotMatch(source, /const setContactEnabled[\s\S]*?await loadCategories\(\);[\s\S]*?const syncContacts/);
+  assert.match(source, /panel\.hidden = panel\.id !== sectionId/);
+  assert.match(source, /setCollectionSection\(state\.collectionSection\)/);
   assert.match(apiSource, /query\.route === 'webhook'/);
   assert.match(apiSource, /query\.route === 'contacts-sync'/);
   assert.match(apiSource, /req\.method === 'GET' \|\| req\.method === 'HEAD'/);
