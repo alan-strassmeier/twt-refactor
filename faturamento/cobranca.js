@@ -54,6 +54,7 @@
     loading: false,
     collectionSection: 'collectionContactsSection',
     categories: [],
+    pendingFilter: 'all',
     logFilters: {},
     logPage: 1,
     logTotalPages: 1,
@@ -401,7 +402,14 @@
   };
 
   const renderPending = (payload) => {
-    const issues = Array.isArray(payload.issues) ? payload.issues : [];
+    const allIssues = Array.isArray(payload.issues) ? payload.issues : [];
+    const issues = state.pendingFilter === 'all'
+      ? allIssues
+      : allIssues.filter((record) => (
+        state.pendingFilter === 'critical'
+          ? record.priority === 'critical'
+          : record.type === state.pendingFilter
+      ));
     const priorityLabels = {
       critical: 'Crítica',
       high: 'Alta',
@@ -410,7 +418,9 @@
     const actionLabels = {
       contacts: 'Ver contatos',
       logs: 'Ver logs',
-      invoice: 'Abrir fatura'
+      documents: 'Conferir documentos',
+      payment: 'Conferir boleto',
+      invoice: 'Ver detalhes'
     };
     const rows = issues.map((record) => {
       const row = document.createElement('tr');
@@ -434,16 +444,26 @@
       action.type = 'button';
       action.className = 'button button-quiet issue-action';
       action.textContent = actionLabels[record.action] || 'Conferir';
-      action.addEventListener('click', () => navigateIssue(record));
+      action.addEventListener('click', (event) => navigateIssue(record, event.currentTarget));
       actionCell.appendChild(action);
       row.appendChild(actionCell);
       return row;
     });
     elements.pendingRows.replaceChildren(...rows);
     elements.pendingEmpty.hidden = issues.length > 0;
-    elements.pendingCount.textContent = String(payload.total ?? issues.length);
+    const emptyTitle = elements.pendingEmpty.querySelector('strong');
+    const emptyDescription = elements.pendingEmpty.querySelector('p');
+    if (state.pendingFilter === 'all') {
+      emptyTitle.textContent = 'Nenhuma pendência aberta';
+      emptyDescription.textContent = 'Documentos, contatos, pagamentos e entregas estão sem alertas registrados.';
+    } else {
+      emptyTitle.textContent = 'Nenhuma pendência neste filtro';
+      emptyDescription.textContent = 'Selecione outro tipo para conferir as demais ações abertas.';
+    }
+    elements.pendingCount.textContent = String(payload.total ?? allIssues.length);
     const summary = payload.summary || {};
     const summaryItems = [
+      ['Todas', payload.total ?? allIssues.length, 'all'],
       ['Críticas', summary.critical || 0, 'critical'],
       ['Documentos', summary.documents || 0, 'documents'],
       ['Contatos', summary.contacts || 0, 'contacts'],
@@ -451,9 +471,16 @@
       ['Pagamento', summary.payment || 0, 'payment']
     ];
     elements.pendingIssueSummary.replaceChildren(...summaryItems.map(([label, count, type]) => {
-      const item = document.createElement('span');
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.className = 'pending-summary-filter';
       item.dataset.type = type;
+      item.setAttribute('aria-pressed', String(state.pendingFilter === type));
       item.textContent = `${label}: ${count}`;
+      item.addEventListener('click', () => {
+        state.pendingFilter = type;
+        renderPending(payload);
+      });
       return item;
     }));
     if (elements.pendingRunStatus) {
@@ -468,7 +495,7 @@
     }
   };
 
-  const navigateIssue = async (record) => {
+  const navigateIssue = async (record, trigger) => {
     if (record.action === 'contacts') {
       setCollectionSection('collectionContactsSection');
       const category = elements.categoryList.querySelector(
@@ -498,10 +525,15 @@
       }
       return;
     }
-    setArea('invoices');
-    const filterForm = document.getElementById('filterForm');
-    filterForm.elements.id.value = record.invoiceId || '';
-    filterForm.requestSubmit();
+    if (record.action === 'documents' || record.action === 'payment') {
+      window.dispatchEvent(new CustomEvent('billing:open-documents', {
+        detail: { invoiceId: record.invoiceId, trigger }
+      }));
+      return;
+    }
+    window.dispatchEvent(new CustomEvent('billing:open-invoice-detail', {
+      detail: { invoiceId: record.invoiceId, trigger }
+    }));
   };
 
   const loadPending = async () => renderPending(await requestJson(endpoint('pending')));

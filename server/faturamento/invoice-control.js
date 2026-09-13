@@ -183,7 +183,13 @@ const issueFromPending = (record, now) => {
     updatedAt: record.lastCheckedAt || record.firstSeenAt || '',
     title: labels[type],
     message: message || labels[type],
-    action: type === 'contacts' ? 'contacts' : 'invoice'
+    action: type === 'contacts'
+      ? 'contacts'
+      : type === 'documents'
+        ? 'documents'
+        : type === 'payment'
+          ? 'payment'
+          : 'invoice'
   };
 };
 

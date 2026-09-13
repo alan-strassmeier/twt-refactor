@@ -1681,20 +1681,38 @@ body.modal-open {
   background: #f8fbfd;
 }
 
-.pending-summary span {
+.pending-summary-filter {
   padding: 6px 10px;
   border: 1px solid #dce7ef;
   border-radius: 99px;
   color: var(--muted);
   background: white;
+  font: inherit;
   font-size: .74rem;
   font-weight: 800;
+  cursor: pointer;
 }
 
 .pending-summary [data-type="critical"] {
   color: var(--danger);
   border-color: #efc7cd;
   background: #fff5f6;
+}
+
+.pending-summary-filter:hover {
+  border-color: var(--blue-500);
+  color: var(--blue-600);
+}
+
+.pending-summary-filter:focus-visible {
+  outline: 3px solid rgb(25 118 189 / 22%);
+  outline-offset: 2px;
+}
+
+.pending-summary-filter[aria-pressed="true"] {
+  border-color: var(--blue-600);
+  color: white;
+  background: var(--blue-600);
 }
 
 .issue-priority {

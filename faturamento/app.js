@@ -1488,6 +1488,22 @@
       detail: { invoiceId }
     }));
   });
+  window.addEventListener('billing:open-documents', (event) => {
+    const invoiceId = String(event.detail?.invoiceId || '').replace(/\D/g, '');
+    if (!invoiceId) return;
+    const trigger = event.detail?.trigger instanceof HTMLElement
+      ? event.detail.trigger
+      : document.activeElement;
+    openInvoiceDocuments(invoiceId, trigger);
+  });
+  window.addEventListener('billing:open-invoice-detail', (event) => {
+    const invoiceId = String(event.detail?.invoiceId || '').replace(/\D/g, '');
+    if (!invoiceId) return;
+    const trigger = event.detail?.trigger instanceof HTMLElement
+      ? event.detail.trigger
+      : document.activeElement;
+    openInvoiceDetail(invoiceId, trigger);
+  });
   document.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape') return;
     if (!elements.nfseConfirmModal.hidden) closeNfseConfirm(true);

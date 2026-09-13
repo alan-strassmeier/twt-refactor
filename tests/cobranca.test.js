@@ -986,8 +986,25 @@ test('fila unificada prioriza vencidas e reúne falhas de documentos e entrega',
   assert.equal(issues.length, 2);
   assert.equal(issues[0].invoiceId, '100');
   assert.equal(issues[0].priority, 'critical');
+  assert.equal(issues[0].action, 'documents');
   assert.equal(issues[1].type, 'email');
   assert.equal(issues[1].action, 'logs');
+});
+
+test('fila direciona boleto e falha geral para a ação contextual correta', () => {
+  const issues = buildUnifiedIssues({
+    pending: [{
+      invoiceId: '200',
+      reason: 'processing_error',
+      message: 'Falha ao gerar boleto no Itaú.'
+    }, {
+      invoiceId: '201',
+      reason: 'processing_error',
+      message: 'Falha inesperada no processamento.'
+    }]
+  });
+  assert.equal(issues.find((issue) => issue.invoiceId === '200').action, 'payment');
+  assert.equal(issues.find((issue) => issue.invoiceId === '201').action, 'invoice');
 });
 
 test('fatura ausente na Brudam fica somente no histórico e não volta às pendências', () => {
@@ -1059,6 +1076,14 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.doesNotMatch(source, /const setContactEnabled[\s\S]*?await loadCategories\(\);[\s\S]*?const syncContacts/);
   assert.match(source, /panel\.hidden = panel\.id !== sectionId/);
   assert.match(source, /setCollectionSection\(state\.collectionSection\)/);
+  assert.match(source, /billing:open-documents/);
+  assert.match(source, /billing:open-invoice-detail/);
+  assert.match(source, /Conferir documentos/);
+  assert.match(source, /Conferir boleto/);
+  assert.match(source, /pendingFilter: 'all'/);
+  assert.match(source, /className = 'pending-summary-filter'/);
+  assert.match(source, /aria-pressed/);
+  assert.match(source, /record\.priority === 'critical'/);
   assert.match(apiSource, /query\.route === 'webhook'/);
   assert.match(apiSource, /query\.route === 'contacts-sync'/);
   assert.match(apiSource, /query\.route === 'invoice-detail'/);
