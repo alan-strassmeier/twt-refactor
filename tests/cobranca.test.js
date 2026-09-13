@@ -47,6 +47,7 @@ const {
   buildBillingQueue,
   scanInvoices,
   pendingRecord,
+  isTerminalBillingFailure,
   processInvoiceEvent
 } = require('../server/faturamento/cobranca-processor');
 const {
@@ -987,6 +988,31 @@ test('fila unificada prioriza vencidas e reúne falhas de documentos e entrega',
   assert.equal(issues[0].priority, 'critical');
   assert.equal(issues[1].type, 'email');
   assert.equal(issues[1].action, 'logs');
+});
+
+test('fatura ausente na Brudam fica somente no histórico e não volta às pendências', () => {
+  const message = 'Fatura não encontrada na Brudam.';
+  assert.equal(isTerminalBillingFailure({ message }), true);
+  const issues = buildUnifiedIssues({
+    pending: [{
+      invoiceId: '11779',
+      reason: 'processing_error',
+      message
+    }],
+    logs: [{
+      id: 'erro-11779',
+      invoiceId: '11779',
+      status: 'error',
+      message
+    }, {
+      id: 'bounce-resolvivel',
+      invoiceId: '11780',
+      status: 'hard_bounce',
+      email: 'corrigir@example.com',
+      message: 'Destinatário rejeitado.'
+    }]
+  });
+  assert.deepEqual(issues.map((issue) => issue.invoiceId), ['11780']);
 });
 
 test('histórico da fatura combina emissão, boleto, pendência, e-mails e vencimento', () => {

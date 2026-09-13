@@ -1,6 +1,7 @@
 const { requiresTedDocPayment } = require('./billing-rules');
 const boletoStore = require('./boleto-store');
 const cobrancaStore = require('./cobranca-store');
+const { isTerminalBillingFailure } = require('./billing-failures');
 
 const digits = (value) => String(value || '').replace(/\D/g, '');
 
@@ -202,10 +203,14 @@ const issueFromLog = (record, now) => ({
 });
 
 const buildUnifiedIssues = ({ pending = [], logs = [], now = new Date() } = {}) => {
-  const issues = pending.map((record) => issueFromPending(record, now));
+  const issues = pending
+    .filter((record) => !isTerminalBillingFailure(record))
+    .map((record) => issueFromPending(record, now));
   const pendingKeys = new Set(issues.map((issue) => `${digits(issue.invoiceId)}:${issue.type}`));
   for (const log of logs) {
+    if (isTerminalBillingFailure(log)) continue;
     if (!failedDeliveryStatuses.has(log.status) && log.status !== 'waiting_contacts') continue;
+    if (log.status === 'error' && !log.email && !log.clientReference) continue;
     const issue = issueFromLog(log, now);
     const key = `${digits(issue.invoiceId)}:${issue.type}`;
     if (pendingKeys.has(key)) continue;
