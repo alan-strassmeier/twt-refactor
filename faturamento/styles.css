@@ -651,6 +651,19 @@ select:focus {
   border: 1px solid #e2eaf0;
   border-radius: 10px;
   background: #fbfdfe;
+  transition: border-color .16s ease, background-color .16s ease,
+    box-shadow .16s ease, opacity .16s ease, transform .16s ease;
+}
+
+.chart-legend li.is-highlighted {
+  border-color: #1976bd;
+  background: #eef7ff;
+  box-shadow: 0 8px 20px rgb(25 118 189 / 16%);
+  transform: translateX(2px);
+}
+
+.chart-legend.has-highlight li:not(.is-highlighted) {
+  opacity: .48;
 }
 
 .legend-swatch {

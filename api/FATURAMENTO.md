@@ -487,6 +487,11 @@ Cada item de `debtors` informa nome, CNPJ, saldo, percentual do total e número
 de faturas pendentes. O resumo consolidado usa cache temporário de cinco
 minutos para reduzir chamadas repetidas à Brudam.
 
+Ao passar o ponteiro, focar ou clicar em uma divisão do gráfico, a empresa
+correspondente é destacada na legenda. O clique mantém a seleção até outra
+divisão ser escolhida ou o usuário clicar fora do gráfico; a legenda rola
+automaticamente quando a empresa estiver fora da área visível.
+
 ## PDF da fatura
 
 A coluna `Visualizar` abre `GET /api/faturamento/fatura-pdf?id=...` em uma nova

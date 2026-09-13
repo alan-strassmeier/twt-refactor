@@ -726,12 +726,48 @@
   const chartColor = (index) => CHART_COLORS[index] ||
     `hsl(${Math.round((index * 137.508) % 360)} 58% 48%)`;
 
-  const hideChartTooltip = () => {
-    elements.chartTooltip.hidden = true;
+  let selectedChartIndex = null;
+
+  const clearChartHighlight = () => {
     elements.debtorChart.classList.remove('has-highlight');
+    elements.chartLegend.classList.remove('has-highlight');
     elements.debtorChartSegments.querySelectorAll('.is-highlighted').forEach((segment) => {
       segment.classList.remove('is-highlighted');
     });
+    elements.chartLegend.querySelectorAll('.is-highlighted').forEach((item) => {
+      item.classList.remove('is-highlighted');
+    });
+  };
+
+  const highlightChartEntry = (index, scrollLegend = false) => {
+    clearChartHighlight();
+    const selector = `[data-chart-index="${index}"]`;
+    const segment = elements.debtorChartSegments.querySelector(selector);
+    const legendItem = elements.chartLegend.querySelector(selector);
+    if (!segment || !legendItem) return;
+    elements.debtorChart.classList.add('has-highlight');
+    elements.chartLegend.classList.add('has-highlight');
+    segment.classList.add('is-highlighted');
+    legendItem.classList.add('is-highlighted');
+    if (scrollLegend && typeof legendItem.scrollIntoView === 'function') {
+      legendItem.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    }
+  };
+
+  const setSelectedChartIndex = (index) => {
+    selectedChartIndex = index;
+    elements.debtorChartSegments.querySelectorAll('.donut-segment').forEach((segment) => {
+      segment.setAttribute(
+        'aria-pressed',
+        String(index !== null && segment.dataset.chartIndex === String(index))
+      );
+    });
+  };
+
+  const hideChartTooltip = () => {
+    elements.chartTooltip.hidden = true;
+    if (selectedChartIndex === null) clearChartHighlight();
+    else highlightChartEntry(selectedChartIndex);
   };
 
   const positionChartTooltip = (clientX, clientY) => {
@@ -742,16 +778,12 @@
     elements.chartTooltip.style.top = `${top}px`;
   };
 
-  const showChartTooltip = (debtor, segment, clientX, clientY) => {
+  const showChartTooltip = (debtor, index, clientX, clientY) => {
     elements.chartTooltipName.textContent = debtor.name || 'Não informado';
     elements.chartTooltipPercentage.textContent = `${percentage.format(debtor.percentage)}% do total`;
     elements.chartTooltipValue.textContent = currency.format(debtor.value);
     elements.chartTooltip.hidden = false;
-    elements.debtorChart.classList.add('has-highlight');
-    elements.debtorChartSegments.querySelectorAll('.is-highlighted').forEach((item) => {
-      item.classList.remove('is-highlighted');
-    });
-    segment.classList.add('is-highlighted');
+    highlightChartEntry(index, true);
     if (Number.isFinite(clientX) && Number.isFinite(clientY)) {
       positionChartTooltip(clientX, clientY);
     } else {
@@ -772,8 +804,10 @@
     segment.setAttribute('stroke-dasharray', `${share} ${100 - share}`);
     segment.setAttribute('stroke-dashoffset', String(-offset));
     segment.setAttribute('transform', 'rotate(-90 120 120)');
+    segment.setAttribute('data-chart-index', String(index));
     segment.setAttribute('tabindex', '0');
-    segment.setAttribute('role', 'img');
+    segment.setAttribute('role', 'button');
+    segment.setAttribute('aria-pressed', 'false');
     segment.setAttribute(
       'aria-label',
       `${debtor.name || 'Não informado'}: ${percentage.format(share)}% do total, ${currency.format(debtor.value)}`
@@ -783,19 +817,40 @@
     title.textContent = `${debtor.name || 'Não informado'} — ${percentage.format(share)}% — ${currency.format(debtor.value)}`;
     segment.appendChild(title);
     segment.addEventListener('pointerenter', (event) => {
-      showChartTooltip(debtor, segment, event.clientX, event.clientY);
+      showChartTooltip(debtor, index, event.clientX, event.clientY);
     });
     segment.addEventListener('pointermove', (event) => {
       positionChartTooltip(event.clientX, event.clientY);
     });
     segment.addEventListener('pointerleave', hideChartTooltip);
-    segment.addEventListener('focus', () => showChartTooltip(debtor, segment));
+    segment.addEventListener('focus', () => showChartTooltip(debtor, index));
     segment.addEventListener('blur', hideChartTooltip);
+    segment.addEventListener('click', (event) => {
+      const nextIndex = selectedChartIndex === index ? null : index;
+      setSelectedChartIndex(nextIndex);
+      if (nextIndex === null) {
+        elements.chartTooltip.hidden = true;
+        clearChartHighlight();
+        return;
+      }
+      showChartTooltip(
+        debtor,
+        index,
+        event.detail ? event.clientX : undefined,
+        event.detail ? event.clientY : undefined
+      );
+    });
+    segment.addEventListener('keydown', (event) => {
+      if (!['Enter', ' '].includes(event.key)) return;
+      event.preventDefault();
+      segment.click();
+    });
     return segment;
   };
 
   const createLegendItem = (debtor, index) => {
     const item = document.createElement('li');
+    item.dataset.chartIndex = String(index);
     const swatch = document.createElement('span');
     swatch.className = 'legend-swatch';
     swatch.style.backgroundColor = chartColor(index);
@@ -827,6 +882,7 @@
     const debtors = Array.isArray(payload.debtors)
       ? payload.debtors.filter((debtor) => Number(debtor.value) > 0)
       : [];
+    setSelectedChartIndex(null);
     hideChartTooltip();
     elements.debtorChartSegments.replaceChildren();
     elements.chartLegend.replaceChildren();
@@ -868,6 +924,7 @@
     state.sortDirection = 'desc';
     state.hasSearched = false;
     elements.invoiceRows.replaceChildren();
+    setSelectedChartIndex(null);
     hideChartTooltip();
     elements.debtorChartSegments.replaceChildren();
     elements.chartLegend.replaceChildren();
@@ -1064,6 +1121,12 @@
 
   elements.viewButtons.forEach((button) => {
     button.addEventListener('click', () => setView(button.dataset.viewMode));
+  });
+
+  document.addEventListener('click', (event) => {
+    if (selectedChartIndex === null || elements.debtorChart.contains(event.target)) return;
+    setSelectedChartIndex(null);
+    hideChartTooltip();
   });
 
   elements.previousPageButtons.forEach((button) => {

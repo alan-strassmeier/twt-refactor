@@ -710,9 +710,17 @@ test('resume somente saldos pendentes por empresa', () => {
 test('expõe o modo gráfico e envia a visualização de devedores à API', () => {
   const html = readFileSync(require.resolve('../faturamento/index.html'), 'utf8');
   const source = readFileSync(require.resolve('../faturamento/app.js'), 'utf8');
+  const styles = readFileSync(require.resolve('../faturamento/styles.css'), 'utf8');
   assert.match(html, /data-view-mode="debtors"/);
   assert.match(html, /id="debtorChart"/);
   assert.match(html, /id="chartTooltipPercentage"/);
   assert.match(source, /params\.set\('view', 'debtors'\)/);
   assert.match(source, /createElementNS\('http:\/\/www\.w3\.org\/2000\/svg', 'circle'\)/);
+  assert.match(source, /data-chart-index/);
+  assert.match(source, /highlightChartEntry\(index, true\)/);
+  assert.match(source, /legendItem\.scrollIntoView/);
+  assert.match(source, /segment\.addEventListener\('click'/);
+  assert.match(source, /segment\.addEventListener\('keydown'/);
+  assert.match(styles, /\.chart-legend li\.is-highlighted/);
+  assert.match(styles, /\.chart-legend\.has-highlight li:not\(\.is-highlighted\)/);
 });
