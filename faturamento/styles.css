@@ -529,6 +529,52 @@ select:focus {
   gap: clamp(30px, 6vw, 82px);
 }
 
+.aging-summary {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(135px, 1fr));
+  gap: 10px;
+}
+
+.aging-card {
+  min-width: 0;
+  padding: 14px 16px;
+  display: grid;
+  gap: 5px;
+  border: 1px solid #e2eaf0;
+  border-radius: 12px;
+  background: #fbfdfe;
+}
+
+.aging-card span,
+.aging-card small {
+  color: var(--muted);
+  font-size: .72rem;
+  font-weight: 700;
+}
+
+.aging-card strong {
+  overflow: hidden;
+  color: var(--navy-900);
+  font-size: clamp(.9rem, 1.4vw, 1.08rem);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aging-card.is-current {
+  border-color: rgb(25 118 189 / 25%);
+  background: #eef7ff;
+}
+
+.aging-card.is-overdue {
+  border-color: rgb(196 54 73 / 22%);
+  background: #fff5f6;
+}
+
+.aging-card.is-overdue strong {
+  color: var(--danger);
+}
+
 .donut-wrap {
   position: relative;
   width: min(100%, 560px);
@@ -662,6 +708,15 @@ select:focus {
   transform: translateX(2px);
 }
 
+.chart-legend li.is-actionable {
+  cursor: pointer;
+}
+
+.chart-legend li.is-actionable:focus-visible {
+  outline: 3px solid rgb(25 118 189 / 25%);
+  outline-offset: 2px;
+}
+
 .chart-legend.has-highlight li:not(.is-highlighted) {
   opacity: .48;
 }
@@ -693,6 +748,14 @@ select:focus {
   margin-top: 2px;
   color: var(--muted);
   font-size: .7rem;
+}
+
+.legend-company .legend-action {
+  display: block;
+  margin-top: 4px;
+  color: #1976bd;
+  font-size: .7rem;
+  font-weight: 800;
 }
 
 .legend-value {
@@ -765,7 +828,7 @@ select:focus {
 
 table {
   width: 100%;
-  min-width: 1190px;
+  min-width: 1320px;
   border-collapse: collapse;
   font-size: .88rem;
 }
@@ -1704,6 +1767,37 @@ body.modal-open {
   font-size: .75rem;
   font-weight: 800;
   white-space: nowrap;
+}
+
+.due-timing {
+  display: inline-block;
+  padding: 6px 9px;
+  border-radius: 99px;
+  font-size: .73rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.due-timing.is-overdue {
+  color: var(--danger);
+  background: #fcecef;
+}
+
+.due-timing.is-today,
+.due-timing.is-soon {
+  color: var(--warning);
+  background: #fff5e5;
+}
+
+.due-timing.is-future {
+  color: #1976bd;
+  background: #eef7ff;
+}
+
+.due-timing.is-closed,
+.due-timing.is-unknown {
+  color: var(--muted);
+  background: #eef2f5;
 }
 
 .status-open {

@@ -672,7 +672,57 @@ const isPendingInvoice = (invoice) => {
   return !['liquid', 'pago', 'quitad', 'cancel'].some((term) => label.includes(term));
 };
 
-const buildDebtorSummary = (invoices) => {
+const AGING_BUCKETS = [
+  { key: 'current', label: 'A vencer' },
+  { key: 'overdue_1_7', label: '1–7 dias' },
+  { key: 'overdue_8_15', label: '8–15 dias' },
+  { key: 'overdue_16_30', label: '16–30 dias' },
+  { key: 'overdue_31_60', label: '31–60 dias' },
+  { key: 'overdue_61_plus', label: 'Mais de 60 dias' },
+  { key: 'unknown', label: 'Sem vencimento' }
+];
+
+const isoDayNumber = (value) => {
+  const normalized = String(value || '').slice(0, 10);
+  if (!validDate(normalized)) return null;
+  return Math.floor(Date.parse(`${normalized}T00:00:00Z`) / 86400000);
+};
+
+const agingBucketKey = (dueAt, today) => {
+  const dueDay = isoDayNumber(dueAt);
+  const todayDay = isoDayNumber(today);
+  if (dueDay === null || todayDay === null) return 'unknown';
+  const overdueDays = todayDay - dueDay;
+  if (overdueDays <= 0) return 'current';
+  if (overdueDays <= 7) return 'overdue_1_7';
+  if (overdueDays <= 15) return 'overdue_8_15';
+  if (overdueDays <= 30) return 'overdue_16_30';
+  if (overdueDays <= 60) return 'overdue_31_60';
+  return 'overdue_61_plus';
+};
+
+const buildAgingBuckets = (invoices, today = saoPauloDate()) => {
+  const buckets = new Map(AGING_BUCKETS.map((bucket) => [bucket.key, {
+    ...bucket,
+    valueInCents: 0,
+    invoiceCount: 0
+  }]));
+  invoices.filter(isPendingInvoice).forEach((invoice) => {
+    const valueInCents = Math.round(Number(invoice.balance) * 100);
+    if (valueInCents <= 0) return;
+    const bucket = buckets.get(agingBucketKey(invoice.dueAt, today));
+    bucket.valueInCents += valueInCents;
+    bucket.invoiceCount += 1;
+  });
+  return [...buckets.values()]
+    .filter((bucket) => bucket.key !== 'unknown' || bucket.invoiceCount > 0)
+    .map(({ valueInCents, ...bucket }) => ({
+      ...bucket,
+      value: valueInCents / 100
+    }));
+};
+
+const buildDebtorSummary = (invoices, options = {}) => {
   const groups = new Map();
   let invoiceCount = 0;
   invoices.filter(isPendingInvoice).forEach((invoice) => {
@@ -717,16 +767,17 @@ const buildDebtorSummary = (invoices) => {
     invoiceCount,
     companyCount: debtors.length,
     largestDebtor: debtors[0] || null,
-    debtors
+    debtors,
+    agingBuckets: buildAgingBuckets(invoices, options.today || saoPauloDate(options.now))
   };
 };
 
-const debtorSummaryCacheKey = (query) => {
+const debtorSummaryCacheKey = (query, today) => {
   const params = new URLSearchParams(query);
   params.delete('limit');
   params.delete('skip');
   params.sort();
-  return params.toString();
+  return `${today}:${params.toString()}`;
 };
 
 const debtorInvoiceInput = (input = {}) => {
@@ -736,10 +787,11 @@ const debtorInvoiceInput = (input = {}) => {
 };
 
 const fetchDebtorSummary = async (input) => {
+  const today = saoPauloDate();
   const debtorInput = debtorInvoiceInput(input);
   if (!debtorInput) {
     return {
-      ...buildDebtorSummary([]),
+      ...buildDebtorSummary([], { today }),
       pagesLoaded: 0,
       recordsRead: 0
     };
@@ -748,7 +800,7 @@ const fetchDebtorSummary = async (input) => {
   let params = new URLSearchParams(query);
   params.set('limit', '100');
   params.set('skip', '0');
-  const cacheKey = debtorSummaryCacheKey(params);
+  const cacheKey = debtorSummaryCacheKey(params, today);
   const cached = debtorSummaryCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) return cached.summary;
   if (cached) debtorSummaryCache.delete(cacheKey);
@@ -790,7 +842,7 @@ const fetchDebtorSummary = async (input) => {
     .filter(isPendingInvoice);
   invoices = await enrichInvoicesWithCompanies(invoices);
   const summary = {
-    ...buildDebtorSummary(invoices),
+    ...buildDebtorSummary(invoices, { today }),
     pagesLoaded: collected.pagesLoaded,
     recordsRead: collected.invoices.length
   };
@@ -935,6 +987,8 @@ module.exports = {
   filterAndSortCompanyInvoices,
   invoiceMatchesQuery,
   isPendingInvoice,
+  agingBucketKey,
+  buildAgingBuckets,
   buildDebtorSummary,
   debtorInvoiceInput,
   plainInvoiceIdQuery,

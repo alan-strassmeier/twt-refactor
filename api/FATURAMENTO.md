@@ -487,10 +487,22 @@ Cada item de `debtors` informa nome, CNPJ, saldo, percentual do total e número
 de faturas pendentes. O resumo consolidado usa cache temporário de cinco
 minutos para reduzir chamadas repetidas à Brudam.
 
+O gráfico também apresenta o saldo e a quantidade de faturas nas faixas **A
+vencer**, **1–7**, **8–15**, **16–30**, **31–60** e **Mais de 60 dias**. As
+faixas são calculadas pela data corrente em São Paulo e o cache é separado por
+dia para não preservar uma classificação anterior após a meia-noite.
+
 Ao passar o ponteiro, focar ou clicar em uma divisão do gráfico, a empresa
 correspondente é destacada na legenda. O clique mantém a seleção até outra
 divisão ser escolhida ou o usuário clicar fora do gráfico; a legenda rola
-automaticamente quando a empresa estiver fora da área visível.
+automaticamente quando a empresa estiver fora da área visível. Cada empresa da
+legenda também funciona como atalho: ao acioná-la, a interface preenche o CNPJ,
+mantém os demais filtros e abre a lista de faturas em aberto daquela empresa.
+
+Na lista de faturas, a coluna **Prazo** calcula a diferença entre o vencimento
+e a data atual em São Paulo. Ela diferencia faturas vencidas, que vencem hoje,
+que vencem amanhã e as que ainda possuem prazo maior, sem marcar faturas
+liquidadas ou canceladas como atrasadas.
 
 ## PDF da fatura
 

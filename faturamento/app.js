@@ -46,6 +46,7 @@
     chartTooltipName: document.getElementById('chartTooltipName'),
     chartTooltipPercentage: document.getElementById('chartTooltipPercentage'),
     chartTooltipValue: document.getElementById('chartTooltipValue'),
+    agingSummary: document.getElementById('agingSummary'),
     sortHeaders: [...document.querySelectorAll('[data-sort-key]')],
     tableHeader: document.querySelector('.table-card thead'),
     backToTopButton: document.getElementById('backToTopButton'),
@@ -157,6 +158,59 @@
     return match ? `${match[3]}/${match[2]}/${match[1]}` : value || '—';
   };
 
+  const saoPauloToday = () => {
+    const parts = new Intl.DateTimeFormat('pt-BR', {
+      timeZone: 'America/Sao_Paulo',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    }).formatToParts(new Date());
+    const part = (type) => parts.find((item) => item.type === type)?.value;
+    return `${part('year')}-${part('month')}-${part('day')}`;
+  };
+
+  const isoDayNumber = (value) => {
+    const normalized = String(value || '').slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) return null;
+    const timestamp = Date.parse(`${normalized}T00:00:00Z`);
+    if (Number.isNaN(timestamp) || new Date(timestamp).toISOString().slice(0, 10) !== normalized) {
+      return null;
+    }
+    return Math.floor(timestamp / 86400000);
+  };
+
+  const invoiceDueTiming = (invoice, today = saoPauloToday()) => {
+    const statusLabel = String(invoice.statusLabel || '').toLocaleLowerCase('pt-BR');
+    if (invoice.status === 2 || statusLabel.startsWith('cancel')) {
+      return { label: 'Cancelada', className: 'is-closed' };
+    }
+    if (
+      invoice.status === 1 ||
+      ['liquid', 'pago', 'quitad'].some((term) => statusLabel.includes(term))
+    ) {
+      return { label: 'Liquidada', className: 'is-closed' };
+    }
+    const dueDay = isoDayNumber(invoice.dueAt);
+    const todayDay = isoDayNumber(today);
+    if (dueDay === null || todayDay === null) {
+      return { label: 'Não informado', className: 'is-unknown' };
+    }
+    const daysUntilDue = dueDay - todayDay;
+    if (daysUntilDue < 0) {
+      const overdueDays = Math.abs(daysUntilDue);
+      return {
+        label: `${overdueDays} ${overdueDays === 1 ? 'dia' : 'dias'} em atraso`,
+        className: 'is-overdue'
+      };
+    }
+    if (daysUntilDue === 0) return { label: 'Vence hoje', className: 'is-today' };
+    if (daysUntilDue === 1) return { label: 'Vence amanhã', className: 'is-soon' };
+    return {
+      label: `${daysUntilDue} dias para vencer`,
+      className: daysUntilDue <= 7 ? 'is-soon' : 'is-future'
+    };
+  };
+
   const maskBrazilianDate = (value) => {
     const digits = String(value || '').replace(/\D/g, '').slice(0, 8);
     return [digits.slice(0, 2), digits.slice(2, 4), digits.slice(4, 8)]
@@ -225,6 +279,16 @@
     if (className) cell.className = className;
     cell.textContent = value;
     row.appendChild(cell);
+    return cell;
+  };
+
+  const createDueTimingCell = (invoice, today) => {
+    const cell = document.createElement('td');
+    const timing = invoiceDueTiming(invoice, today);
+    const badge = document.createElement('span');
+    badge.className = `due-timing ${timing.className}`;
+    badge.textContent = timing.label;
+    cell.appendChild(badge);
     return cell;
   };
 
@@ -620,11 +684,12 @@
     }
   };
 
-  const createInvoiceRow = (invoice) => {
+  const createInvoiceRow = (invoice, today) => {
     const row = document.createElement('tr');
     appendCell(row, String(invoice.id ?? '—'), 'invoice-id');
     appendCell(row, formatDate(invoice.issuedAt));
     appendCell(row, formatDate(invoice.dueAt));
+    row.appendChild(createDueTimingCell(invoice, today));
     row.appendChild(createPdfCell(invoice));
 
     const clientCell = document.createElement('td');
@@ -677,7 +742,8 @@
       state.sortKey,
       state.sortDirection
     );
-    elements.invoiceRows.replaceChildren(...sorted.map(createInvoiceRow));
+    const today = saoPauloToday();
+    elements.invoiceRows.replaceChildren(...sorted.map((invoice) => createInvoiceRow(invoice, today)));
     updateSortHeaders();
   };
 
@@ -865,6 +931,10 @@
       const cnpj = document.createElement('small');
       cnpj.textContent = formatCnpj(debtor.cnpj);
       company.appendChild(cnpj);
+      const action = document.createElement('span');
+      action.className = 'legend-action';
+      action.textContent = 'Ver faturas →';
+      company.appendChild(action);
     }
 
     const value = document.createElement('div');
@@ -875,7 +945,54 @@
     share.textContent = `${percentage.format(debtor.percentage)}%`;
     value.append(amount, share);
     item.append(swatch, company, value);
+    item.addEventListener('pointerenter', () => highlightChartEntry(index));
+    item.addEventListener('pointerleave', hideChartTooltip);
+    item.addEventListener('focus', () => highlightChartEntry(index));
+    item.addEventListener('blur', hideChartTooltip);
+    if (debtor.cnpj) {
+      const showInvoices = () => {
+        const cnpjInput = elements.filterForm.elements.namedItem('cnpj');
+        const statusInput = elements.filterForm.elements.namedItem('status');
+        cnpjInput.value = formatCnpj(debtor.cnpj);
+        if (!statusInput.value) statusInput.value = '0';
+        state.skip = 0;
+        state.hasSearched = true;
+        setView('list');
+      };
+      item.classList.add('is-actionable');
+      item.setAttribute('role', 'button');
+      item.setAttribute('tabindex', '0');
+      item.setAttribute('aria-label', `Ver faturas de ${debtor.name || formatCnpj(debtor.cnpj)}`);
+      item.addEventListener('click', showInvoices);
+      item.addEventListener('keydown', (event) => {
+        if (!['Enter', ' '].includes(event.key)) return;
+        event.preventDefault();
+        showInvoices();
+      });
+    }
     return item;
+  };
+
+  const createAgingCard = (bucket) => {
+    const card = document.createElement('article');
+    const tone = bucket.key === 'current'
+      ? 'is-current'
+      : (bucket.key === 'unknown' ? 'is-unknown' : 'is-overdue');
+    card.className = `aging-card ${tone}`;
+    const label = document.createElement('span');
+    label.textContent = bucket.label;
+    const value = document.createElement('strong');
+    value.textContent = currency.format(Number(bucket.value) || 0);
+    const count = document.createElement('small');
+    const invoiceCount = Number(bucket.invoiceCount) || 0;
+    count.textContent = `${invoiceCount} ${invoiceCount === 1 ? 'fatura' : 'faturas'}`;
+    card.append(label, value, count);
+    return card;
+  };
+
+  const renderAgingSummary = (buckets) => {
+    const agingBuckets = Array.isArray(buckets) ? buckets : [];
+    elements.agingSummary.replaceChildren(...agingBuckets.map(createAgingCard));
   };
 
   const renderDebtorChart = (payload) => {
@@ -895,6 +1012,7 @@
     });
     elements.debtorChartSegments.replaceChildren(...segments);
     elements.chartLegend.replaceChildren(...debtors.map(createLegendItem));
+    renderAgingSummary(payload.agingBuckets);
 
     const totalPending = Number(payload.totalPending) || 0;
     const largestDebtor = payload.largestDebtor;
@@ -928,6 +1046,7 @@
     hideChartTooltip();
     elements.debtorChartSegments.replaceChildren();
     elements.chartLegend.replaceChildren();
+    elements.agingSummary.replaceChildren();
     elements.chartContent.hidden = true;
     elements.chartEmptyState.hidden = false;
     elements.chartTotalPending.textContent = currency.format(0);

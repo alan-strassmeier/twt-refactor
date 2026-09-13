@@ -205,6 +205,7 @@
                   <th scope="col" aria-sort="none"><button class="sort-button" type="button" data-sort-key="id">Fatura <span class="sort-indicator" aria-hidden="true">↕</span></button></th>
                   <th scope="col" aria-sort="descending"><button class="sort-button" type="button" data-sort-key="issuedAt">Emissão <span class="sort-indicator" aria-hidden="true">↓</span></button></th>
                   <th scope="col" aria-sort="none"><button class="sort-button" type="button" data-sort-key="dueAt">Vencimento <span class="sort-indicator" aria-hidden="true">↕</span></button></th>
+                  <th scope="col">Prazo</th>
                   <th scope="col" class="visualize-header">Visualizar</th>
                   <th scope="col" aria-sort="none"><button class="sort-button" type="button" data-sort-key="client">Cliente / empresa <span class="sort-indicator" aria-hidden="true">↕</span></button></th>
                   <th scope="col" class="numeric" aria-sort="none"><button class="sort-button" type="button" data-sort-key="total">Valor total <span class="sort-indicator" aria-hidden="true">↕</span></button></th>
@@ -238,6 +239,7 @@
             </span>
           </div>
           <div class="chart-content" id="chartContent" hidden>
+            <section class="aging-summary" id="agingSummary" aria-label="Faixas de vencimento"></section>
             <div class="donut-wrap" id="donutWrap">
               <svg class="donut-chart" id="debtorChart" viewBox="0 0 240 240" role="img"
                 aria-labelledby="debtorChartTitle debtorChartDescription">

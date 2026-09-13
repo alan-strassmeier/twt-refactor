@@ -22,6 +22,7 @@ const {
   filterAndSortCompanyInvoices,
   invoiceMatchesQuery,
   isPendingInvoice,
+  buildAgingBuckets,
   buildDebtorSummary,
   debtorInvoiceInput,
   plainInvoiceIdQuery
@@ -707,6 +708,37 @@ test('resume somente saldos pendentes por empresa', () => {
   assert.equal(summary.debtors[1].value, 49.75);
 });
 
+test('agrupa os saldos pendentes por faixa de vencimento', () => {
+  const pendingInvoice = (dueAt, balance) => ({
+    dueAt,
+    balance,
+    status: 0,
+    statusLabel: 'EM ABERTO'
+  });
+  const buckets = buildAgingBuckets([
+    pendingInvoice('2026-09-13', 5),
+    pendingInvoice('2026-09-12', 10),
+    pendingInvoice('2026-09-11', 20),
+    pendingInvoice('2026-09-04', 30),
+    pendingInvoice('2026-08-27', 40),
+    pendingInvoice('2026-07-14', 50),
+    pendingInvoice('2026-07-13', 60)
+  ], '2026-09-12');
+  const byKey = new Map(buckets.map((bucket) => [bucket.key, bucket]));
+  assert.deepEqual(byKey.get('current'), {
+    key: 'current',
+    label: 'A vencer',
+    invoiceCount: 2,
+    value: 15
+  });
+  assert.equal(byKey.get('overdue_1_7').value, 20);
+  assert.equal(byKey.get('overdue_8_15').value, 30);
+  assert.equal(byKey.get('overdue_16_30').value, 40);
+  assert.equal(byKey.get('overdue_31_60').value, 50);
+  assert.equal(byKey.get('overdue_61_plus').value, 60);
+  assert.equal(byKey.has('unknown'), false);
+});
+
 test('expõe o modo gráfico e envia a visualização de devedores à API', () => {
   const html = readFileSync(require.resolve('../faturamento/index.html'), 'utf8');
   const source = readFileSync(require.resolve('../faturamento/app.js'), 'utf8');
@@ -714,6 +746,8 @@ test('expõe o modo gráfico e envia a visualização de devedores à API', () =
   assert.match(html, /data-view-mode="debtors"/);
   assert.match(html, /id="debtorChart"/);
   assert.match(html, /id="chartTooltipPercentage"/);
+  assert.match(html, /id="agingSummary"/);
+  assert.match(html, />Prazo<\/th>/);
   assert.match(source, /params\.set\('view', 'debtors'\)/);
   assert.match(source, /createElementNS\('http:\/\/www\.w3\.org\/2000\/svg', 'circle'\)/);
   assert.match(source, /data-chart-index/);
@@ -721,6 +755,12 @@ test('expõe o modo gráfico e envia a visualização de devedores à API', () =
   assert.match(source, /legendItem\.scrollIntoView/);
   assert.match(source, /segment\.addEventListener\('click'/);
   assert.match(source, /segment\.addEventListener\('keydown'/);
+  assert.match(source, /const invoiceDueTiming/);
+  assert.match(source, /const renderAgingSummary/);
+  assert.match(source, /statusInput\.value = '0'/);
+  assert.match(source, /setView\('list'\)/);
   assert.match(styles, /\.chart-legend li\.is-highlighted/);
   assert.match(styles, /\.chart-legend\.has-highlight li:not\(\.is-highlighted\)/);
+  assert.match(styles, /\.aging-summary/);
+  assert.match(styles, /\.due-timing\.is-overdue/);
 });
