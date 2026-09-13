@@ -46,6 +46,7 @@
     chartTooltipName: document.getElementById('chartTooltipName'),
     chartTooltipPercentage: document.getElementById('chartTooltipPercentage'),
     chartTooltipValue: document.getElementById('chartTooltipValue'),
+    agingSummary: document.getElementById('agingSummary'),
     sortHeaders: [...document.querySelectorAll('[data-sort-key]')],
     tableHeader: document.querySelector('.table-card thead'),
     backToTopButton: document.getElementById('backToTopButton'),
@@ -62,6 +63,11 @@
     nfseChoice: document.getElementById('nfseChoice'),
     nfseChoiceTitle: document.getElementById('nfseChoiceTitle'),
     nfseChoiceDescription: document.getElementById('nfseChoiceDescription'),
+    doccobMissingModal: document.getElementById('doccobMissingModal'),
+    doccobMissingBackdrop: document.getElementById('doccobMissingBackdrop'),
+    doccobMissingClose: document.getElementById('doccobMissingClose'),
+    doccobMissingConfirm: document.getElementById('doccobMissingConfirm'),
+    doccobMissingInvoice: document.getElementById('doccobMissingInvoice'),
     nfseConfirmModal: document.getElementById('nfseConfirmModal'),
     nfseConfirmBackdrop: document.getElementById('nfseConfirmBackdrop'),
     nfseConfirmClose: document.getElementById('nfseConfirmClose'),
@@ -75,7 +81,20 @@
     nfsePreviewService: document.getElementById('nfsePreviewService'),
     nfsePreviewDescription: document.getElementById('nfsePreviewDescription'),
     nfsePreviewTaxation: document.getElementById('nfsePreviewTaxation'),
-    nfseConfirmWarning: document.querySelector('.nfse-confirm-warning')
+    nfseConfirmWarning: document.querySelector('.nfse-confirm-warning'),
+    invoiceDetail: document.getElementById('invoiceDetail'),
+    invoiceDetailBackdrop: document.getElementById('invoiceDetailBackdrop'),
+    invoiceDetailClose: document.getElementById('invoiceDetailClose'),
+    invoiceDetailTitle: document.getElementById('invoiceDetailTitle'),
+    invoiceDetailSubtitle: document.getElementById('invoiceDetailSubtitle'),
+    invoiceDetailLoading: document.getElementById('invoiceDetailLoading'),
+    invoiceDetailContent: document.getElementById('invoiceDetailContent'),
+    invoiceDetailSummary: document.getElementById('invoiceDetailSummary'),
+    invoiceControlGrid: document.getElementById('invoiceControlGrid'),
+    invoiceDetailDocuments: document.getElementById('invoiceDetailDocuments'),
+    invoiceDetailLogs: document.getElementById('invoiceDetailLogs'),
+    invoiceTimeline: document.getElementById('invoiceTimeline'),
+    invoiceDetailError: document.getElementById('invoiceDetailError')
   };
 
   const state = {
@@ -157,6 +176,59 @@
     return match ? `${match[3]}/${match[2]}/${match[1]}` : value || '—';
   };
 
+  const saoPauloToday = () => {
+    const parts = new Intl.DateTimeFormat('pt-BR', {
+      timeZone: 'America/Sao_Paulo',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    }).formatToParts(new Date());
+    const part = (type) => parts.find((item) => item.type === type)?.value;
+    return `${part('year')}-${part('month')}-${part('day')}`;
+  };
+
+  const isoDayNumber = (value) => {
+    const normalized = String(value || '').slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) return null;
+    const timestamp = Date.parse(`${normalized}T00:00:00Z`);
+    if (Number.isNaN(timestamp) || new Date(timestamp).toISOString().slice(0, 10) !== normalized) {
+      return null;
+    }
+    return Math.floor(timestamp / 86400000);
+  };
+
+  const invoiceDueTiming = (invoice, today = saoPauloToday()) => {
+    const statusLabel = String(invoice.statusLabel || '').toLocaleLowerCase('pt-BR');
+    if (invoice.status === 2 || statusLabel.startsWith('cancel')) {
+      return { label: 'Cancelada', className: 'is-closed' };
+    }
+    if (
+      invoice.status === 1 ||
+      ['liquid', 'pago', 'quitad'].some((term) => statusLabel.includes(term))
+    ) {
+      return { label: 'Liquidada', className: 'is-closed' };
+    }
+    const dueDay = isoDayNumber(invoice.dueAt);
+    const todayDay = isoDayNumber(today);
+    if (dueDay === null || todayDay === null) {
+      return { label: 'Não informado', className: 'is-unknown' };
+    }
+    const daysUntilDue = dueDay - todayDay;
+    if (daysUntilDue < 0) {
+      const overdueDays = Math.abs(daysUntilDue);
+      return {
+        label: `${overdueDays} ${overdueDays === 1 ? 'dia' : 'dias'} em atraso`,
+        className: 'is-overdue'
+      };
+    }
+    if (daysUntilDue === 0) return { label: 'Vence hoje', className: 'is-today' };
+    if (daysUntilDue === 1) return { label: 'Vence amanhã', className: 'is-soon' };
+    return {
+      label: `${daysUntilDue} dias para vencer`,
+      className: daysUntilDue <= 7 ? 'is-soon' : 'is-future'
+    };
+  };
+
   const maskBrazilianDate = (value) => {
     const digits = String(value || '').replace(/\D/g, '').slice(0, 8);
     return [digits.slice(0, 2), digits.slice(2, 4), digits.slice(4, 8)]
@@ -228,6 +300,16 @@
     return cell;
   };
 
+  const createDueTimingCell = (invoice, today) => {
+    const cell = document.createElement('td');
+    const timing = invoiceDueTiming(invoice, today);
+    const badge = document.createElement('span');
+    badge.className = `due-timing ${timing.className}`;
+    badge.textContent = timing.label;
+    cell.appendChild(badge);
+    return cell;
+  };
+
   const statusClass = (status) => ({
     0: 'status-open',
     1: 'status-paid',
@@ -263,6 +345,8 @@
   };
 
   let modalPreviousFocus = null;
+  let invoiceDetailPreviousFocus = null;
+  let invoiceDetailId = '';
 
   const invoicePdfUrl = (invoiceId) =>
     `/api/faturamento/fatura-pdf?id=${encodeURIComponent(invoiceId)}`;
@@ -286,6 +370,22 @@
     modalPreviousFocus = null;
   };
 
+  const closeDoccobMissingModal = () => {
+    if (elements.doccobMissingModal.hidden) return;
+    elements.doccobMissingModal.hidden = true;
+    document.body.classList.remove('modal-open');
+    modalPreviousFocus?.focus();
+    modalPreviousFocus = null;
+  };
+
+  const showDoccobMissingModal = (invoiceId, trigger) => {
+    modalPreviousFocus = trigger;
+    elements.doccobMissingInvoice.textContent = `Fatura ${invoiceId}`;
+    elements.doccobMissingModal.hidden = false;
+    document.body.classList.add('modal-open');
+    elements.doccobMissingClose.focus();
+  };
+
   const closeNfseConfirm = (returnToDocuments = true) => {
     if (elements.nfseConfirmModal.hidden) return;
     elements.nfseConfirmModal.hidden = true;
@@ -302,6 +402,7 @@
   const closeAllDocumentModals = () => {
     elements.nfseConfirmModal.hidden = true;
     elements.documentModal.hidden = true;
+    elements.doccobMissingModal.hidden = true;
     document.body.classList.remove('modal-open');
     modalPreviousFocus?.focus();
     modalPreviousFocus = null;
@@ -592,6 +693,10 @@
       const payload = await requestJson(
         `/api/faturamento/documentos?id=${encodeURIComponent(invoiceId)}`
       );
+      if (payload.doccobFound === false) {
+        showDoccobMissingModal(invoiceId, trigger);
+        return;
+      }
       if (payload.hasCte || payload.bankSlipEligible || payload.nfseEligible) {
         showDocumentModal(invoiceId, {
           hasCte: Boolean(payload.hasCte),
@@ -620,11 +725,141 @@
     }
   };
 
-  const createInvoiceRow = (invoice) => {
+  const controlBadge = (control, fallback = 'A conferir') => {
+    const badge = document.createElement('span');
+    const tone = String(control?.tone || 'neutral').replace(/[^a-z_-]/g, '');
+    badge.className = `control-badge control-${tone || 'neutral'}`;
+    badge.textContent = control?.label || fallback;
+    if (control?.detail) badge.title = control.detail;
+    return badge;
+  };
+
+  const appendControlCell = (row, control, fallback) => {
+    const cell = document.createElement('td');
+    cell.className = 'control-cell';
+    cell.appendChild(controlBadge(control, fallback));
+    row.appendChild(cell);
+  };
+
+  const closeInvoiceDetail = () => {
+    if (!elements.invoiceDetail || elements.invoiceDetail.hidden) return;
+    elements.invoiceDetail.hidden = true;
+    document.body.classList.remove('modal-open');
+    invoiceDetailPreviousFocus?.focus();
+    invoiceDetailPreviousFocus = null;
+  };
+
+  const detailDateTime = (value) => {
+    const raw = String(value || '');
+    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return formatDate(raw);
+    const date = new Date(raw);
+    return Number.isNaN(date.getTime()) ? 'Data não registrada' : new Intl.DateTimeFormat('pt-BR', {
+      timeZone: 'America/Sao_Paulo',
+      dateStyle: 'short',
+      timeStyle: 'short'
+    }).format(date);
+  };
+
+  const appendDetailValue = (label, value) => {
+    const item = document.createElement('div');
+    const term = document.createElement('dt');
+    const description = document.createElement('dd');
+    term.textContent = label;
+    description.textContent = value || '—';
+    item.append(term, description);
+    elements.invoiceDetailSummary.appendChild(item);
+  };
+
+  const renderInvoiceDetail = (payload) => {
+    const invoice = payload.invoice || {};
+    invoiceDetailId = String(invoice.id || invoiceDetailId);
+    elements.invoiceDetailTitle.textContent = `Fatura ${invoiceDetailId}`;
+    elements.invoiceDetailSubtitle.textContent = `${invoice.client || 'Cliente não informado'} · ${formatCnpj(invoice.clientDocument)}`;
+    elements.invoiceDetailSummary.replaceChildren();
+    appendDetailValue('Emissão', formatDate(invoice.issuedAt));
+    appendDetailValue('Vencimento', formatDate(invoice.dueAt));
+    appendDetailValue('Valor', formatCurrency(invoice.total));
+    appendDetailValue('Saldo', formatCurrency(invoice.balance));
+
+    const labels = {
+      financial: 'Financeiro',
+      documents: 'Documentos',
+      collection: 'Cobrança',
+      payment: 'Pagamento'
+    };
+    elements.invoiceControlGrid.replaceChildren(...Object.entries(labels).map(([key, label]) => {
+      const card = document.createElement('article');
+      const title = document.createElement('span');
+      title.textContent = label;
+      card.append(title, controlBadge(payload.controls?.[key]));
+      const detail = payload.controls?.[key]?.detail;
+      if (detail) {
+        const description = document.createElement('small');
+        description.textContent = detail;
+        card.appendChild(description);
+      }
+      return card;
+    }));
+
+    const timeline = Array.isArray(payload.timeline) ? payload.timeline : [];
+    elements.invoiceTimeline.replaceChildren(...timeline.map((event) => {
+      const item = document.createElement('li');
+      item.dataset.type = event.type || 'event';
+      const time = document.createElement('time');
+      time.textContent = detailDateTime(event.at);
+      const title = document.createElement('strong');
+      title.textContent = event.title || 'Movimentação';
+      const description = document.createElement('p');
+      description.textContent = event.description || '';
+      item.append(time, title, description);
+      return item;
+    }));
+    elements.invoiceDetailDocuments.disabled = false;
+    elements.invoiceDetailLogs.disabled = false;
+    elements.invoiceDetailLoading.hidden = true;
+    elements.invoiceDetailContent.hidden = false;
+  };
+
+  const openInvoiceDetail = async (invoiceId, trigger) => {
+    invoiceDetailId = String(invoiceId || '');
+    invoiceDetailPreviousFocus = trigger;
+    elements.invoiceDetailTitle.textContent = `Fatura ${invoiceDetailId}`;
+    elements.invoiceDetailSubtitle.textContent = 'Conferindo o histórico financeiro…';
+    elements.invoiceDetailLoading.hidden = false;
+    elements.invoiceDetailContent.hidden = true;
+    elements.invoiceDetailError.hidden = true;
+    elements.invoiceDetail.hidden = false;
+    document.body.classList.add('modal-open');
+    elements.invoiceDetailClose.focus();
+    try {
+      const payload = await requestJson(
+        `/api/faturamento/cobranca?route=invoice-detail&id=${encodeURIComponent(invoiceDetailId)}`
+      );
+      if (!elements.invoiceDetail.hidden && invoiceDetailId === String(payload.invoice?.id || '')) {
+        renderInvoiceDetail(payload);
+      }
+    } catch (error) {
+      elements.invoiceDetailLoading.hidden = true;
+      elements.invoiceDetailError.textContent = error.message;
+      elements.invoiceDetailError.hidden = false;
+    }
+  };
+
+  const createInvoiceRow = (invoice, today) => {
     const row = document.createElement('tr');
-    appendCell(row, String(invoice.id ?? '—'), 'invoice-id');
+    const invoiceCell = document.createElement('td');
+    invoiceCell.className = 'invoice-id';
+    const invoiceButton = document.createElement('button');
+    invoiceButton.type = 'button';
+    invoiceButton.className = 'invoice-detail-trigger';
+    invoiceButton.textContent = String(invoice.id ?? '—');
+    invoiceButton.title = `Abrir detalhes e histórico da fatura ${invoice.id}`;
+    invoiceButton.addEventListener('click', () => openInvoiceDetail(invoice.id, invoiceButton));
+    invoiceCell.appendChild(invoiceButton);
+    row.appendChild(invoiceCell);
     appendCell(row, formatDate(invoice.issuedAt));
     appendCell(row, formatDate(invoice.dueAt));
+    row.appendChild(createDueTimingCell(invoice, today));
     row.appendChild(createPdfCell(invoice));
 
     const clientCell = document.createElement('td');
@@ -642,12 +877,13 @@
     appendCell(row, formatCurrency(invoice.total), 'numeric');
     appendCell(row, formatCurrency(invoice.paid), 'numeric');
     appendCell(row, formatCurrency(invoice.balance), 'numeric');
-    const statusCell = document.createElement('td');
-    const badge = document.createElement('span');
-    badge.className = `status-badge ${statusClass(invoice.status)}`;
-    badge.textContent = invoice.statusLabel;
-    statusCell.appendChild(badge);
-    row.appendChild(statusCell);
+    appendControlCell(row, invoice.control?.financial || {
+      label: invoice.statusLabel,
+      tone: ({ 0: 'warning', 1: 'success', 2: 'danger' }[invoice.status] || 'neutral')
+    }, invoice.statusLabel);
+    appendControlCell(row, invoice.control?.documents, 'A conferir');
+    appendControlCell(row, invoice.control?.collection, 'Não enviada');
+    appendControlCell(row, invoice.control?.payment, 'Não gerado');
     return row;
   };
 
@@ -677,7 +913,8 @@
       state.sortKey,
       state.sortDirection
     );
-    elements.invoiceRows.replaceChildren(...sorted.map(createInvoiceRow));
+    const today = saoPauloToday();
+    elements.invoiceRows.replaceChildren(...sorted.map((invoice) => createInvoiceRow(invoice, today)));
     updateSortHeaders();
   };
 
@@ -720,18 +957,55 @@
     elements.resultRange.textContent = invoices.length
       ? `Exibindo ${start}–${end}`
       : 'Nenhum resultado nesta página';
+    if (payload.controlWarning) elements.dashboardMessage.textContent = payload.controlWarning;
     updatePaginationControls();
   };
 
   const chartColor = (index) => CHART_COLORS[index] ||
     `hsl(${Math.round((index * 137.508) % 360)} 58% 48%)`;
 
-  const hideChartTooltip = () => {
-    elements.chartTooltip.hidden = true;
+  let selectedChartIndex = null;
+
+  const clearChartHighlight = () => {
     elements.debtorChart.classList.remove('has-highlight');
+    elements.chartLegend.classList.remove('has-highlight');
     elements.debtorChartSegments.querySelectorAll('.is-highlighted').forEach((segment) => {
       segment.classList.remove('is-highlighted');
     });
+    elements.chartLegend.querySelectorAll('.is-highlighted').forEach((item) => {
+      item.classList.remove('is-highlighted');
+    });
+  };
+
+  const highlightChartEntry = (index, scrollLegend = false) => {
+    clearChartHighlight();
+    const selector = `[data-chart-index="${index}"]`;
+    const segment = elements.debtorChartSegments.querySelector(selector);
+    const legendItem = elements.chartLegend.querySelector(selector);
+    if (!segment || !legendItem) return;
+    elements.debtorChart.classList.add('has-highlight');
+    elements.chartLegend.classList.add('has-highlight');
+    segment.classList.add('is-highlighted');
+    legendItem.classList.add('is-highlighted');
+    if (scrollLegend && typeof legendItem.scrollIntoView === 'function') {
+      legendItem.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    }
+  };
+
+  const setSelectedChartIndex = (index) => {
+    selectedChartIndex = index;
+    elements.debtorChartSegments.querySelectorAll('.donut-segment').forEach((segment) => {
+      segment.setAttribute(
+        'aria-pressed',
+        String(index !== null && segment.dataset.chartIndex === String(index))
+      );
+    });
+  };
+
+  const hideChartTooltip = () => {
+    elements.chartTooltip.hidden = true;
+    if (selectedChartIndex === null) clearChartHighlight();
+    else highlightChartEntry(selectedChartIndex);
   };
 
   const positionChartTooltip = (clientX, clientY) => {
@@ -742,16 +1016,12 @@
     elements.chartTooltip.style.top = `${top}px`;
   };
 
-  const showChartTooltip = (debtor, segment, clientX, clientY) => {
+  const showChartTooltip = (debtor, index, clientX, clientY) => {
     elements.chartTooltipName.textContent = debtor.name || 'Não informado';
     elements.chartTooltipPercentage.textContent = `${percentage.format(debtor.percentage)}% do total`;
     elements.chartTooltipValue.textContent = currency.format(debtor.value);
     elements.chartTooltip.hidden = false;
-    elements.debtorChart.classList.add('has-highlight');
-    elements.debtorChartSegments.querySelectorAll('.is-highlighted').forEach((item) => {
-      item.classList.remove('is-highlighted');
-    });
-    segment.classList.add('is-highlighted');
+    highlightChartEntry(index, true);
     if (Number.isFinite(clientX) && Number.isFinite(clientY)) {
       positionChartTooltip(clientX, clientY);
     } else {
@@ -772,8 +1042,10 @@
     segment.setAttribute('stroke-dasharray', `${share} ${100 - share}`);
     segment.setAttribute('stroke-dashoffset', String(-offset));
     segment.setAttribute('transform', 'rotate(-90 120 120)');
+    segment.setAttribute('data-chart-index', String(index));
     segment.setAttribute('tabindex', '0');
-    segment.setAttribute('role', 'img');
+    segment.setAttribute('role', 'button');
+    segment.setAttribute('aria-pressed', 'false');
     segment.setAttribute(
       'aria-label',
       `${debtor.name || 'Não informado'}: ${percentage.format(share)}% do total, ${currency.format(debtor.value)}`
@@ -783,19 +1055,40 @@
     title.textContent = `${debtor.name || 'Não informado'} — ${percentage.format(share)}% — ${currency.format(debtor.value)}`;
     segment.appendChild(title);
     segment.addEventListener('pointerenter', (event) => {
-      showChartTooltip(debtor, segment, event.clientX, event.clientY);
+      showChartTooltip(debtor, index, event.clientX, event.clientY);
     });
     segment.addEventListener('pointermove', (event) => {
       positionChartTooltip(event.clientX, event.clientY);
     });
     segment.addEventListener('pointerleave', hideChartTooltip);
-    segment.addEventListener('focus', () => showChartTooltip(debtor, segment));
+    segment.addEventListener('focus', () => showChartTooltip(debtor, index));
     segment.addEventListener('blur', hideChartTooltip);
+    segment.addEventListener('click', (event) => {
+      const nextIndex = selectedChartIndex === index ? null : index;
+      setSelectedChartIndex(nextIndex);
+      if (nextIndex === null) {
+        elements.chartTooltip.hidden = true;
+        clearChartHighlight();
+        return;
+      }
+      showChartTooltip(
+        debtor,
+        index,
+        event.detail ? event.clientX : undefined,
+        event.detail ? event.clientY : undefined
+      );
+    });
+    segment.addEventListener('keydown', (event) => {
+      if (!['Enter', ' '].includes(event.key)) return;
+      event.preventDefault();
+      segment.click();
+    });
     return segment;
   };
 
   const createLegendItem = (debtor, index) => {
     const item = document.createElement('li');
+    item.dataset.chartIndex = String(index);
     const swatch = document.createElement('span');
     swatch.className = 'legend-swatch';
     swatch.style.backgroundColor = chartColor(index);
@@ -810,6 +1103,10 @@
       const cnpj = document.createElement('small');
       cnpj.textContent = formatCnpj(debtor.cnpj);
       company.appendChild(cnpj);
+      const action = document.createElement('span');
+      action.className = 'legend-action';
+      action.textContent = 'Ver faturas →';
+      company.appendChild(action);
     }
 
     const value = document.createElement('div');
@@ -820,13 +1117,61 @@
     share.textContent = `${percentage.format(debtor.percentage)}%`;
     value.append(amount, share);
     item.append(swatch, company, value);
+    item.addEventListener('pointerenter', () => highlightChartEntry(index));
+    item.addEventListener('pointerleave', hideChartTooltip);
+    item.addEventListener('focus', () => highlightChartEntry(index));
+    item.addEventListener('blur', hideChartTooltip);
+    if (debtor.cnpj) {
+      const showInvoices = () => {
+        const cnpjInput = elements.filterForm.elements.namedItem('cnpj');
+        const statusInput = elements.filterForm.elements.namedItem('status');
+        cnpjInput.value = formatCnpj(debtor.cnpj);
+        if (!statusInput.value) statusInput.value = '0';
+        state.skip = 0;
+        state.hasSearched = true;
+        setView('list');
+      };
+      item.classList.add('is-actionable');
+      item.setAttribute('role', 'button');
+      item.setAttribute('tabindex', '0');
+      item.setAttribute('aria-label', `Ver faturas de ${debtor.name || formatCnpj(debtor.cnpj)}`);
+      item.addEventListener('click', showInvoices);
+      item.addEventListener('keydown', (event) => {
+        if (!['Enter', ' '].includes(event.key)) return;
+        event.preventDefault();
+        showInvoices();
+      });
+    }
     return item;
+  };
+
+  const createAgingCard = (bucket) => {
+    const card = document.createElement('article');
+    const tone = bucket.key === 'current'
+      ? 'is-current'
+      : (bucket.key === 'unknown' ? 'is-unknown' : 'is-overdue');
+    card.className = `aging-card ${tone}`;
+    const label = document.createElement('span');
+    label.textContent = bucket.label;
+    const value = document.createElement('strong');
+    value.textContent = currency.format(Number(bucket.value) || 0);
+    const count = document.createElement('small');
+    const invoiceCount = Number(bucket.invoiceCount) || 0;
+    count.textContent = `${invoiceCount} ${invoiceCount === 1 ? 'fatura' : 'faturas'}`;
+    card.append(label, value, count);
+    return card;
+  };
+
+  const renderAgingSummary = (buckets) => {
+    const agingBuckets = Array.isArray(buckets) ? buckets : [];
+    elements.agingSummary.replaceChildren(...agingBuckets.map(createAgingCard));
   };
 
   const renderDebtorChart = (payload) => {
     const debtors = Array.isArray(payload.debtors)
       ? payload.debtors.filter((debtor) => Number(debtor.value) > 0)
       : [];
+    setSelectedChartIndex(null);
     hideChartTooltip();
     elements.debtorChartSegments.replaceChildren();
     elements.chartLegend.replaceChildren();
@@ -839,6 +1184,7 @@
     });
     elements.debtorChartSegments.replaceChildren(...segments);
     elements.chartLegend.replaceChildren(...debtors.map(createLegendItem));
+    renderAgingSummary(payload.agingBuckets);
 
     const totalPending = Number(payload.totalPending) || 0;
     const largestDebtor = payload.largestDebtor;
@@ -868,9 +1214,11 @@
     state.sortDirection = 'desc';
     state.hasSearched = false;
     elements.invoiceRows.replaceChildren();
+    setSelectedChartIndex(null);
     hideChartTooltip();
     elements.debtorChartSegments.replaceChildren();
     elements.chartLegend.replaceChildren();
+    elements.agingSummary.replaceChildren();
     elements.chartContent.hidden = true;
     elements.chartEmptyState.hidden = false;
     elements.chartTotalPending.textContent = currency.format(0);
@@ -1007,6 +1355,7 @@
 
   elements.logoutButton.addEventListener('click', async () => {
     closeAllDocumentModals();
+    closeInvoiceDetail();
     elements.logoutButton.disabled = true;
     try {
       await requestJson('/api/faturamento/logout', { method: 'POST' });
@@ -1066,6 +1415,12 @@
     button.addEventListener('click', () => setView(button.dataset.viewMode));
   });
 
+  document.addEventListener('click', (event) => {
+    if (selectedChartIndex === null || elements.debtorChart.contains(event.target)) return;
+    setSelectedChartIndex(null);
+    hideChartTooltip();
+  });
+
   elements.previousPageButtons.forEach((button) => {
     button.addEventListener('click', () => {
       state.skip = Math.max(0, state.skip - LIMIT);
@@ -1107,6 +1462,9 @@
 
   elements.documentModalClose.addEventListener('click', closeDocumentModal);
   elements.documentModalBackdrop.addEventListener('click', closeDocumentModal);
+  elements.doccobMissingClose.addEventListener('click', closeDoccobMissingModal);
+  elements.doccobMissingBackdrop.addEventListener('click', closeDoccobMissingModal);
+  elements.doccobMissingConfirm.addEventListener('click', closeDoccobMissingModal);
   elements.bankSlipChoice.addEventListener('click', generateBankSlip);
   elements.nfseChoice.addEventListener('click', prepareNfse);
   elements.nfseIssueButton.addEventListener('click', issueNfse);
@@ -1115,10 +1473,27 @@
   elements.nfseCancelButton.addEventListener('click', () => closeNfseConfirm(true));
   elements.invoicePdfChoice.addEventListener('click', closeDocumentModal);
   elements.dactePdfChoice.addEventListener('click', closeDocumentModal);
+  elements.invoiceDetailClose.addEventListener('click', closeInvoiceDetail);
+  elements.invoiceDetailBackdrop.addEventListener('click', closeInvoiceDetail);
+  elements.invoiceDetailDocuments.addEventListener('click', () => {
+    const invoiceId = invoiceDetailId;
+    const trigger = invoiceDetailPreviousFocus || elements.invoiceDetailDocuments;
+    closeInvoiceDetail();
+    openInvoiceDocuments(invoiceId, trigger);
+  });
+  elements.invoiceDetailLogs.addEventListener('click', () => {
+    const invoiceId = invoiceDetailId;
+    closeInvoiceDetail();
+    window.dispatchEvent(new CustomEvent('billing:navigate-logs', {
+      detail: { invoiceId }
+    }));
+  });
   document.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape') return;
     if (!elements.nfseConfirmModal.hidden) closeNfseConfirm(true);
     else if (!elements.documentModal.hidden) closeDocumentModal();
+    else if (!elements.doccobMissingModal.hidden) closeDoccobMissingModal();
+    else if (!elements.invoiceDetail.hidden) closeInvoiceDetail();
   });
 
   const start = async () => {

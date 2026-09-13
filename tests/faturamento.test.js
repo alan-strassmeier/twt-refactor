@@ -22,6 +22,7 @@ const {
   filterAndSortCompanyInvoices,
   invoiceMatchesQuery,
   isPendingInvoice,
+  buildAgingBuckets,
   buildDebtorSummary,
   debtorInvoiceInput,
   plainInvoiceIdQuery
@@ -99,6 +100,27 @@ test('monta somente os filtros permitidos pela API de faturas', () => {
   assert.equal(result.exactCnpj, '97434690000129');
 });
 
+test('transforma o status local de vencidas em faturas abertas até o dia anterior', () => {
+  const result = buildInvoiceQuery({ status: 'overdue' }, { searchDate: '2026-09-12' });
+  const query = new URLSearchParams(result.query);
+  assert.equal(query.get('status'), '0');
+  assert.equal(query.get('vencimento[lte]'), '2026-09-11');
+
+  const stricterResult = buildInvoiceQuery({
+    status: 'overdue',
+    'vencimento[lte]': '2026-08-31'
+  }, { searchDate: '2026-09-12' });
+  assert.equal(
+    new URLSearchParams(stricterResult.query).get('vencimento[lte]'),
+    '2026-08-31'
+  );
+});
+
+test('exibe vencidas entre os status disponíveis na pesquisa', () => {
+  const html = readFileSync(require.resolve('../faturamento/index.html'), 'utf8');
+  assert.match(html, /<option value="overdue">Vencidas<\/option>/);
+});
+
 test('lê os filtros diretamente da URL recebida pela função', () => {
   assert.deepEqual(queryFromRequest({
     url: '/api/faturamento/faturas?id=11490&status=0&emissao%5Bgte%5D=2026-07-01&limit=100&skip=0',
@@ -160,6 +182,7 @@ test('coluna Visualizar oferece Fatura, DACTE, boleto e NFS-e conforme o emitent
   assert.match(source, /\/api\/faturamento\/dacte-pdf\?id=/);
   assert.match(source, /\/api\/faturamento\/boleto-pdf\?id=/);
   assert.match(source, /if \(payload\.hasCte \|\| payload\.bankSlipEligible \|\| payload\.nfseEligible\)/);
+  assert.match(source, /if \(payload\.doccobFound === false\)/);
   assert.match(source, /method: 'POST'/);
   assert.match(source, /\/api\/faturamento\/boleto/);
   assert.match(source, /\/api\/faturamento\/nfse/);
@@ -177,6 +200,8 @@ test('coluna Visualizar oferece Fatura, DACTE, boleto e NFS-e conforme o emitent
   assert.match(html, /id="bankSlipChoice"[^>]*hidden/);
   assert.match(html, /id="nfseChoice"[^>]*hidden/);
   assert.match(html, /id="nfseConfirmModal"[^>]*hidden/);
+  assert.match(html, /id="doccobMissingModal"[^>]*hidden/);
+  assert.match(html, /DOCCOB não localizado/);
   assert.match(html, /id="bankSlipBankIcon"/);
   assert.match(html, />Fatura<\/strong>/);
   assert.match(html, />DACTE<\/strong>/);
@@ -185,10 +210,13 @@ test('coluna Visualizar oferece Fatura, DACTE, boleto e NFS-e conforme o emitent
   assert.match(html, /Conferindo faturas e empresas/);
   const boletoApi = readFileSync(require.resolve('../api/faturamento/boleto.js'), 'utf8');
   const documentosApi = readFileSync(require.resolve('../api/faturamento/documentos.js'), 'utf8');
+  const faturaPdfApi = readFileSync(require.resolve('../api/faturamento/fatura-pdf.js'), 'utf8');
   assert.match(boletoApi, /hasSameOrigin\(req\)/);
   assert.match(boletoApi, /sessionFromRequest\(req\)/);
   assert.match(documentosApi, /requiresTedDocPayment/);
   assert.match(documentosApi, /bankSlipEligible: Boolean\(bank\) && !tedDocPayment/);
+  assert.match(documentosApi, /doccobFound: false/);
+  assert.match(faturaPdfApi, /requireDoccob: true/);
 });
 
 test('centraliza o X dentro do botão de fechar o modal', () => {
@@ -203,8 +231,8 @@ test('centraliza o X dentro do botão de fechar o modal', () => {
   assert.match(closeButton, /padding:\s*0/);
   assert.match(closeButton, /font-size:\s*0/);
   assert.match(closeButton, /\.document-modal-close svg/);
-  assert.equal((html.match(/class="document-modal-close"/g) || []).length, 3);
-  assert.equal((html.match(/<svg aria-hidden="true" viewBox="0 0 24 24"/g) || []).length, 3);
+  assert.equal((html.match(/class="document-modal-close"/g) || []).length, 4);
+  assert.equal((html.match(/<svg aria-hidden="true" viewBox="0 0 24 24"/g) || []).length, 4);
   assert.doesNotMatch(html, />×<\/button>/);
 });
 
@@ -623,6 +651,11 @@ test('limita a consolidação do gráfico às faturas em aberto', () => {
   });
   assert.equal(debtorInvoiceInput({ status: '1' }), null);
   assert.equal(debtorInvoiceInput({ status: '2' }), null);
+  assert.deepEqual(debtorInvoiceInput({ status: 'overdue', limit: 20, skip: 400 }), {
+    status: 'overdue',
+    limit: 100,
+    skip: 0
+  });
 });
 
 test('resume somente saldos pendentes por empresa', () => {
@@ -681,12 +714,59 @@ test('resume somente saldos pendentes por empresa', () => {
   assert.equal(summary.debtors[1].value, 49.75);
 });
 
+test('agrupa os saldos pendentes por faixa de vencimento', () => {
+  const pendingInvoice = (dueAt, balance) => ({
+    dueAt,
+    balance,
+    status: 0,
+    statusLabel: 'EM ABERTO'
+  });
+  const buckets = buildAgingBuckets([
+    pendingInvoice('2026-09-13', 5),
+    pendingInvoice('2026-09-12', 10),
+    pendingInvoice('2026-09-11', 20),
+    pendingInvoice('2026-09-04', 30),
+    pendingInvoice('2026-08-27', 40),
+    pendingInvoice('2026-07-14', 50),
+    pendingInvoice('2026-07-13', 60)
+  ], '2026-09-12');
+  const byKey = new Map(buckets.map((bucket) => [bucket.key, bucket]));
+  assert.deepEqual(byKey.get('current'), {
+    key: 'current',
+    label: 'A vencer',
+    invoiceCount: 2,
+    value: 15
+  });
+  assert.equal(byKey.get('overdue_1_7').value, 20);
+  assert.equal(byKey.get('overdue_8_15').value, 30);
+  assert.equal(byKey.get('overdue_16_30').value, 40);
+  assert.equal(byKey.get('overdue_31_60').value, 50);
+  assert.equal(byKey.get('overdue_61_plus').value, 60);
+  assert.equal(byKey.has('unknown'), false);
+});
+
 test('expõe o modo gráfico e envia a visualização de devedores à API', () => {
   const html = readFileSync(require.resolve('../faturamento/index.html'), 'utf8');
   const source = readFileSync(require.resolve('../faturamento/app.js'), 'utf8');
+  const styles = readFileSync(require.resolve('../faturamento/styles.css'), 'utf8');
   assert.match(html, /data-view-mode="debtors"/);
   assert.match(html, /id="debtorChart"/);
   assert.match(html, /id="chartTooltipPercentage"/);
+  assert.match(html, /id="agingSummary"/);
+  assert.match(html, />Prazo<\/th>/);
   assert.match(source, /params\.set\('view', 'debtors'\)/);
   assert.match(source, /createElementNS\('http:\/\/www\.w3\.org\/2000\/svg', 'circle'\)/);
+  assert.match(source, /data-chart-index/);
+  assert.match(source, /highlightChartEntry\(index, true\)/);
+  assert.match(source, /legendItem\.scrollIntoView/);
+  assert.match(source, /segment\.addEventListener\('click'/);
+  assert.match(source, /segment\.addEventListener\('keydown'/);
+  assert.match(source, /const invoiceDueTiming/);
+  assert.match(source, /const renderAgingSummary/);
+  assert.match(source, /statusInput\.value = '0'/);
+  assert.match(source, /setView\('list'\)/);
+  assert.match(styles, /\.chart-legend li\.is-highlighted/);
+  assert.match(styles, /\.chart-legend\.has-highlight li:not\(\.is-highlighted\)/);
+  assert.match(styles, /\.aging-summary/);
+  assert.match(styles, /\.due-timing\.is-overdue/);
 });

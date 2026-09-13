@@ -23,6 +23,7 @@ const {
   sendBillingEmail
 } = require('./cobranca-email');
 const { deliveryReference } = require('./cobranca-webhook');
+const { isTerminalBillingFailure } = require('./billing-failures');
 const store = require('./cobranca-store');
 
 const PAGE_SIZE = 100;
@@ -636,7 +637,14 @@ const runBillingCollection = async (dependencies = {}) => {
           message: String(error.message || error).slice(0, 300)
         };
         summary.errors.push(failure);
-        if (item.fromPending || item.event === EVENT_TYPES.initial) {
+        if (isTerminalBillingFailure(failure)) {
+          try {
+            await context.removePending(item.invoice.id);
+            context.pendingByInvoice.delete(String(item.invoice.id));
+          } catch {
+            // O log preserva o diagnóstico mesmo se a limpeza do estado antigo falhar.
+          }
+        } else if (item.fromPending || item.event === EVENT_TYPES.initial) {
           try {
             const current = context.pendingByInvoice.get(String(item.invoice.id));
             const record = pendingRecord(
@@ -688,6 +696,7 @@ module.exports = {
   buildDslDacteAttachment,
   initialDeliveryAlreadyCoveredEvent,
   existingDeliveryPlan,
+  isTerminalBillingFailure,
   processInvoiceEvent,
   runBillingCollection
 };

@@ -71,6 +71,7 @@ const resolveInvoiceCteKeys = async (invoiceId, dependencies = {}) => {
     .map((transport) => transport?.accessKey);
   return {
     invoiceId: String(normalized.id || invoiceId),
+    doccobFound: Boolean(doccob),
     cteKeys: normalizeCteKeys([...doccobKeys, ...cteKeysFromInvoice(invoice)]),
     issuerCnpj: invoiceIssuerCnpj(invoice, doccob),
     clientCnpj,

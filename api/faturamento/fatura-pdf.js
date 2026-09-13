@@ -20,7 +20,7 @@ module.exports = async (req, res) => {
 
   try {
     const { id } = queryFromRequest(req);
-    const data = await fetchInvoicePdfData(id);
+    const data = await fetchInvoicePdfData(id, { requireDoccob: true });
     const pdf = await buildInvoicePdf(data);
     const invoiceNumber = safeFilenameNumber(data.invoice.id || id);
     res.statusCode = 200;

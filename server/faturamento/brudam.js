@@ -110,6 +110,23 @@ const validDate = (value) => {
   return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
 };
 
+const saoPauloDate = (now = new Date()) => {
+  const parts = new Intl.DateTimeFormat('pt-BR', {
+    timeZone: 'America/Sao_Paulo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).formatToParts(now);
+  const part = (type) => parts.find((item) => item.type === type)?.value;
+  return `${part('year')}-${part('month')}-${part('day')}`;
+};
+
+const previousIsoDate = (value) => {
+  const date = new Date(`${value}T12:00:00Z`);
+  date.setUTCDate(date.getUTCDate() - 1);
+  return date.toISOString().slice(0, 10);
+};
+
 const integer = (value, { min = 0, max = Number.MAX_SAFE_INTEGER } = {}) => {
   if (value === undefined || value === null || value === '') return null;
   if (!/^\d+$/.test(String(value))) return null;
@@ -117,7 +134,7 @@ const integer = (value, { min = 0, max = Number.MAX_SAFE_INTEGER } = {}) => {
   return Number.isSafeInteger(number) && number >= min && number <= max ? number : null;
 };
 
-const buildInvoiceQuery = (input = {}) => {
+const buildInvoiceQuery = (input = {}, options = {}) => {
   const params = new URLSearchParams();
   const dateFilters = [
     'emissao[gt]', 'emissao[gte]', 'emissao[lt]', 'emissao[lte]', 'emissao[eq]',
@@ -133,10 +150,20 @@ const buildInvoiceQuery = (input = {}) => {
 
   const status = String(input.status ?? '').trim();
   if (status) {
-    if (!['0', '1', '2'].includes(status)) {
+    if (!['0', '1', '2', 'overdue'].includes(status)) {
       throw Object.assign(new Error('Status inválido.'), { statusCode: 422 });
     }
-    params.set('status', status);
+    if (status === 'overdue') {
+      const searchDate = String(options.searchDate || saoPauloDate(options.now)).trim();
+      const overdueUntil = previousIsoDate(searchDate);
+      const requestedDueUntil = params.get('vencimento[lte]');
+      params.set('status', '0');
+      if (!requestedDueUntil || requestedDueUntil > overdueUntil) {
+        params.set('vencimento[lte]', overdueUntil);
+      }
+    } else {
+      params.set('status', status);
+    }
   }
 
   const cnpj = String(input.cnpj || '').replace(/\D/g, '');
@@ -645,7 +672,57 @@ const isPendingInvoice = (invoice) => {
   return !['liquid', 'pago', 'quitad', 'cancel'].some((term) => label.includes(term));
 };
 
-const buildDebtorSummary = (invoices) => {
+const AGING_BUCKETS = [
+  { key: 'current', label: 'A vencer' },
+  { key: 'overdue_1_7', label: '1–7 dias' },
+  { key: 'overdue_8_15', label: '8–15 dias' },
+  { key: 'overdue_16_30', label: '16–30 dias' },
+  { key: 'overdue_31_60', label: '31–60 dias' },
+  { key: 'overdue_61_plus', label: 'Mais de 60 dias' },
+  { key: 'unknown', label: 'Sem vencimento' }
+];
+
+const isoDayNumber = (value) => {
+  const normalized = String(value || '').slice(0, 10);
+  if (!validDate(normalized)) return null;
+  return Math.floor(Date.parse(`${normalized}T00:00:00Z`) / 86400000);
+};
+
+const agingBucketKey = (dueAt, today) => {
+  const dueDay = isoDayNumber(dueAt);
+  const todayDay = isoDayNumber(today);
+  if (dueDay === null || todayDay === null) return 'unknown';
+  const overdueDays = todayDay - dueDay;
+  if (overdueDays <= 0) return 'current';
+  if (overdueDays <= 7) return 'overdue_1_7';
+  if (overdueDays <= 15) return 'overdue_8_15';
+  if (overdueDays <= 30) return 'overdue_16_30';
+  if (overdueDays <= 60) return 'overdue_31_60';
+  return 'overdue_61_plus';
+};
+
+const buildAgingBuckets = (invoices, today = saoPauloDate()) => {
+  const buckets = new Map(AGING_BUCKETS.map((bucket) => [bucket.key, {
+    ...bucket,
+    valueInCents: 0,
+    invoiceCount: 0
+  }]));
+  invoices.filter(isPendingInvoice).forEach((invoice) => {
+    const valueInCents = Math.round(Number(invoice.balance) * 100);
+    if (valueInCents <= 0) return;
+    const bucket = buckets.get(agingBucketKey(invoice.dueAt, today));
+    bucket.valueInCents += valueInCents;
+    bucket.invoiceCount += 1;
+  });
+  return [...buckets.values()]
+    .filter((bucket) => bucket.key !== 'unknown' || bucket.invoiceCount > 0)
+    .map(({ valueInCents, ...bucket }) => ({
+      ...bucket,
+      value: valueInCents / 100
+    }));
+};
+
+const buildDebtorSummary = (invoices, options = {}) => {
   const groups = new Map();
   let invoiceCount = 0;
   invoices.filter(isPendingInvoice).forEach((invoice) => {
@@ -690,29 +767,31 @@ const buildDebtorSummary = (invoices) => {
     invoiceCount,
     companyCount: debtors.length,
     largestDebtor: debtors[0] || null,
-    debtors
+    debtors,
+    agingBuckets: buildAgingBuckets(invoices, options.today || saoPauloDate(options.now))
   };
 };
 
-const debtorSummaryCacheKey = (query) => {
+const debtorSummaryCacheKey = (query, today) => {
   const params = new URLSearchParams(query);
   params.delete('limit');
   params.delete('skip');
   params.sort();
-  return params.toString();
+  return `${today}:${params.toString()}`;
 };
 
 const debtorInvoiceInput = (input = {}) => {
   const requestedStatus = String(input.status ?? '').trim();
-  if (requestedStatus && requestedStatus !== '0') return null;
-  return { ...input, status: '0', limit: 100, skip: 0 };
+  if (requestedStatus && !['0', 'overdue'].includes(requestedStatus)) return null;
+  return { ...input, status: requestedStatus || '0', limit: 100, skip: 0 };
 };
 
 const fetchDebtorSummary = async (input) => {
+  const today = saoPauloDate();
   const debtorInput = debtorInvoiceInput(input);
   if (!debtorInput) {
     return {
-      ...buildDebtorSummary([]),
+      ...buildDebtorSummary([], { today }),
       pagesLoaded: 0,
       recordsRead: 0
     };
@@ -721,7 +800,7 @@ const fetchDebtorSummary = async (input) => {
   let params = new URLSearchParams(query);
   params.set('limit', '100');
   params.set('skip', '0');
-  const cacheKey = debtorSummaryCacheKey(params);
+  const cacheKey = debtorSummaryCacheKey(params, today);
   const cached = debtorSummaryCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) return cached.summary;
   if (cached) debtorSummaryCache.delete(cacheKey);
@@ -763,7 +842,7 @@ const fetchDebtorSummary = async (input) => {
     .filter(isPendingInvoice);
   invoices = await enrichInvoicesWithCompanies(invoices);
   const summary = {
-    ...buildDebtorSummary(invoices),
+    ...buildDebtorSummary(invoices, { today }),
     pagesLoaded: collected.pagesLoaded,
     recordsRead: collected.invoices.length
   };
@@ -908,6 +987,8 @@ module.exports = {
   filterAndSortCompanyInvoices,
   invoiceMatchesQuery,
   isPendingInvoice,
+  agingBucketKey,
+  buildAgingBuckets,
   buildDebtorSummary,
   debtorInvoiceInput,
   plainInvoiceIdQuery,

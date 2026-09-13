@@ -45,6 +45,7 @@ test('localiza os CT-es da fatura pelo DOCCOB sem depender da empresa', async ()
     }
   });
   assert.deepEqual(result.cteKeys, [KEY]);
+  assert.equal(result.doccobFound, true);
   assert.equal(result.source, 'doccob');
   assert.equal(result.clientCnpj, '41870054000276');
   assert.equal(result.clientName, 'JIMI BRASIL LTDA');
@@ -58,6 +59,18 @@ test('fatura sem chave de CT-e não oferece DACTE', async () => {
     }),
     findDoccobForInvoice: async () => ({ transports: [{ accessKey: null }] })
   });
+  assert.deepEqual(result.cteKeys, []);
+  assert.equal(result.doccobFound, true);
+});
+
+test('informa quando o DOCCOB da fatura ainda não foi localizado', async () => {
+  const result = await resolveInvoiceCteKeys('11518', {
+    requestExactInvoice: async () => ({
+      invoice: { fatura: 11518, cnpj_cliente: '28.759.933/0001-86' }
+    }),
+    findDoccobForInvoice: async () => null
+  });
+  assert.equal(result.doccobFound, false);
   assert.deepEqual(result.cteKeys, []);
 });
 

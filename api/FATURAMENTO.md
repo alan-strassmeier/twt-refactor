@@ -448,6 +448,12 @@ O servidor aceita os filtros documentados de data de emissão e vencimento,
 status, CNPJ e número da fatura (`id[eq]` na consulta da Brudam). `limit` é limitado a 100 registros e `skip` é usado
 na paginação.
 
+O status **Vencidas** é calculado pela aplicação e não existe na Brudam. Ao
+selecioná-lo, o servidor consulta faturas em aberto (`status=0`) com vencimento
+até o dia anterior à busca, considerando o fuso horário de São Paulo. Se o
+usuário informar um vencimento final anterior, o período mais restritivo é
+preservado.
+
 A documentação da Brudam define `valor`, mas não documenta data de pagamento,
 valor pago ou saldo. Quando esses campos adicionais estiverem presentes no
 retorno, a aplicação os utiliza. Caso não estejam, uma fatura liquidada é
@@ -480,6 +486,23 @@ O retorno contém `totalPending`, `invoiceCount`, `companyCount` e `debtors`.
 Cada item de `debtors` informa nome, CNPJ, saldo, percentual do total e número
 de faturas pendentes. O resumo consolidado usa cache temporário de cinco
 minutos para reduzir chamadas repetidas à Brudam.
+
+O gráfico também apresenta o saldo e a quantidade de faturas nas faixas **A
+vencer**, **1–7**, **8–15**, **16–30**, **31–60** e **Mais de 60 dias**. As
+faixas são calculadas pela data corrente em São Paulo e o cache é separado por
+dia para não preservar uma classificação anterior após a meia-noite.
+
+Ao passar o ponteiro, focar ou clicar em uma divisão do gráfico, a empresa
+correspondente é destacada na legenda. O clique mantém a seleção até outra
+divisão ser escolhida ou o usuário clicar fora do gráfico; a legenda rola
+automaticamente quando a empresa estiver fora da área visível. Cada empresa da
+legenda também funciona como atalho: ao acioná-la, a interface preenche o CNPJ,
+mantém os demais filtros e abre a lista de faturas em aberto daquela empresa.
+
+Na lista de faturas, a coluna **Prazo** calcula a diferença entre o vencimento
+e a data atual em São Paulo. Ela diferencia faturas vencidas, que vencem hoje,
+que vencem amanhã e as que ainda possuem prazo maior, sem marcar faturas
+liquidadas ou canceladas como atrasadas.
 
 ## PDF da fatura
 

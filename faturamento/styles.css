@@ -529,6 +529,52 @@ select:focus {
   gap: clamp(30px, 6vw, 82px);
 }
 
+.aging-summary {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(135px, 1fr));
+  gap: 10px;
+}
+
+.aging-card {
+  min-width: 0;
+  padding: 14px 16px;
+  display: grid;
+  gap: 5px;
+  border: 1px solid #e2eaf0;
+  border-radius: 12px;
+  background: #fbfdfe;
+}
+
+.aging-card span,
+.aging-card small {
+  color: var(--muted);
+  font-size: .72rem;
+  font-weight: 700;
+}
+
+.aging-card strong {
+  overflow: hidden;
+  color: var(--navy-900);
+  font-size: clamp(.9rem, 1.4vw, 1.08rem);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aging-card.is-current {
+  border-color: rgb(25 118 189 / 25%);
+  background: #eef7ff;
+}
+
+.aging-card.is-overdue {
+  border-color: rgb(196 54 73 / 22%);
+  background: #fff5f6;
+}
+
+.aging-card.is-overdue strong {
+  color: var(--danger);
+}
+
 .donut-wrap {
   position: relative;
   width: min(100%, 560px);
@@ -651,6 +697,28 @@ select:focus {
   border: 1px solid #e2eaf0;
   border-radius: 10px;
   background: #fbfdfe;
+  transition: border-color .16s ease, background-color .16s ease,
+    box-shadow .16s ease, opacity .16s ease, transform .16s ease;
+}
+
+.chart-legend li.is-highlighted {
+  border-color: #1976bd;
+  background: #eef7ff;
+  box-shadow: 0 8px 20px rgb(25 118 189 / 16%);
+  transform: translateX(2px);
+}
+
+.chart-legend li.is-actionable {
+  cursor: pointer;
+}
+
+.chart-legend li.is-actionable:focus-visible {
+  outline: 3px solid rgb(25 118 189 / 25%);
+  outline-offset: 2px;
+}
+
+.chart-legend.has-highlight li:not(.is-highlighted) {
+  opacity: .48;
 }
 
 .legend-swatch {
@@ -680,6 +748,14 @@ select:focus {
   margin-top: 2px;
   color: var(--muted);
   font-size: .7rem;
+}
+
+.legend-company .legend-action {
+  display: block;
+  margin-top: 4px;
+  color: #1976bd;
+  font-size: .7rem;
+  font-weight: 800;
 }
 
 .legend-value {
@@ -752,7 +828,7 @@ select:focus {
 
 table {
   width: 100%;
-  min-width: 1190px;
+  min-width: 1660px;
   border-collapse: collapse;
   font-size: .88rem;
 }
@@ -823,6 +899,23 @@ th.numeric {
 .invoice-id {
   color: var(--navy-900);
   font-weight: 800;
+}
+
+.invoice-detail-trigger {
+  all: unset;
+  border-radius: 5px;
+  color: var(--blue-600);
+  font-weight: 850;
+  text-decoration: underline;
+  text-decoration-color: rgb(25 118 189 / 28%);
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.invoice-detail-trigger:hover { text-decoration-color: currentColor; }
+.invoice-detail-trigger:focus-visible {
+  outline: 3px solid rgb(50 138 229 / 32%);
+  outline-offset: 3px;
 }
 
 .client-cell {
@@ -1014,6 +1107,32 @@ body.modal-open {
 .document-modal-panel p {
   margin: 0;
   color: var(--muted);
+}
+
+.doccob-missing-panel {
+  width: min(500px, 100%);
+}
+
+.doccob-missing-notice {
+  display: grid;
+  gap: 6px;
+  margin-top: 20px;
+  padding: 16px;
+  border: 1px solid #f0d29b;
+  border-radius: 14px;
+  color: #815716;
+  background: #fff8e9;
+  line-height: 1.45;
+}
+
+.doccob-missing-notice strong {
+  color: var(--navy-900);
+}
+
+.doccob-missing-confirm {
+  display: block;
+  min-width: 140px;
+  margin: 20px auto 0;
 }
 
 .document-modal-actions {
@@ -1249,23 +1368,37 @@ body.modal-open {
   white-space: nowrap;
 }
 
-.collection-quick-nav a {
+.collection-section-tab {
   min-height: 38px;
   padding: 8px 12px;
   display: inline-flex;
   align-items: center;
+  border: 0;
   border-radius: 9px;
   color: var(--navy-800);
+  background: transparent;
+  font-family: inherit;
   font-size: .8rem;
   font-weight: 800;
-  text-decoration: none;
   white-space: nowrap;
+  cursor: pointer;
   transition: color .15s ease, background .15s ease;
 }
 
-.collection-quick-nav a:hover {
+.collection-section-tab:hover {
   color: var(--blue-600);
   background: var(--blue-50);
+}
+
+.collection-section-tab.is-active {
+  color: #fff;
+  background: var(--navy-800);
+  box-shadow: 0 4px 12px rgb(17 42 64 / 18%);
+}
+
+.collection-section-tab:focus-visible {
+  outline: 3px solid rgb(50 138 229 / 30%);
+  outline-offset: 2px;
 }
 
 .collection-anchor-target {
@@ -1536,7 +1669,43 @@ body.modal-open {
 
 .collection-table-scroll { min-height: 110px; }
 .collection-table { min-width: 900px; }
+.pending-table { min-width: 1080px; }
 .collection-log-table { min-width: 1080px; }
+
+.pending-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 14px 24px;
+  border-bottom: 1px solid var(--line);
+  background: #f8fbfd;
+}
+
+.pending-summary span {
+  padding: 6px 10px;
+  border: 1px solid #dce7ef;
+  border-radius: 99px;
+  color: var(--muted);
+  background: white;
+  font-size: .74rem;
+  font-weight: 800;
+}
+
+.pending-summary [data-type="critical"] {
+  color: var(--danger);
+  border-color: #efc7cd;
+  background: #fff5f6;
+}
+
+.issue-priority {
+  font-size: .78rem;
+  font-weight: 850;
+}
+
+.issue-priority.priority-critical { color: var(--danger); }
+.issue-priority.priority-high { color: #a65c00; }
+.issue-priority.priority-medium { color: var(--blue-600); }
+.issue-action { white-space: nowrap; }
 
 .collection-table td small {
   display: block;
@@ -1679,6 +1848,243 @@ body.modal-open {
   white-space: nowrap;
 }
 
+.due-timing {
+  display: inline-block;
+  padding: 6px 9px;
+  border-radius: 99px;
+  font-size: .73rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.control-cell { min-width: 132px; }
+
+.control-badge {
+  display: inline-block;
+  padding: 6px 9px;
+  border-radius: 99px;
+  font-size: .72rem;
+  font-weight: 800;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+
+.control-success { color: var(--success); background: #e9f8f1; }
+.control-warning { color: var(--warning); background: #fff5e5; }
+.control-danger { color: var(--danger); background: #fcecef; }
+.control-info { color: var(--blue-600); background: #eaf5ff; }
+.control-neutral { color: var(--muted); background: #eef2f5; }
+
+.invoice-detail[hidden] { display: none; }
+
+.invoice-detail {
+  position: fixed;
+  z-index: 120;
+  inset: 0;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.invoice-detail-backdrop {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  background: rgb(9 27 42 / 58%);
+  cursor: default;
+}
+
+.invoice-detail-panel {
+  position: relative;
+  z-index: 1;
+  width: min(620px, 94vw);
+  height: 100%;
+  padding: 34px 32px 44px;
+  overflow-y: auto;
+  color: var(--navy-900);
+  background: white;
+  box-shadow: -18px 0 60px rgb(7 35 55 / 20%);
+  animation: invoice-detail-in .18s ease-out;
+}
+
+@keyframes invoice-detail-in {
+  from { transform: translateX(28px); opacity: .6; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+.invoice-detail-close {
+  position: absolute;
+  top: 24px;
+  right: 24px;
+  display: grid;
+  width: 42px;
+  height: 42px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  color: var(--navy-900);
+  background: #eef5fa;
+  cursor: pointer;
+}
+
+.invoice-detail-close svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.invoice-detail-panel h2 {
+  margin: 8px 52px 4px 0;
+  font-size: 1.55rem;
+}
+
+.invoice-detail-panel > p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.invoice-detail-loading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 30px;
+  padding: 18px;
+  border-radius: 12px;
+  color: var(--blue-600);
+  background: #f0f7fc;
+  font-weight: 750;
+}
+
+.invoice-detail-loading[hidden],
+.invoice-detail-error[hidden],
+#invoiceDetailContent[hidden] { display: none; }
+
+.invoice-detail-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 24px 0 14px;
+}
+
+.invoice-detail-summary > div,
+.invoice-control-grid article {
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid #dce7ef;
+  border-radius: 12px;
+  background: #f8fbfd;
+}
+
+.invoice-detail-summary dt,
+.invoice-control-grid article > span:first-child {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: .68rem;
+  font-weight: 850;
+  letter-spacing: .045em;
+  text-transform: uppercase;
+}
+
+.invoice-detail-summary dd {
+  margin: 0;
+  font-size: .96rem;
+  font-weight: 800;
+}
+
+.invoice-control-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.invoice-control-grid article small {
+  display: block;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: .74rem;
+  line-height: 1.4;
+}
+
+.invoice-detail-actions {
+  display: flex;
+  gap: 10px;
+  margin: 18px 0 26px;
+}
+
+.invoice-timeline h3 { margin: 0 0 16px; }
+.invoice-timeline ol { margin: 0; padding: 0; list-style: none; }
+
+.invoice-timeline li {
+  position: relative;
+  margin-left: 7px;
+  padding: 0 0 22px 28px;
+  border-left: 2px solid #dce7ef;
+}
+
+.invoice-timeline li::before {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: -7px;
+  width: 12px;
+  height: 12px;
+  border: 2px solid white;
+  border-radius: 50%;
+  background: var(--blue-600);
+  box-shadow: 0 0 0 1px #bcd5e6;
+}
+
+.invoice-timeline time {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--muted);
+  font-size: .72rem;
+  font-weight: 750;
+}
+
+.invoice-timeline strong { font-size: .88rem; }
+.invoice-timeline p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: .79rem;
+  line-height: 1.45;
+}
+
+.invoice-detail-error {
+  margin-top: 24px !important;
+  padding: 14px;
+  border-radius: 12px;
+  color: var(--danger) !important;
+  background: #fff1f3;
+}
+
+.due-timing.is-overdue {
+  color: var(--danger);
+  background: #fcecef;
+}
+
+.due-timing.is-today,
+.due-timing.is-soon {
+  color: var(--warning);
+  background: #fff5e5;
+}
+
+.due-timing.is-future {
+  color: #1976bd;
+  background: #eef7ff;
+}
+
+.due-timing.is-closed,
+.due-timing.is-unknown {
+  color: var(--muted);
+  background: #eef2f5;
+}
+
 .status-open {
   color: var(--warning);
   background: #fff5e5;
@@ -1707,6 +2113,15 @@ body.modal-open {
 .empty-state strong {
   color: var(--navy-900);
   font-size: 1.1rem;
+}
+
+@media (max-width: 620px) {
+  .invoice-detail-panel { padding: 28px 20px 36px; }
+  .invoice-detail-close { top: 18px; right: 18px; }
+  .invoice-detail-summary,
+  .invoice-control-grid { grid-template-columns: 1fr; }
+  .invoice-detail-actions { flex-direction: column; }
+  .invoice-detail-actions .button { width: 100%; }
 }
 
 .empty-state p {

@@ -16,8 +16,19 @@ const {
   fetchMinuteDetailsForNote,
   resolveDoccobTransportDetail,
   shipmentFromDetail,
+  ensureDoccobForPdf,
   buildInvoicePdf
 } = require('../server/faturamento/invoice-pdf');
+
+test('bloqueia o PDF incompleto quando o DOCCOB não foi localizado', () => {
+  assert.throws(
+    () => ensureDoccobForPdf(null),
+    (error) => error.statusCode === 409 && error.code === 'DOCCOB_NOT_FOUND' &&
+      /DOCCOB desta fatura ainda não foi localizado/.test(error.message)
+  );
+  const doccob = { invoice: { id: '11518' } };
+  assert.equal(ensureDoccobForPdf(doccob), doccob);
+});
 
 test('abrevia o nome da TWT sem alterar os demais emitentes', () => {
   assert.equal(issuerDisplayName({
