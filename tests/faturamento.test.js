@@ -309,6 +309,17 @@ test('normaliza o número público da fatura no retorno real da Brudam', () => {
   }]);
 });
 
+test('preserva o CNPJ do emitente quando a listagem da Brudam o informa', () => {
+  const invoice = normalizeInvoice({
+    fatura: 11735,
+    cnpj_cliente: '10629265000107',
+    cnpj_emitente: '09123137000108',
+    valor: '100.00',
+    status: '0'
+  });
+  assert.equal(invoice.issuerDocument, '09123137000108');
+});
+
 test('remove lançamentos bancários sem número público de fatura', () => {
   const invoices = normalizeVisibleInvoices([
     {

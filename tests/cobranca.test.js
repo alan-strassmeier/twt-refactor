@@ -518,6 +518,41 @@ test('mantém a fatura na fila enquanto o DOCCOB não chegou', async () => {
   assert.equal(context.summary.pendingDoccob, 1);
 });
 
+test('ignora cobrança da TWT antes de gerar boleto, documento ou log', async () => {
+  const calls = [];
+  const removed = [];
+  const context = processorContext({
+    findDoccobForInvoice: async () => ({
+      invoice: { issuerCnpj: '09123137000108' }
+    }),
+    fetchInvoicePdfData: async () => { calls.push('pdf-data'); },
+    generateInvoiceBankSlip: async () => { calls.push('boleto'); },
+    sendBillingEmail: async () => { calls.push('email'); },
+    addLog: async () => { calls.push('log'); },
+    removePending: async (invoiceId) => removed.push(String(invoiceId))
+  });
+  context.pendingByInvoice.set('11735', {
+    invoiceId: '11735',
+    reason: 'processing_error'
+  });
+
+  const result = await processInvoiceEvent({
+    event: EVENT_TYPES.reminder,
+    invoice: {
+      id: '11735',
+      clientDocument: '10629265000107',
+      client: 'JTT LOG'
+    },
+    context
+  });
+
+  assert.deepEqual(result, { skipped: 'twt' });
+  assert.deepEqual(calls, []);
+  assert.deepEqual(removed, ['11735']);
+  assert.equal(context.pendingByInvoice.has('11735'), false);
+  assert.equal(context.summary.skippedTwt, 1);
+});
+
 test('registra se a pendência foi conferida manualmente ou pelo agendador', () => {
   const record = pendingRecord(
     { id: '11756', clientDocument: '11280282000144', client: 'BHZ' },
@@ -959,9 +994,11 @@ test('reenvio manual ignora a trava do envio anterior e cria referência exclusi
   const sent = [];
   const references = [];
   const savedDeliveries = [];
+  const invoiceQueries = [];
   const fixedNow = () => new Date('2026-09-13T12:00:00.000Z');
   const result = await resendBillingInvoice('11756', {
     runId: 'reenvio-manual-1',
+    clientCnpj: '11280282000144',
     now: fixedNow,
     currentTime: fixedNow(),
     transport: {},
@@ -970,18 +1007,21 @@ test('reenvio manual ignora a trava do envio anterior e cria referência exclusi
       fromEmail: 'faturamento@twt.com.br',
       alertEmail: ''
     },
-    fetchInvoice: async () => ({
-      invoices: [{
-        id: '11756',
-        clientDocument: '11280282000144',
-        client: 'CLIENTE TESTE',
-        issuedAt: '2026-09-01',
-        dueAt: '2026-09-30',
-        balance: 100,
-        status: 0,
-        statusLabel: 'Em aberto'
-      }]
-    }),
+    fetchInvoice: async (query) => {
+      invoiceQueries.push(query);
+      return {
+        invoices: query.cnpj ? [{
+          id: '11756',
+          clientDocument: '11280282000144',
+          client: 'CLIENTE TESTE',
+          issuedAt: '2026-09-01',
+          dueAt: '2026-09-30',
+          balance: 100,
+          status: 0,
+          statusLabel: 'Em aberto'
+        }] : []
+      };
+    },
     listPending: async () => [],
     findDoccobForInvoice: async () => ({}),
     fetchInvoicePdfData: async () => invoiceData({ type: 'ted_doc' }),
@@ -1002,6 +1042,10 @@ test('reenvio manual ignora a trava do envio anterior e cria referência exclusi
   });
   assert.equal(result.sent, 1);
   assert.equal(sent.length, 1);
+  assert.deepEqual(invoiceQueries, [
+    { id: '11756', limit: 100 },
+    { cnpj: '11280282000144', limit: 100 }
+  ]);
   assert.match(savedDeliveries[0][0], /^manual_/);
   assert.equal(savedDeliveries[0][3].manualResend, true);
   assert.equal(references[0].record.manualResend, true);
@@ -1010,6 +1054,12 @@ test('reenvio manual ignora a trava do envio anterior e cria referência exclusi
 
 test('reenvio manual não inicia envio sem destinatário ativo', async () => {
   await assert.rejects(() => resendBillingInvoice('11756', {
+    transport: {},
+    emailConfig: {
+      fromName: 'TWT',
+      fromEmail: 'faturamento@twt.com.br',
+      alertEmail: ''
+    },
     fetchInvoice: async () => ({
       invoices: [{
         id: '11756',
@@ -1021,12 +1071,48 @@ test('reenvio manual não inicia envio sem destinatário ativo', async () => {
     }),
     getCategory: async () => ({
       contacts: [{ email: 'financeiro@example.com', enabled: false }]
-    })
+    }),
+    listPending: async () => [],
+    findDoccobForInvoice: async () => ({}),
+    fetchInvoicePdfData: async () => invoiceData({ type: 'ted_doc' }),
+    savePending: async () => {},
+    removePending: async () => {},
+    addLog: async () => {}
   }), (error) => {
     assert.equal(error.statusCode, 409);
     assert.match(error.message, /destinatário ativo/i);
     return true;
   });
+});
+
+test('reenvio manual informa que o fluxo da TWT está pausado', async () => {
+  let sent = false;
+  await assert.rejects(() => resendBillingInvoice('11735', {
+    transport: {},
+    emailConfig: {
+      fromName: 'TWT',
+      fromEmail: 'faturamento@twt.com.br',
+      alertEmail: ''
+    },
+    fetchInvoice: async () => ({
+      invoices: [{
+        id: '11735',
+        clientDocument: '10629265000107',
+        issuerDocument: '09123137000108',
+        balance: 100,
+        status: 0,
+        statusLabel: 'Em aberto'
+      }]
+    }),
+    listPending: async () => [],
+    sendBillingEmail: async () => { sent = true; },
+    removePending: async () => {}
+  }), (error) => {
+    assert.equal(error.statusCode, 409);
+    assert.match(error.message, /TWT está pausado/i);
+    return true;
+  });
+  assert.equal(sent, false);
 });
 
 test('mantém estados financeiro, documental, de cobrança e pagamento independentes', () => {

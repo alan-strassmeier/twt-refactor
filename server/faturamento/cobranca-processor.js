@@ -10,7 +10,7 @@ const {
 const { findDoccobForInvoice } = require('./r2-doccob');
 const { fetchInvoicePdfData, buildInvoicePdf } = require('./invoice-pdf');
 const { generateInvoiceBankSlip, getInvoiceBankSlipPdf } = require('./boleto');
-const { isDslIssuer } = require('./billing-rules');
+const { isDslIssuer, isTwtIssuer } = require('./billing-rules');
 const {
   normalizeCteKeys,
   resolveInvoiceCteKeys,
@@ -240,6 +240,16 @@ const enabledContacts = (category) => Array.isArray(category?.contacts)
   ? category.contacts.filter((contact) => contact?.enabled !== false)
   : [];
 
+const skipPausedTwtBilling = async ({ invoice, context }) => {
+  const invoiceId = String(invoice.id);
+  if (context.pendingByInvoice.has(invoiceId)) {
+    await context.removePending(invoiceId);
+    context.pendingByInvoice.delete(invoiceId);
+  }
+  context.summary.skippedTwt = Number(context.summary.skippedTwt || 0) + 1;
+  return { skipped: 'twt' };
+};
+
 const existingDeliveryPlan = async ({ event, invoiceId, category, context }) => {
   const contacts = enabledContacts(category);
   if (contacts.length === 0) return { fullyClaimed: false, recipientCount: 0 };
@@ -285,6 +295,9 @@ const existingDeliveryPlan = async ({ event, invoiceId, category, context }) => 
 const processInvoiceEvent = async ({ event, invoice, context }) => {
   const now = context.now().toISOString();
   if (context.doccobPendingIds?.has(String(invoice.id))) return;
+  if (isTwtIssuer(invoice.issuerDocument || invoice.issuerCnpj)) {
+    return skipPausedTwtBilling({ invoice, context });
+  }
   const clientCnpj = String(invoice.clientDocument || '').replace(/\D/g, '');
   const doccob = await context.findDoccobForInvoice({
     invoiceId: invoice.id,
@@ -311,6 +324,9 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
     context.summary.pendingDoccob += 1;
     return;
   }
+  if (isTwtIssuer(doccob?.invoice?.issuerCnpj)) {
+    return skipPausedTwtBilling({ invoice, context });
+  }
 
   const categoryBeforeInvoiceLookup = clientCnpj ? await context.getCategory(clientCnpj) : null;
   const existingPlan = await existingDeliveryPlan({
@@ -329,6 +345,9 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
   }
 
   const data = await context.fetchInvoicePdfData(invoice.id);
+  if (isTwtIssuer(data.issuer?.document)) {
+    return skipPausedTwtBilling({ invoice, context });
+  }
   const resolvedCnpj = String(data.client?.document || clientCnpj).replace(/\D/g, '');
   const category = resolvedCnpj === clientCnpj
     ? categoryBeforeInvoiceLookup
@@ -347,14 +366,17 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
     });
     await context.savePending(record);
     context.pendingByInvoice.set(String(invoice.id), record);
-    await logOnceWithoutContacts({
-      event,
-      invoice: { ...invoice, clientDocument: resolvedCnpj },
-      addLog: context.addLog,
-      claimDelivery: context.claimDelivery,
-      now
-    });
+    if (!context.manualResend) {
+      await logOnceWithoutContacts({
+        event,
+        invoice: { ...invoice, clientDocument: resolvedCnpj },
+        addLog: context.addLog,
+        claimDelivery: context.claimDelivery,
+        now
+      });
+    }
     context.summary.waitingContacts += 1;
+    if (context.manualResend) return;
   }
 
   const alertEmail = String(
@@ -602,9 +624,28 @@ const resendBillingInvoice = async (invoiceId, dependencies = {}) => {
     throw Object.assign(new Error('Informe o número da fatura.'), { statusCode: 422, expose: true });
   }
   const fetch = dependencies.fetchInvoice || fetchInvoices;
-  const result = await fetch({ id: normalizedId, limit: 1 });
-  const invoice = result.invoices?.find((item) => String(item.id) === normalizedId);
+  const clientCnpj = String(dependencies.clientCnpj || '').replace(/\D/g, '');
+  let invoice = null;
+  let lookupError = null;
+  try {
+    const result = await fetch({ id: normalizedId, limit: 100 });
+    invoice = result.invoices?.find((item) => String(item.id) === normalizedId) || null;
+  } catch (error) {
+    lookupError = error;
+  }
+  if (!invoice && clientCnpj.length === 14) {
+    try {
+      const result = await fetch({ cnpj: clientCnpj, limit: 100 });
+      invoice = result.invoices?.find((item) => (
+        String(item.id) === normalizedId &&
+        String(item.clientDocument || '').replace(/\D/g, '') === clientCnpj
+      )) || null;
+    } catch (error) {
+      lookupError ||= error;
+    }
+  }
   if (!invoice) {
+    if (lookupError && clientCnpj.length !== 14) throw lookupError;
     throw Object.assign(new Error('Fatura não encontrada na Brudam.'), {
       statusCode: 404,
       expose: true
@@ -612,16 +653,6 @@ const resendBillingInvoice = async (invoiceId, dependencies = {}) => {
   }
   if (!isPendingInvoice(invoice)) {
     throw Object.assign(new Error('Somente faturas em aberto podem ser reenviadas.'), {
-      statusCode: 409,
-      expose: true
-    });
-  }
-
-  const getCategory = dependencies.getCategory || store.getCategory;
-  const clientCnpj = String(invoice.clientDocument || '').replace(/\D/g, '');
-  const category = clientCnpj ? await getCategory(clientCnpj) : null;
-  if (enabledContacts(category).length === 0) {
-    throw Object.assign(new Error('Não há destinatário ativo para reenviar esta cobrança.'), {
       statusCode: 409,
       expose: true
     });
@@ -642,6 +673,7 @@ const resendBillingInvoice = async (invoiceId, dependencies = {}) => {
     alreadySent: 0,
     pendingDoccob: 0,
     waitingContacts: 0,
+    skippedTwt: 0,
     review: 0,
     errors: [],
     stoppedByLimit: false
@@ -651,9 +683,6 @@ const resendBillingInvoice = async (invoiceId, dependencies = {}) => {
   const attemptId = String(dependencies.runId || `manual-${Date.now()}`);
   const contextDependencies = {
     ...dependencies,
-    getCategory: async (cnpj) => (
-      String(cnpj || '').replace(/\D/g, '') === clientCnpj ? category : getCategory(cnpj)
-    ),
     runId: attemptId,
     manualResend: true,
     getDelivery: async () => null,
@@ -669,8 +698,9 @@ const resendBillingInvoice = async (invoiceId, dependencies = {}) => {
     nowFactory,
     dependencies: contextDependencies
   });
+  let outcome = null;
   try {
-    await processInvoiceEvent({
+    outcome = await processInvoiceEvent({
       event: billingEventForInvoice(invoice, currentDate),
       invoice,
       context
@@ -680,6 +710,11 @@ const resendBillingInvoice = async (invoiceId, dependencies = {}) => {
     if (!dependencies.transport && typeof transport.close === 'function') transport.close();
   }
   summary.completedAt = nowFactory().toISOString();
+  if (outcome?.skipped === 'twt') {
+    throw Object.assign(new Error(
+      'O envio de cobranças da TWT está pausado até a conclusão do fluxo bancário.'
+    ), { statusCode: 409, expose: true });
+  }
   if (summary.pendingDoccob) {
     throw Object.assign(new Error('O DOCCOB ainda não foi localizado. A cobrança não foi reenviada.'), {
       statusCode: 409,
@@ -748,6 +783,7 @@ const runBillingCollection = async (dependencies = {}) => {
     alreadySent: 0,
     pendingDoccob: 0,
     waitingContacts: 0,
+    skippedTwt: 0,
     review: 0,
     errors: [],
     stoppedByLimit: false

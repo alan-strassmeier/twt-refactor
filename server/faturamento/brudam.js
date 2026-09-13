@@ -218,6 +218,9 @@ const normalizeInvoice = (invoice) => {
   const explicitBalance = numberValue(firstValue(invoice, ['saldo', 'valor_saldo', 'saldo_devedor']));
   const balance = explicitBalance ?? (total !== null ? Math.max(total - paid, 0) : null);
   const client = invoice?.cliente && typeof invoice.cliente === 'object' ? invoice.cliente : {};
+  const issuerDocument = firstValue(invoice, [
+    'cnpj_emitente', 'cnpj_empresa', 'emitente_cnpj'
+  ]) || firstValue(invoice?.emitente, ['cnpj', 'documento']) || '';
 
   return {
     id: firstValue(invoice, ['fatura', 'numero', 'id']),
@@ -231,6 +234,7 @@ const normalizeInvoice = (invoice) => {
       firstValue(invoice, ['cliente_nome', 'nome_cliente', 'razao_social_cliente', 'empresa']) || '',
     clientDocument: firstValue(client, ['cnpj', 'documento']) ||
       firstValue(invoice, ['cnpj_cliente']) || '',
+    ...(issuerDocument ? { issuerDocument: String(issuerDocument) } : {}),
     total,
     paid,
     balance,

@@ -15,7 +15,7 @@ const {
 const { fetchInvoices } = require('../../server/faturamento/brudam');
 const { findDoccobForInvoice } = require('../../server/faturamento/r2-doccob');
 const { getBankSlipRecord } = require('../../server/faturamento/boleto-store');
-const { isDslIssuer } = require('../../server/faturamento/billing-rules');
+const { isDslIssuer, isTwtIssuer } = require('../../server/faturamento/billing-rules');
 const {
   invoiceControl,
   buildUnifiedIssues,
@@ -182,7 +182,7 @@ const handleInvoiceDetail = async (req, res, query) => {
     return;
   }
   const invoiceId = rawInvoiceId.replace(/^0+(?=\d)/, '');
-  const result = await fetchInvoices({ id: invoiceId, limit: 1 });
+  const result = await fetchInvoices({ id: invoiceId, limit: 100 });
   const invoice = result.invoices?.find((item) => String(item.id) === invoiceId);
   if (!invoice) {
     sendJson(res, 404, { message: 'Fatura não encontrada na Brudam.' });
@@ -233,7 +233,12 @@ const handleInvoiceDetail = async (req, res, query) => {
       ...(doccobError ? { detail: doccobError } : {})
     };
   }
-  const resendBlockedReason = ['paid', 'cancelled'].includes(controls.financial.code)
+  const twtBillingPaused = isTwtIssuer(
+    doccob?.invoice?.issuerCnpj || invoice.issuerDocument || invoice.issuerCnpj
+  );
+  const resendBlockedReason = twtBillingPaused
+    ? 'O envio de cobranças da TWT está pausado até a conclusão do fluxo bancário.'
+    : ['paid', 'cancelled'].includes(controls.financial.code)
     ? 'Somente faturas em aberto podem ser reenviadas.'
     : !doccob
       ? 'Aguarde o DOCCOB antes de reenviar a cobrança.'
@@ -359,7 +364,10 @@ const handleResend = async (req, res) => {
     return;
   }
   try {
-    const result = await resendBillingInvoice(body.invoiceId, { runId });
+    const result = await resendBillingInvoice(body.invoiceId, {
+      runId,
+      clientCnpj: body.clientCnpj
+    });
     sendJson(res, 200, {
       ...result,
       message: `Cobrança reenviada em ${result.sent} mensagem(ns).`

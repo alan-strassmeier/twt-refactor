@@ -349,6 +349,7 @@
   let modalPreviousFocus = null;
   let invoiceDetailPreviousFocus = null;
   let invoiceDetailId = '';
+  let invoiceDetailClientCnpj = '';
   let invoiceDetailWhatsappMessage = '';
 
   const invoicePdfUrl = (invoiceId) =>
@@ -819,6 +820,7 @@
     }));
     elements.invoiceDetailDocuments.disabled = false;
     const actions = payload.actions || {};
+    invoiceDetailClientCnpj = String(payload.invoice?.clientDocument || '').replace(/\D/g, '');
     elements.invoiceDetailResend.disabled = actions.canResend === false;
     elements.invoiceDetailResend.title = actions.resendBlockedReason || '';
     invoiceDetailWhatsappMessage = String(actions.whatsappMessage || '');
@@ -838,6 +840,7 @@
     elements.invoiceDetailContent.hidden = true;
     elements.invoiceDetailError.hidden = true;
     elements.invoiceDetailActionMessage.textContent = '';
+    invoiceDetailClientCnpj = '';
     invoiceDetailWhatsappMessage = '';
     elements.invoiceDetail.hidden = false;
     document.body.classList.add('modal-open');
@@ -1505,7 +1508,10 @@
     try {
       const result = await requestJson('/api/faturamento/cobranca?route=resend', {
         method: 'POST',
-        body: JSON.stringify({ invoiceId: invoiceDetailId })
+        body: JSON.stringify({
+          invoiceId: invoiceDetailId,
+          clientCnpj: invoiceDetailClientCnpj
+        })
       });
       elements.invoiceDetailActionMessage.dataset.tone = 'success';
       elements.invoiceDetailActionMessage.textContent = result.message;
