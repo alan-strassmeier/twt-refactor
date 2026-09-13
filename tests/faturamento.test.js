@@ -99,6 +99,27 @@ test('monta somente os filtros permitidos pela API de faturas', () => {
   assert.equal(result.exactCnpj, '97434690000129');
 });
 
+test('transforma o status local de vencidas em faturas abertas até o dia anterior', () => {
+  const result = buildInvoiceQuery({ status: 'overdue' }, { searchDate: '2026-09-12' });
+  const query = new URLSearchParams(result.query);
+  assert.equal(query.get('status'), '0');
+  assert.equal(query.get('vencimento[lte]'), '2026-09-11');
+
+  const stricterResult = buildInvoiceQuery({
+    status: 'overdue',
+    'vencimento[lte]': '2026-08-31'
+  }, { searchDate: '2026-09-12' });
+  assert.equal(
+    new URLSearchParams(stricterResult.query).get('vencimento[lte]'),
+    '2026-08-31'
+  );
+});
+
+test('exibe vencidas entre os status disponíveis na pesquisa', () => {
+  const html = readFileSync(require.resolve('../faturamento/index.html'), 'utf8');
+  assert.match(html, /<option value="overdue">Vencidas<\/option>/);
+});
+
 test('lê os filtros diretamente da URL recebida pela função', () => {
   assert.deepEqual(queryFromRequest({
     url: '/api/faturamento/faturas?id=11490&status=0&emissao%5Bgte%5D=2026-07-01&limit=100&skip=0',
@@ -623,6 +644,11 @@ test('limita a consolidação do gráfico às faturas em aberto', () => {
   });
   assert.equal(debtorInvoiceInput({ status: '1' }), null);
   assert.equal(debtorInvoiceInput({ status: '2' }), null);
+  assert.deepEqual(debtorInvoiceInput({ status: 'overdue', limit: 20, skip: 400 }), {
+    status: 'overdue',
+    limit: 100,
+    skip: 0
+  });
 });
 
 test('resume somente saldos pendentes por empresa', () => {

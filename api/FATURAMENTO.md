@@ -448,6 +448,12 @@ O servidor aceita os filtros documentados de data de emissão e vencimento,
 status, CNPJ e número da fatura (`id[eq]` na consulta da Brudam). `limit` é limitado a 100 registros e `skip` é usado
 na paginação.
 
+O status **Vencidas** é calculado pela aplicação e não existe na Brudam. Ao
+selecioná-lo, o servidor consulta faturas em aberto (`status=0`) com vencimento
+até o dia anterior à busca, considerando o fuso horário de São Paulo. Se o
+usuário informar um vencimento final anterior, o período mais restritivo é
+preservado.
+
 A documentação da Brudam define `valor`, mas não documenta data de pagamento,
 valor pago ou saldo. Quando esses campos adicionais estiverem presentes no
 retorno, a aplicação os utiliza. Caso não estejam, uma fatura liquidada é

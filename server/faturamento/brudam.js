@@ -110,6 +110,23 @@ const validDate = (value) => {
   return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
 };
 
+const saoPauloDate = (now = new Date()) => {
+  const parts = new Intl.DateTimeFormat('pt-BR', {
+    timeZone: 'America/Sao_Paulo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).formatToParts(now);
+  const part = (type) => parts.find((item) => item.type === type)?.value;
+  return `${part('year')}-${part('month')}-${part('day')}`;
+};
+
+const previousIsoDate = (value) => {
+  const date = new Date(`${value}T12:00:00Z`);
+  date.setUTCDate(date.getUTCDate() - 1);
+  return date.toISOString().slice(0, 10);
+};
+
 const integer = (value, { min = 0, max = Number.MAX_SAFE_INTEGER } = {}) => {
   if (value === undefined || value === null || value === '') return null;
   if (!/^\d+$/.test(String(value))) return null;
@@ -117,7 +134,7 @@ const integer = (value, { min = 0, max = Number.MAX_SAFE_INTEGER } = {}) => {
   return Number.isSafeInteger(number) && number >= min && number <= max ? number : null;
 };
 
-const buildInvoiceQuery = (input = {}) => {
+const buildInvoiceQuery = (input = {}, options = {}) => {
   const params = new URLSearchParams();
   const dateFilters = [
     'emissao[gt]', 'emissao[gte]', 'emissao[lt]', 'emissao[lte]', 'emissao[eq]',
@@ -133,10 +150,20 @@ const buildInvoiceQuery = (input = {}) => {
 
   const status = String(input.status ?? '').trim();
   if (status) {
-    if (!['0', '1', '2'].includes(status)) {
+    if (!['0', '1', '2', 'overdue'].includes(status)) {
       throw Object.assign(new Error('Status inválido.'), { statusCode: 422 });
     }
-    params.set('status', status);
+    if (status === 'overdue') {
+      const searchDate = String(options.searchDate || saoPauloDate(options.now)).trim();
+      const overdueUntil = previousIsoDate(searchDate);
+      const requestedDueUntil = params.get('vencimento[lte]');
+      params.set('status', '0');
+      if (!requestedDueUntil || requestedDueUntil > overdueUntil) {
+        params.set('vencimento[lte]', overdueUntil);
+      }
+    } else {
+      params.set('status', status);
+    }
   }
 
   const cnpj = String(input.cnpj || '').replace(/\D/g, '');
@@ -704,8 +731,8 @@ const debtorSummaryCacheKey = (query) => {
 
 const debtorInvoiceInput = (input = {}) => {
   const requestedStatus = String(input.status ?? '').trim();
-  if (requestedStatus && requestedStatus !== '0') return null;
-  return { ...input, status: '0', limit: 100, skip: 0 };
+  if (requestedStatus && !['0', 'overdue'].includes(requestedStatus)) return null;
+  return { ...input, status: requestedStatus || '0', limit: 100, skip: 0 };
 };
 
 const fetchDebtorSummary = async (input) => {
