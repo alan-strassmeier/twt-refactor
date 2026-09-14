@@ -25,6 +25,10 @@ R2_DOCCOB_SCAN_LIMIT=250
 BRADESCO_ENVIRONMENT=sandbox
 BRADESCO_CLIENT_ID=
 BRADESCO_CLIENT_SECRET=
+# Opcional: se vazio, reutiliza NFSE_CERT_PFX_BASE64/NFSE_CERT_PASSWORD
+BRADESCO_MTLS_PFX_BASE64=
+BRADESCO_MTLS_PFX_PASSWORD=
+# Compatibilidade com certificado e chave já separados em PEM
 BRADESCO_MTLS_CERT_BASE64=
 BRADESCO_MTLS_KEY_BASE64=
 BRADESCO_MTLS_KEY_PASSPHRASE=
@@ -244,13 +248,28 @@ jamais envia uma fatura DSL ao Bradesco nem uma fatura TWT ao Itaú.
 ## Boletos Bradesco (TWT)
 
 O Bradesco exige OAuth2 `client_credentials` e autenticação mTLS tanto na
-obtenção do token quanto nas chamadas da API. Converta o certificado público e
-a chave privada para Base64 antes de cadastrá-los na Vercel:
+obtenção do token quanto nas chamadas da API. O sistema aceita diretamente o
+mesmo A1 (`.pfx`/`.p12`) usado pela NFS-e. Se as variáveis mTLS específicas do
+Bradesco estiverem vazias, reutiliza automaticamente `NFSE_CERT_PFX_BASE64` e
+`NFSE_CERT_PASSWORD`. Para manter credenciais bancárias independentes, repita o
+PFX em `BRADESCO_MTLS_PFX_BASE64` e a senha em
+`BRADESCO_MTLS_PFX_PASSWORD`.
+
+O certificado público associado à aplicação no portal Bradesco deve pertencer
+ao mesmo PFX usado pela Vercel. Ele pode ser exportado sem a chave privada pelo
+PowerShell:
 
 ```powershell
-[Convert]::ToBase64String([IO.File]::ReadAllBytes('caminho\certificado.crt'))
-[Convert]::ToBase64String([IO.File]::ReadAllBytes('caminho\chave.key'))
+$pfxPath = 'C:\caminho\certificado-twt.pfx'
+$pfxPassword = Read-Host 'Senha do PFX' -AsSecureString
+$flags = [Security.Cryptography.X509Certificates.X509KeyStorageFlags]::EphemeralKeySet
+$cert = [Security.Cryptography.X509Certificates.X509Certificate2]::new($pfxPath, $pfxPassword, $flags)
+[IO.File]::WriteAllBytes('C:\caminho\bradesco-twt-publico.cer', $cert.Export('Cert'))
 ```
+
+Envie ao portal somente `bradesco-twt-publico.cer`; nunca envie o PFX nem a
+senha. As credenciais `BRADESCO_CLIENT_ID` e `BRADESCO_CLIENT_SECRET` precisam
+ter sido geradas para esse mesmo certificado.
 
 Comece com `BRADESCO_ENVIRONMENT=sandbox`. O sistema usa os endpoints oficiais
 `openapisandbox.prebanco.com.br` nesse ambiente e troca para
@@ -263,9 +282,10 @@ Antes da produção, a conta precisa ter contrato de cobrança ativo, indicador
 sandbox, o portal aceita certificado A1 público autoassinado; em produção, use o
 certificado A1 público emitido por uma autoridade certificadora confiável e as
 credenciais produtivas liberadas pelo banco. A chave privada correspondente fica
-somente na Vercel, em Base64, e nunca deve ser enviada ao portal ou versionada.
-Se a chave estiver criptografada, configure também
-`BRADESCO_MTLS_KEY_PASSPHRASE`.
+somente dentro do PFX na Vercel e nunca deve ser enviada ao portal ou
+versionada. O formato separado em PEM continua aceito por compatibilidade por
+meio de `BRADESCO_MTLS_CERT_BASE64`, `BRADESCO_MTLS_KEY_BASE64` e, quando
+necessário, `BRADESCO_MTLS_KEY_PASSPHRASE`.
 
 O botão identifica o Bradesco para faturas TWT. A geração usa o
 saldo pendente, o vencimento da fatura e os dados do pagador consultados em
