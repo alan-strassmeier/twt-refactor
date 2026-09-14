@@ -433,6 +433,7 @@
     elements.nfseChoice.hidden = !options.nfseEligible;
     elements.nfseChoice.dataset.invoiceId = options.nfseEligible ? invoiceId : '';
     elements.nfseChoice.dataset.status = options.nfseStatus || 'not_issued';
+    elements.nfseChoice.dataset.certificateMode = options.nfseCertificateMode || '';
     elements.nfseChoice.disabled = false;
     elements.nfseChoice.classList.remove('is-loading');
     if (options.nfseStatus === 'issued') {
@@ -441,10 +442,15 @@
         ? `NFS-e nº ${options.nfseNumber} emitida para esta fatura`
         : 'NFS-e emitida para esta fatura';
     } else if (nfsePendingStates.has(options.nfseStatus)) {
-      elements.nfseChoiceTitle.textContent = 'Acompanhar emissão da NFS-e';
-      elements.nfseChoiceDescription.textContent = options.nfseStatus === 'agent_processing'
-        ? 'O agente A3 está assinando e transmitindo a DPS'
-        : 'A DPS está aguardando o computador com o certificado A3';
+      const usesA1 = options.nfseCertificateMode === 'a1';
+      elements.nfseChoiceTitle.textContent = usesA1
+        ? 'Continuar emissão com A1'
+        : 'Acompanhar emissão da NFS-e';
+      elements.nfseChoiceDescription.textContent = usesA1
+        ? 'A solicitação anterior será retomada diretamente pelo servidor'
+        : options.nfseStatus === 'agent_processing'
+          ? 'O agente A3 está assinando e transmitindo a DPS'
+          : 'A DPS está aguardando o computador com o certificado A3';
     } else if (['processing', 'review'].includes(options.nfseStatus)) {
       elements.nfseChoiceTitle.textContent = 'Conferir emissão da NFS-e';
       elements.nfseChoiceDescription.textContent = 'Existe uma DPS em processamento ou revisão';
@@ -532,6 +538,7 @@
   };
 
   const showNfsePreview = (payload) => {
+    const usesAgent = payload.certificateMode === 'agent';
     elements.nfsePreviewInvoice.textContent = payload.invoiceId || '—';
     elements.nfsePreviewCompetence.textContent = formatDate(payload.competence);
     elements.nfsePreviewClient.textContent = payload.client?.name || '—';
@@ -547,7 +554,9 @@
       `Simples Nacional (${payload.service?.totalTaxPercentage ?? '—'}% de tributos aproximados)`,
       `${payload.service?.municipalityName || 'Porto Alegre'} / RS`
     ].join(' • ');
-    elements.nfseConfirmWarning.textContent = payload.environment === 'homologation'
+    elements.nfseConfirmWarning.textContent = nfsePendingStates.has(payload.status) && !usesAgent
+      ? 'A solicitação criada no fluxo antigo será conferida e retomada com o certificado A1.'
+      : payload.environment === 'homologation'
       ? 'ATENÇÃO: ambiente de homologação. O documento gerado não possui valor fiscal.'
       : nfsePendingStates.has(payload.status)
       ? 'A solicitação está aguardando o computador da TWT com o certificado A3 conectado.'
@@ -556,8 +565,11 @@
         : payload.message ||
           'A emissão é exclusiva para a TWT e usa o padrão fiscal aprovado para a fatura.';
     elements.nfseIssueButton.dataset.invoiceId = payload.invoiceId || '';
-    elements.nfseIssueButton.textContent = nfsePendingStates.has(payload.status)
+    elements.nfseIssueButton.dataset.certificateMode = payload.certificateMode || '';
+    elements.nfseIssueButton.textContent = nfsePendingStates.has(payload.status) && usesAgent
       ? 'Atualizar situação'
+      : nfsePendingStates.has(payload.status)
+        ? 'Continuar com A1'
       : ['processing', 'review'].includes(payload.status)
         ? 'Conferir emissão'
         : payload.environment === 'homologation'
@@ -653,7 +665,7 @@
         body: JSON.stringify({ id: invoiceId, confirmed: true })
       });
       let result = payload;
-      if (nfsePendingStates.has(payload.status)) {
+      if (nfsePendingStates.has(payload.status) && payload.certificateMode === 'agent') {
         elements.nfseCancelButton.disabled = false;
         result = await followAgentNfse(invoiceId, payload);
       }
@@ -678,7 +690,10 @@
       elements.nfseIssueButton.disabled = false;
       elements.nfseCancelButton.disabled = false;
       if (!elements.nfseConfirmModal.hidden) {
-        elements.nfseIssueButton.textContent = 'Atualizar situação';
+        elements.nfseIssueButton.textContent =
+          elements.nfseIssueButton.dataset.certificateMode === 'agent'
+            ? 'Atualizar situação'
+            : 'Continuar com A1';
       } else {
         elements.nfseIssueButton.textContent = 'Confirmar e emitir';
       }

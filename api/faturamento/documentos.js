@@ -68,9 +68,11 @@ module.exports = async (req, res) => {
     });
     const nfseEligible = isTwtIssuer(documents.issuerCnpj);
     let nfseRecord = null;
+    let nfseCertificateMode = '';
     if (nfseEligible) {
       try {
         const fiscalConfig = nfseConfig(process.env, { requireCertificate: false });
+        nfseCertificateMode = fiscalConfig.certificateMode;
         nfseRecord = await getNfseRecord(documents.invoiceId, fiscalConfig.environment);
       } catch (error) {
         console.warn('[faturamento:documentos-nfse]', {
@@ -90,7 +92,8 @@ module.exports = async (req, res) => {
       paymentMethod: tedDocPayment ? 'ted_doc' : 'bank_slip',
       nfseEligible,
       nfseStatus: nfseRecord?.state || 'not_issued',
-      nfseNumber: nfseRecord?.nfseNumber || null
+      nfseNumber: nfseRecord?.nfseNumber || null,
+      nfseCertificateMode
     });
   } catch (error) {
     const statusCode = Number(error.statusCode) || (error.name === 'AbortError' ? 504 : 502);

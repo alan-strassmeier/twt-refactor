@@ -180,6 +180,46 @@ const claimNextNfseJob = async ({ environment, agentId, leaseToken, now, leaseMs
   return parseRecord(value);
 };
 
+const claimQueuedNfseForA1 = async ({ invoiceId, environment, now = Date.now() },
+  command = redisCommand) => {
+  const normalizedEnvironment = normalizeEnvironment(environment);
+  const script = [
+    "local raw = redis.call('GET', KEYS[1])",
+    'if not raw then return nil end',
+    'local ok, record = pcall(cjson.decode, raw)',
+    'if not ok then return nil end',
+    "local state = tostring(record['state'] or '')",
+    "local leaseExpires = tonumber(record['leaseExpiresAtEpoch'] or 0)",
+    "local isQueued = state == 'queued'",
+    "local isExpiredAgent = state == 'agent_processing' and leaseExpires <= tonumber(ARGV[1])",
+    "local isIssuance = tostring(record['jobAction'] or 'issue') == 'issue'",
+    "local hasXml = type(record['unsignedDpsBase64']) == 'string' and record['unsignedDpsBase64'] ~= ''",
+    'if not (isIssuance and hasXml and (isQueued or isExpiredAgent)) then return nil end',
+    "record['state'] = 'processing'",
+    "record['certificateMode'] = 'a1'",
+    "record['startedAt'] = ARGV[2]",
+    "record['migratedFromAgentAt'] = ARGV[2]",
+    "record['agentId'] = nil",
+    "record['leaseToken'] = nil",
+    "record['leaseExpiresAtEpoch'] = nil",
+    "record['leaseExpiresAt'] = nil",
+    "redis.call('SET', KEYS[1], cjson.encode(record))",
+    "redis.call('ZREM', KEYS[2], ARGV[3])",
+    'return cjson.encode(record)'
+  ].join('\n');
+  const value = await command(
+    'EVAL',
+    script,
+    '2',
+    recordKeyFor(invoiceId, normalizedEnvironment),
+    agentQueueKeyFor(normalizedEnvironment),
+    String(now),
+    new Date(now).toISOString(),
+    String(invoiceId)
+  );
+  return parseRecord(value);
+};
+
 const assertNfseJobLease = async ({ invoiceId, leaseToken, agentId, environment },
   command = redisCommand) => {
   const record = await getNfseRecord(invoiceId, environment, command);
@@ -211,6 +251,7 @@ module.exports = {
   agentQueueKeyFor,
   enqueueNfseJob,
   claimNextNfseJob,
+  claimQueuedNfseForA1,
   assertNfseJobLease,
   removeNfseJobFromQueue
 };

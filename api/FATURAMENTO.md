@@ -60,7 +60,7 @@ ITAU_BENEFICIARY_NAME=DSL DO BRASIL TRANSPORTE E LOGISTICA LTDA
 ITAU_BENEFICIARY_CNPJ=97434690000129
 
 NFSE_ENVIRONMENT=homologation
-NFSE_CERT_MODE=agent
+NFSE_CERT_MODE=a1
 NFSE_API_BASE_URL=
 NFSE_DPS_SERIES=
 NFSE_DPS_INITIAL_NUMBER=0
@@ -70,6 +70,7 @@ NFSE_PROVIDER_PHONE=5133424425
 NFSE_PROVIDER_EMAIL=faturamento@twt.com.br
 NFSE_CERT_PFX_BASE64=
 NFSE_CERT_PASSWORD=
+# Legado A3; não é necessário no modo a1
 NFSE_AGENT_TOKEN=
 NFSE_AGENT_LEASE_MS=300000
 R2_NFSE_PREFIX=nfse
@@ -385,29 +386,25 @@ a série `70000` do exemplo emitido manualmente no Portal Nacional. Defina em
 reserva o próximo número de maneira atômica e mantém o vínculo com a fatura para
 evitar emissões duplicadas.
 
-Para o certificado A3 físico, use `NFSE_CERT_MODE=agent` e configure
-`NFSE_AGENT_TOKEN` com pelo menos 32 caracteres aleatórios. O executável Windows,
-as instruções de instalação e o autoteste ficam em `nfse-a3-agent/`. O agente
-consulta a fila por HTTPS, assina dentro do token e faz também a conexão mTLS com
-o Ambiente Nacional. O PIN nunca é recebido pela Vercel.
-
-Para gerar um token compatível também com versões antigas do Windows PowerShell:
-
-```powershell
-$bytes = New-Object byte[] 48
-$rng = [Security.Cryptography.RandomNumberGenerator]::Create()
-$rng.GetBytes($bytes)
-$rng.Dispose()
-[Convert]::ToBase64String($bytes)
-```
-
-Como alternativa futura, `NFSE_CERT_MODE=a1` mantém a emissão direta na Vercel.
-Nesse modo, o certificado A1 deve ser convertido integralmente para Base64 e
-cadastrado em `NFSE_CERT_PFX_BASE64`, com a senha em `NFSE_CERT_PASSWORD`:
+O fluxo oficial usa `NFSE_CERT_MODE=a1`: a própria função da Vercel assina a DPS
+e faz a conexão mTLS, sem aplicativo da certificadora ou agente local. Converta o
+arquivo A1 completo (`.pfx` ou `.p12`) para Base64 e cadastre o resultado em
+`NFSE_CERT_PFX_BASE64`; em `NFSE_CERT_PASSWORD`, use a senha que abre o arquivo:
 
 ```powershell
 [Convert]::ToBase64String([IO.File]::ReadAllBytes('caminho\certificado-twt.pfx'))
 ```
+
+Cadastre as três variáveis no mesmo ambiente da Vercel usado pelo domínio
+(`Production`, para `www.twt.com.br`) e faça um novo deploy. Alterar uma variável
+não modifica deployments que já estavam publicados. Depois de validar o A1, o
+agente A3 pode permanecer fechado. Solicitações antigas ainda na fila do agente
+são consultadas e retomadas pelo A1 com o mesmo número de DPS; uma concessão A3
+ainda ativa precisa expirar antes da retomada, evitando transmissão duplicada.
+
+O modo `agent` permanece apenas para compatibilidade com o fluxo A3 anterior. Se
+for necessário reativá-lo, configure `NFSE_AGENT_TOKEN` com pelo menos 32
+caracteres e siga `nfse-a3-agent/`.
 
 Mantenha `NFSE_ENVIRONMENT=homologation` durante a validação. O ambiente de
 produção só deve ser ativado depois dos testes, da definição da série exclusiva
