@@ -192,6 +192,7 @@ test('lê certificado A1 em PKCS#12 e mantém homologação como padrão', () =>
   const parsed = certificateMaterialFromPfx(material.pfx, 'senha-teste');
   assert.match(parsed.privateKeyPem, /BEGIN RSA PRIVATE KEY/);
   assert.match(parsed.certificatePem, /BEGIN CERTIFICATE/);
+  assert.match(parsed.certificateChainPem, /BEGIN CERTIFICATE/);
   const config = nfseConfig({
     NFSE_DPS_SERIES: '81001',
     NFSE_CERT_PFX_BASE64: material.pfx.toString('base64'),

@@ -103,9 +103,10 @@ test('aceita o A1 em PFX dedicado ou reutilizado da configuração da NFS-e', ()
     BRADESCO_MTLS_PFX_PASSWORD: 'senha-a1'
   }));
   assert.equal(dedicated.mtlsSource, 'bradesco-pfx');
-  assert.deepEqual(dedicated.pfx, pfx);
-  assert.equal(dedicated.cert, undefined);
-  assert.equal(dedicated.key, undefined);
+  assert.match(dedicated.cert.toString(), /BEGIN CERTIFICATE/);
+  assert.match(dedicated.key.toString(), /BEGIN RSA PRIVATE KEY/);
+  assert.equal(dedicated.pfx, undefined);
+  assert.equal(dedicated.passphrase, '');
 
   const shared = bradescoConfig(configEnvironment({
     ...withoutPem,
@@ -113,7 +114,8 @@ test('aceita o A1 em PFX dedicado ou reutilizado da configuração da NFS-e', ()
     NFSE_CERT_PASSWORD: 'senha-a1'
   }));
   assert.equal(shared.mtlsSource, 'nfse-pfx');
-  assert.deepEqual(shared.pfx, pfx);
+  assert.match(shared.cert.toString(), /BEGIN CERTIFICATE/);
+  assert.match(shared.key.toString(), /BEGIN RSA PRIVATE KEY/);
 
   const dedicatedPem = bradescoConfig(configEnvironment({
     NFSE_CERT_PFX_BASE64: pfx.toString('base64'),

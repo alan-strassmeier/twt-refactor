@@ -1,6 +1,6 @@
 const https = require('node:https');
-const tls = require('node:tls');
 const { createHash } = require('node:crypto');
+const { certificateMaterialFromPfx } = require('./nfse-config');
 
 const REQUEST_TIMEOUT_MS = 20000;
 const JSON_MAX_BYTES = 1024 * 1024;
@@ -50,11 +50,17 @@ const decodeBase64Pfx = (value, passphrase) => {
   const pfx = Buffer.from(normalized, 'base64');
   if (!pfx.length) throw configurationError('Certificado A1 do Bradesco inválido.');
   try {
-    tls.createSecureContext({ pfx, passphrase: passphrase || undefined });
+    const material = certificateMaterialFromPfx(pfx, passphrase);
+    return {
+      cert: Buffer.from(material.certificateChainPem || material.certificatePem),
+      key: Buffer.from(material.privateKeyPem),
+      passphrase: ''
+    };
   } catch (error) {
-    throw configurationError(`Certificado A1 do Bradesco inválido: ${error.message}`);
+    const reason = String(error.message || 'Não foi possível abrir o PFX.')
+      .replace(/^Certificado A1 da NFS-e inválido:\s*/i, '');
+    throw configurationError(`Certificado A1 do Bradesco inválido: ${reason}`);
   }
-  return pfx;
 };
 
 const bradescoMtlsMaterial = (env) => {
@@ -67,8 +73,7 @@ const bradescoMtlsMaterial = (env) => {
       env.BRADESCO_MTLS_PFX_PASSWORD ?? env.NFSE_CERT_PASSWORD ?? ''
     );
     return {
-      pfx: decodeBase64Pfx(dedicatedPfx, passphrase),
-      passphrase,
+      ...decodeBase64Pfx(dedicatedPfx, passphrase),
       mtlsSource: 'bradesco-pfx'
     };
   }
@@ -98,8 +103,7 @@ const bradescoMtlsMaterial = (env) => {
 
   const passphrase = String(env.NFSE_CERT_PASSWORD || '');
   return {
-    pfx: decodeBase64Pfx(sharedNfsePfx, passphrase),
-    passphrase,
+    ...decodeBase64Pfx(sharedNfsePfx, passphrase),
     mtlsSource: 'nfse-pfx'
   };
 };
@@ -209,8 +213,8 @@ const bradescoConfig = (env = process.env) => {
   const queryUrl = normalizedHttpsUrl(env.BRADESCO_QUERY_URL, target.queryUrl, 'URL de consulta');
   const tokenConfigKey = createHash('sha256')
     .update(`${environment}:${tokenUrl}:${clientId}:${clientSecret}:`)
-    .update(mtls.pfx || mtls.cert)
-    .update(mtls.key || Buffer.alloc(0))
+    .update(mtls.cert)
+    .update(mtls.key)
     .digest('hex');
 
   return {
@@ -314,9 +318,8 @@ const httpsRequest = ({
     : (Buffer.isBuffer(body) ? body : Buffer.from(String(body)));
   const request = https.request(new URL(url), {
     method,
-    ...(config.pfx
-      ? { pfx: config.pfx }
-      : { cert: config.cert, key: config.key }),
+    cert: config.cert,
+    key: config.key,
     passphrase: config.passphrase || undefined,
     minVersion: 'TLSv1.2',
     headers: {
