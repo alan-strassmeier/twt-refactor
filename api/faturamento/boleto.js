@@ -39,6 +39,9 @@ module.exports = async (req, res) => {
         : error.message,
       ...(statusCode === 422 && Array.isArray(error.validationDetails)
         ? { details: error.validationDetails }
+        : {}),
+      ...(Number.isInteger(error.upstreamStatus)
+        ? { upstreamStatus: error.upstreamStatus }
         : {})
     });
   }

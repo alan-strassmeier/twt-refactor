@@ -374,8 +374,14 @@ const jsonFromResponse = (result) => {
 const bradescoHttpError = (result, payload, fallback) => {
   const clientError = [400, 404, 412, 422].includes(result.statusCode);
   const permissionError = [401, 403].includes(result.statusCode);
-  return Object.assign(new Error(safeUpstreamMessage(payload, fallback)), {
-    statusCode: clientError ? 422 : (permissionError ? result.statusCode : 503),
+  const upstreamMessage = safeUpstreamMessage(payload, fallback);
+  const message = permissionError
+    ? `Bradesco respondeu HTTP ${result.statusCode}: ${upstreamMessage}`
+    : upstreamMessage;
+  return Object.assign(new Error(message), {
+    // 401 é reservado para a sessão administrativa da aplicação. Repassar o
+    // 401 do banco faria a interface deslogar o usuário indevidamente.
+    statusCode: clientError ? 422 : (permissionError ? 502 : 503),
     upstreamStatus: result.statusCode,
     receivedResponse: true,
     expose: clientError || permissionError,

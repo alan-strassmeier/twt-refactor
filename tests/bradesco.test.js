@@ -146,6 +146,19 @@ test('expõe os campos rejeitados nas respostas de validação do Bradesco', () 
   assert.match(error.message, /Agencia: Numero de caracteres exatos nao atendidos/);
 });
 
+test('não transforma falha OAuth do Bradesco em expiração da sessão do site', () => {
+  const error = bradescoHttpError({ statusCode: 401 }, {
+    error: 'invalid_client',
+    error_description: 'The given client credentials were not valid'
+  }, 'Falha de autenticação no Bradesco.');
+
+  assert.equal(error.statusCode, 502);
+  assert.equal(error.upstreamStatus, 401);
+  assert.equal(error.expose, true);
+  assert.match(error.message, /Bradesco respondeu HTTP 401/);
+  assert.match(error.message, /The given client credentials were not valid/);
+});
+
 test('obtém token Bradesco com client_credentials e mTLS', async () => {
   resetTokenCache();
   const config = bradescoConfig(configEnvironment());
