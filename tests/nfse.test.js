@@ -44,6 +44,7 @@ const {
 const {
   agentConfigFromEnv,
   publicAgentJob,
+  claimAgentJob,
   completeAgentJob
 } = require('../server/faturamento/nfse-agent');
 
@@ -391,6 +392,18 @@ test('agente A3 procura somente a fila e o registro do ambiente configurado', as
   assert.equal(invocation[3], 'faturamento:nfse:agent:production:fila');
   assert.equal(invocation[5], 'faturamento:nfse:production:twt:fatura:');
   assert.equal(invocation[7], 'production');
+});
+
+test('agente A3 antigo recebe fila vazia depois da migração para A1', async () => {
+  const result = await claimAgentJob({ agentId: 'twt-fiscal-01' }, {
+    config: {
+      certificateMode: 'a1',
+      environment: 'production'
+    },
+    claimNextNfseJob: async () => assert.fail('O modo A1 não deve consultar a fila do agente.')
+  });
+
+  assert.equal(result, null);
 });
 
 test('A1 assume de forma atômica somente uma emissão antiga apta na fila do agente', async () => {

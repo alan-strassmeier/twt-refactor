@@ -94,7 +94,9 @@ const publicAgentJob = (record, fiscalConfig) => {
 const claimAgentJob = async ({ agentId }, dependencies = {}) => {
   const fiscalConfig = dependencies.config || nfseConfig(process.env, { requireCertificate: false });
   if (fiscalConfig.certificateMode !== 'agent') {
-    throw configurationError('A emissão de NFS-e não está configurada para o agente A3.');
+    // Um agente instalado anteriormente pode continuar consultando a fila
+    // durante a migração para A1. Nesse modo não há trabalho local a conceder.
+    return null;
   }
   const agentConfig = dependencies.agentConfig || agentConfigFromEnv();
   const now = Number(dependencies.now || Date.now());
