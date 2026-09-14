@@ -1,5 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const forge = require('node-forge');
 
 const {
   ENVIRONMENTS,
@@ -17,6 +18,23 @@ const {
 const pem = (type, content) => Buffer.from(
   `-----BEGIN ${type}-----\n${content}\n-----END ${type}-----\n`
 ).toString('base64');
+
+const pfxCertificate = (password = 'senha-a1') => {
+  const keys = forge.pki.rsa.generateKeyPair(1024);
+  const certificate = forge.pki.createCertificate();
+  certificate.publicKey = keys.publicKey;
+  certificate.serialNumber = '01';
+  certificate.validity.notBefore = new Date('2026-01-01T00:00:00Z');
+  certificate.validity.notAfter = new Date('2027-01-01T00:00:00Z');
+  const attributes = [{ name: 'commonName', value: 'TWT A1 Teste' }];
+  certificate.setSubject(attributes);
+  certificate.setIssuer(attributes);
+  certificate.sign(keys.privateKey, forge.md.sha256.create());
+  const p12 = forge.pkcs12.toPkcs12Asn1(keys.privateKey, certificate, password, {
+    algorithm: '3des'
+  });
+  return Buffer.from(forge.asn1.toDer(p12).getBytes(), 'binary');
+};
 
 const configEnvironment = (overrides = {}) => ({
   BRADESCO_ENVIRONMENT: 'sandbox',
@@ -71,6 +89,46 @@ test('exige os dados bancários e arquivos PEM válidos', () => {
   }));
   assert.match(encryptedKeyConfig.key.toString(), /BEGIN ENCRYPTED PRIVATE KEY/);
   assert.equal(encryptedKeyConfig.passphrase, 'senha-da-chave');
+});
+
+test('aceita o A1 em PFX dedicado ou reutilizado da configuração da NFS-e', () => {
+  const pfx = pfxCertificate();
+  const withoutPem = {
+    BRADESCO_MTLS_CERT_BASE64: '',
+    BRADESCO_MTLS_KEY_BASE64: ''
+  };
+  const dedicated = bradescoConfig(configEnvironment({
+    ...withoutPem,
+    BRADESCO_MTLS_PFX_BASE64: pfx.toString('base64'),
+    BRADESCO_MTLS_PFX_PASSWORD: 'senha-a1'
+  }));
+  assert.equal(dedicated.mtlsSource, 'bradesco-pfx');
+  assert.match(dedicated.cert.toString(), /BEGIN CERTIFICATE/);
+  assert.match(dedicated.key.toString(), /BEGIN RSA PRIVATE KEY/);
+  assert.equal(dedicated.pfx, undefined);
+  assert.equal(dedicated.passphrase, '');
+
+  const shared = bradescoConfig(configEnvironment({
+    ...withoutPem,
+    NFSE_CERT_PFX_BASE64: pfx.toString('base64'),
+    NFSE_CERT_PASSWORD: 'senha-a1'
+  }));
+  assert.equal(shared.mtlsSource, 'nfse-pfx');
+  assert.match(shared.cert.toString(), /BEGIN CERTIFICATE/);
+  assert.match(shared.key.toString(), /BEGIN RSA PRIVATE KEY/);
+
+  const dedicatedPem = bradescoConfig(configEnvironment({
+    NFSE_CERT_PFX_BASE64: pfx.toString('base64'),
+    NFSE_CERT_PASSWORD: 'senha-a1'
+  }));
+  assert.equal(dedicatedPem.mtlsSource, 'pem');
+  assert.match(dedicatedPem.cert.toString(), /BEGIN CERTIFICATE/);
+
+  assert.throws(() => bradescoConfig(configEnvironment({
+    ...withoutPem,
+    BRADESCO_MTLS_PFX_BASE64: pfx.toString('base64'),
+    BRADESCO_MTLS_PFX_PASSWORD: 'senha-incorreta'
+  })), /Certificado A1 do Bradesco inválido/);
 });
 
 test('expõe os campos rejeitados nas respostas de validação do Bradesco', () => {

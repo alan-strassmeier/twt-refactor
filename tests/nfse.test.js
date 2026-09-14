@@ -38,7 +38,8 @@ const {
   getNfseRecord,
   claimNfse,
   saveNfseRecord,
-  claimNextNfseJob
+  claimNextNfseJob,
+  claimQueuedNfseForA1
 } = require('../server/faturamento/nfse-store');
 const {
   agentConfigFromEnv,
@@ -191,6 +192,7 @@ test('lê certificado A1 em PKCS#12 e mantém homologação como padrão', () =>
   const parsed = certificateMaterialFromPfx(material.pfx, 'senha-teste');
   assert.match(parsed.privateKeyPem, /BEGIN RSA PRIVATE KEY/);
   assert.match(parsed.certificatePem, /BEGIN CERTIFICATE/);
+  assert.match(parsed.certificateChainPem, /BEGIN CERTIFICATE/);
   const config = nfseConfig({
     NFSE_DPS_SERIES: '81001',
     NFSE_CERT_PFX_BASE64: material.pfx.toString('base64'),
@@ -391,6 +393,32 @@ test('agente A3 procura somente a fila e o registro do ambiente configurado', as
   assert.equal(invocation[7], 'production');
 });
 
+test('A1 assume de forma atômica somente uma emissão antiga apta na fila do agente', async () => {
+  let invocation = null;
+  const expected = {
+    invoiceId: '11518',
+    environment: 'production',
+    state: 'processing',
+    certificateMode: 'a1'
+  };
+  const result = await claimQueuedNfseForA1({
+    invoiceId: '11518',
+    environment: 'production',
+    now: 1_789_400_000_000
+  }, async (...args) => {
+    invocation = args;
+    return JSON.stringify(expected);
+  });
+  assert.deepEqual(result, expected);
+  assert.equal(invocation[0], 'EVAL');
+  assert.match(invocation[1], /state == 'queued'/);
+  assert.match(invocation[1], /leaseExpires <= tonumber\(ARGV\[1\]\)/);
+  assert.match(invocation[1], /record\['certificateMode'\] = 'a1'/);
+  assert.equal(invocation[2], '2');
+  assert.equal(invocation[3], recordKeyFor('11518', 'production'));
+  assert.equal(invocation[4], 'faturamento:nfse:agent:production:fila');
+});
+
 test('emite uma vez, guarda o XML autorizado e reaproveita o vínculo da fatura', async () => {
   const material = createCertificate();
   let record = null;
@@ -462,6 +490,95 @@ test('emite uma vez, guarda o XML autorizado e reaproveita o vínculo da fatura'
   assert.equal(second.created, false);
   assert.equal(second.status, 'issued');
   assert.equal(transmissions, 1);
+});
+
+test('modo A1 retoma a DPS que ficou na fila A3 sem reservar outro número', async () => {
+  const material = createCertificate();
+  const built = buildDpsXml({
+    fiscal: fiscal(),
+    client,
+    invoice: {
+      id: '11518',
+      competence: '2026-07-16',
+      amount: 143.59,
+      description: 'SERVICOS DE DISTRIBUICAO CONF FAT 11518'
+    },
+    dpsNumber: 63,
+    issuedAt: new Date('2026-08-11T15:00:00Z')
+  });
+  let record = {
+    state: 'queued',
+    jobAction: 'issue',
+    invoiceId: '11518',
+    environment: 'homologation',
+    issuerCnpj: '09123137000108',
+    competence: '2026-07-16',
+    amount: 143.59,
+    dpsId: built.dpsId,
+    dpsNumber: 63,
+    dpsSeries: '81001',
+    unsignedDpsBase64: Buffer.from(built.xml).toString('base64')
+  };
+  let transmissions = 0;
+  let takeovers = 0;
+  const dependencies = {
+    config: {
+      certificateMode: 'a1',
+      environment: 'homologation',
+      environmentType: '2',
+      baseUrl: 'https://example.test',
+      series: '81001',
+      initialNumber: 0,
+      applicationVersion: 'TWT_1.0.0',
+      providerPhone: '5133424425',
+      providerEmail: 'faturamento@twt.com.br',
+      ...material
+    },
+    requestExactInvoice: async () => ({ invoice: {
+      fatura: 11518,
+      cnpj_cliente: client.document,
+      status: '0',
+      valor: '143.59',
+      emissao: '2026-07-16'
+    } }),
+    findDoccobForInvoice: async () => ({ invoice: { issuerCnpj: '09123137000108' } }),
+    fetchCompany: async () => ({
+      cnpj: client.document,
+      razao: client.name,
+      codigo_ibge: client.municipalityCode,
+      cep: client.zipCode,
+      endereco: client.street,
+      numero: client.number,
+      complemento: client.complement,
+      bairro: client.district
+    }),
+    getNfseRecord: async () => record,
+    claimQueuedNfseForA1: async ({ invoiceId, environment }) => {
+      takeovers += 1;
+      assert.equal(invoiceId, '11518');
+      assert.equal(environment, 'homologation');
+      record = { ...record, state: 'processing', certificateMode: 'a1' };
+      return record;
+    },
+    claimNfse: async () => assert.fail('Não deve criar outra emissão.'),
+    reserveDpsNumber: async () => assert.fail('Não deve reservar outro número.'),
+    saveNfseRecord: async (_invoiceId, value) => { record = value; },
+    releaseNfseClaim: async () => { record = null; },
+    postDps: async (signedXml) => {
+      transmissions += 1;
+      assert.match(signedXml, /<Signature/);
+      assert.match(signedXml, new RegExp(`<Reference URI="#${built.dpsId}">`));
+      return { chaveAcesso: ACCESS_KEY, xml: HOMOLOGATION_XML };
+    },
+    saveNfseXml: async () => 'nfse/homologation/2026/11518/documento.xml'
+  };
+
+  const result = await issueInvoiceNfse('11518', dependencies);
+  assert.equal(result.status, 'issued');
+  assert.equal(result.certificateMode, 'a1');
+  assert.equal(takeovers, 1);
+  assert.equal(transmissions, 1);
+  assert.equal(record.state, 'issued');
 });
 
 test('modo A3 enfileira a DPS sem assinatura e sem transmitir pela Vercel', async () => {

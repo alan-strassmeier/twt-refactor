@@ -44,9 +44,17 @@ const certificateMaterialFromPfx = (pfx, passphrase = '') => {
     const certificate = matchingCertificate?.cert || certBags.find((bag) => bag.cert)?.cert;
     if (!privateKey || !certificate) throw new Error('Chave privada ou certificado ausente.');
     const certificatePem = forge.pki.certificateToPem(certificate);
+    const certificateChainPem = [...new Set([
+      certificatePem,
+      ...certBags
+        .map((bag) => bag.cert)
+        .filter((item) => item && item !== certificate)
+        .map((item) => forge.pki.certificateToPem(item))
+    ])].join('');
     return {
       privateKeyPem: forge.pki.privateKeyToPem(privateKey),
       certificatePem,
+      certificateChainPem,
       certificateBase64: certificatePem
         .replace(/-----BEGIN CERTIFICATE-----|-----END CERTIFICATE-----|\s/g, '')
     };

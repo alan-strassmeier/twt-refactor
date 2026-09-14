@@ -149,7 +149,11 @@ const previewInvoiceNfse = async (invoiceId, dependencies = {}) => {
   const config = dependencies.config || nfseConfig(process.env, { requireCertificate: false });
   const getRecord = dependencies.getNfseRecord || store.getNfseRecord;
   const record = await getRecord(data.invoice.id, config.environment);
-  return { ...publicPreview(data, record), environment: config.environment };
+  return {
+    ...publicPreview(data, record),
+    environment: config.environment,
+    certificateMode: config.certificateMode
+  };
 };
 
 const textFromElement = (document, name) => {
@@ -181,7 +185,7 @@ const metadataFromAuthorizedXml = (xml, fallback = {}) => {
   };
 };
 
-const publicResult = (record, created = false) => ({
+const publicResult = (record, created = false, certificateMode = '') => ({
   invoiceId: record.invoiceId,
   status: record.state,
   created,
@@ -190,6 +194,7 @@ const publicResult = (record, created = false) => ({
   competence: record.competence,
   amount: record.amount,
   environment: record.environment || '',
+  certificateMode: certificateMode || record.certificateMode || '',
   message: record.lastError || '',
   pdfUrl: record.state === 'issued'
     ? `/api/faturamento/nfse-pdf?id=${encodeURIComponent(record.invoiceId)}`
@@ -205,12 +210,13 @@ const getInvoiceNfseStatus = async (invoiceId, dependencies = {}) => {
   const getRecord = dependencies.getNfseRecord || store.getNfseRecord;
   const record = await getRecord(String(invoiceId), config.environment);
   return record
-    ? publicResult(record, false)
+    ? publicResult(record, false, config.certificateMode)
     : {
         invoiceId: String(invoiceId),
         status: 'not_issued',
         created: false,
-        environment: config.environment
+        environment: config.environment,
+        certificateMode: config.certificateMode
       };
 };
 
@@ -290,6 +296,15 @@ const generationConflict = () => Object.assign(new Error(
   'Existe uma emissão em conferência para esta fatura. O sistema não criará outra DPS para evitar nota duplicada.'
 ), { statusCode: 409 });
 
+const unsignedDpsFromRecord = (record) => {
+  const encoded = String(record?.unsignedDpsBase64 || '').replace(/\s/g, '');
+  if (!encoded || !/^[A-Za-z0-9+/]+={0,2}$/.test(encoded)) return '';
+  const xml = Buffer.from(encoded, 'base64').toString('utf8').replace(/^\uFEFF/, '').trim();
+  if (!/^<\?xml[^>]*>\s*<(?:\w+:)?DPS\b|^<(?:\w+:)?DPS\b/i.test(xml) ||
+      /<!DOCTYPE|<!ENTITY|<(?:\w+:)?Signature\b/i.test(xml)) return '';
+  return xml;
+};
+
 const issueInvoiceNfse = async (invoiceId, dependencies = {}) => {
   if (!validInvoiceId(invoiceId)) throw validationError('Número da fatura inválido.');
   const config = dependencies.config || nfseConfig();
@@ -299,18 +314,20 @@ const issueInvoiceNfse = async (invoiceId, dependencies = {}) => {
   const release = dependencies.releaseNfseClaim || store.releaseNfseClaim;
   const reserveNumber = dependencies.reserveDpsNumber || store.reserveDpsNumber;
   const enqueueJob = dependencies.enqueueNfseJob || store.enqueueNfseJob;
+  const claimQueuedForA1 = dependencies.claimQueuedNfseForA1 || store.claimQueuedNfseForA1;
   const submitDps = dependencies.postDps || postDps;
+  const certificateMode = config.certificateMode || 'a1';
   const data = await resolveInvoiceNfseData(invoiceId, dependencies);
   const existing = await getRecord(data.invoice.id, config.environment);
-  if (existing?.state === 'issued') return publicResult(existing, false);
-  if (config.certificateMode === 'agent' &&
+  if (existing?.state === 'issued') return publicResult(existing, false, certificateMode);
+  if (certificateMode === 'agent' &&
       existing && ['queued', 'agent_processing'].includes(existing.state)) {
-    return publicResult(existing, false);
+    return publicResult(existing, false, certificateMode);
   }
-  if (config.certificateMode === 'agent' && existing?.state === 'review') {
+  if (certificateMode === 'agent' && existing?.state === 'review') {
     if (existing.authorizedXmlBase64) {
       const recovered = await recoverExisting(existing, config, dependencies);
-      if (recovered) return publicResult(recovered, false);
+      if (recovered) return publicResult(recovered, false, certificateMode);
     }
     const recoveryRecord = {
       ...existing,
@@ -320,11 +337,49 @@ const issueInvoiceNfse = async (invoiceId, dependencies = {}) => {
     };
     await saveRecord(data.invoice.id, recoveryRecord);
     await enqueueJob(recoveryRecord);
-    return publicResult(recoveryRecord, false);
+    return publicResult(recoveryRecord, false, certificateMode);
+  }
+  if (certificateMode === 'a1' &&
+      existing && ['queued', 'agent_processing'].includes(existing.state)) {
+    if (existing.state === 'agent_processing') {
+      const recovered = await recoverExisting(existing, config, dependencies);
+      if (recovered) return publicResult(recovered, false, certificateMode);
+    }
+    const unsignedXml = existing.jobAction === 'recover' ? '' : unsignedDpsFromRecord(existing);
+    if (!unsignedXml) throw generationConflict();
+    const signedXml = signDpsXml(unsignedXml, config);
+    const processingRecord = await claimQueuedForA1({
+      invoiceId: data.invoice.id,
+      environment: config.environment,
+      now: Date.now()
+    });
+    if (!processingRecord) throw generationConflict();
+    try {
+      const response = await submitDps(signedXml, { config });
+      const issued = await finalizeAuthorizedDocument({
+        record: processingRecord,
+        response,
+        xml: response.xml
+      }, dependencies);
+      return publicResult(issued, true, certificateMode);
+    } catch (error) {
+      if (error.ambiguousNfseState) {
+        const reviewRecord = {
+          ...processingRecord,
+          state: 'review',
+          reviewReason: 'upstream',
+          reviewedAt: new Date().toISOString()
+        };
+        try { await saveRecord(data.invoice.id, reviewRecord); } catch { /* mantém processing */ }
+      } else if (error.receivedResponse === true) {
+        try { await release(data.invoice.id, config.environment); } catch { /* mantém registro */ }
+      }
+      throw error;
+    }
   }
   if (existing && ['processing', 'review'].includes(existing.state)) {
     const recovered = await recoverExisting(existing, config, dependencies);
-    if (recovered) return publicResult(recovered, false);
+    if (recovered) return publicResult(recovered, false, certificateMode);
     throw generationConflict();
   }
   if (existing?.state === 'failed') {
@@ -335,6 +390,7 @@ const issueInvoiceNfse = async (invoiceId, dependencies = {}) => {
     state: 'claimed',
     invoiceId: data.invoice.id,
     environment: config.environment,
+    certificateMode,
     issuerCnpj: data.issuerCnpj,
     competence: data.invoice.competence,
     amount: data.invoice.amount,
@@ -343,7 +399,7 @@ const issueInvoiceNfse = async (invoiceId, dependencies = {}) => {
   const claimed = await claim(data.invoice.id, claimRecord);
   if (!claimed) {
     const concurrent = await getRecord(data.invoice.id, config.environment);
-    if (concurrent?.state === 'issued') return publicResult(concurrent, false);
+    if (concurrent?.state === 'issued') return publicResult(concurrent, false, certificateMode);
     throw generationConflict();
   }
 
@@ -370,7 +426,7 @@ const issueInvoiceNfse = async (invoiceId, dependencies = {}) => {
       dpsNumber,
       issuedAt: dependencies.now || new Date()
     });
-    if (config.certificateMode === 'agent') {
+    if (certificateMode === 'agent') {
       processingRecord = {
         ...claimRecord,
         state: 'queued',
@@ -384,7 +440,7 @@ const issueInvoiceNfse = async (invoiceId, dependencies = {}) => {
       };
       await saveRecord(data.invoice.id, processingRecord);
       await enqueueJob(processingRecord);
-      return publicResult(processingRecord, true);
+      return publicResult(processingRecord, true, certificateMode);
     }
     const signedXml = signDpsXml(built.xml, config);
     processingRecord = {
@@ -403,7 +459,7 @@ const issueInvoiceNfse = async (invoiceId, dependencies = {}) => {
       response,
       xml: response.xml
     }, dependencies);
-    return publicResult(issued, true);
+    return publicResult(issued, true, certificateMode);
   } catch (error) {
     if (error.ambiguousNfseState) {
       const reviewRecord = {

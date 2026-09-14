@@ -1,5 +1,6 @@
 const https = require('node:https');
 const { createHash } = require('node:crypto');
+const { certificateMaterialFromPfx } = require('./nfse-config');
 
 const REQUEST_TIMEOUT_MS = 20000;
 const JSON_MAX_BYTES = 1024 * 1024;
@@ -41,6 +42,72 @@ const decodeBase64Pem = (value, label, acceptedMarkers) => {
   return decoded;
 };
 
+const decodeBase64Pfx = (value, passphrase) => {
+  const normalized = String(value || '').replace(/\s/g, '');
+  if (!normalized || !/^[A-Za-z0-9+/]+={0,2}$/.test(normalized)) {
+    throw configurationError('Certificado A1 do Bradesco não configurado.');
+  }
+  const pfx = Buffer.from(normalized, 'base64');
+  if (!pfx.length) throw configurationError('Certificado A1 do Bradesco inválido.');
+  try {
+    const material = certificateMaterialFromPfx(pfx, passphrase);
+    return {
+      cert: Buffer.from(material.certificateChainPem || material.certificatePem),
+      key: Buffer.from(material.privateKeyPem),
+      passphrase: ''
+    };
+  } catch (error) {
+    const reason = String(error.message || 'Não foi possível abrir o PFX.')
+      .replace(/^Certificado A1 da NFS-e inválido:\s*/i, '');
+    throw configurationError(`Certificado A1 do Bradesco inválido: ${reason}`);
+  }
+};
+
+const bradescoMtlsMaterial = (env) => {
+  const dedicatedPfx = String(env.BRADESCO_MTLS_PFX_BASE64 || '').trim();
+  const sharedNfsePfx = String(env.NFSE_CERT_PFX_BASE64 || '').trim();
+  const dedicatedCert = String(env.BRADESCO_MTLS_CERT_BASE64 || '').trim();
+  const dedicatedKey = String(env.BRADESCO_MTLS_KEY_BASE64 || '').trim();
+  if (dedicatedPfx) {
+    const passphrase = String(
+      env.BRADESCO_MTLS_PFX_PASSWORD ?? env.NFSE_CERT_PASSWORD ?? ''
+    );
+    return {
+      ...decodeBase64Pfx(dedicatedPfx, passphrase),
+      mtlsSource: 'bradesco-pfx'
+    };
+  }
+
+  if (dedicatedCert || dedicatedKey) {
+    const cert = decodeBase64Pem(
+      dedicatedCert,
+      'Certificado mTLS',
+      ['-----BEGIN CERTIFICATE-----']
+    );
+    const key = decodeBase64Pem(
+      dedicatedKey,
+      'Chave privada mTLS',
+      [
+        '-----BEGIN PRIVATE KEY-----',
+        '-----BEGIN ENCRYPTED PRIVATE KEY-----',
+        '-----BEGIN RSA PRIVATE KEY-----'
+      ]
+    );
+    return {
+      cert,
+      key,
+      passphrase: String(env.BRADESCO_MTLS_KEY_PASSPHRASE || ''),
+      mtlsSource: 'pem'
+    };
+  }
+
+  const passphrase = String(env.NFSE_CERT_PASSWORD || '');
+  return {
+    ...decodeBase64Pfx(sharedNfsePfx, passphrase),
+    mtlsSource: 'nfse-pfx'
+  };
+};
+
 const normalizedHttpsUrl = (value, fallback, label) => {
   let url;
   try {
@@ -79,21 +146,7 @@ const bradescoConfig = (env = process.env) => {
     throw configurationError('Credenciais da API Bradesco não configuradas.');
   }
 
-  const cert = decodeBase64Pem(
-    env.BRADESCO_MTLS_CERT_BASE64,
-    'Certificado mTLS',
-    ['-----BEGIN CERTIFICATE-----']
-  );
-  const key = decodeBase64Pem(
-    env.BRADESCO_MTLS_KEY_BASE64,
-    'Chave privada mTLS',
-    [
-      '-----BEGIN PRIVATE KEY-----',
-      '-----BEGIN ENCRYPTED PRIVATE KEY-----',
-      '-----BEGIN RSA PRIVATE KEY-----'
-    ]
-  );
-  const passphrase = String(env.BRADESCO_MTLS_KEY_PASSPHRASE || '');
+  const mtls = bradescoMtlsMaterial(env);
 
   const beneficiaryTaxId = digits(env.BRADESCO_BENEFICIARY_CNPJ || TWT_ISSUER_CNPJ);
   const agency = digits(env.BRADESCO_AGENCY);
@@ -160,17 +213,15 @@ const bradescoConfig = (env = process.env) => {
   const queryUrl = normalizedHttpsUrl(env.BRADESCO_QUERY_URL, target.queryUrl, 'URL de consulta');
   const tokenConfigKey = createHash('sha256')
     .update(`${environment}:${tokenUrl}:${clientId}:${clientSecret}:`)
-    .update(cert)
-    .update(key)
+    .update(mtls.cert)
+    .update(mtls.key)
     .digest('hex');
 
   return {
     environment,
     clientId,
     clientSecret,
-    cert,
-    key,
-    passphrase,
+    ...mtls,
     tokenUrl,
     registrationUrl,
     queryUrl,
@@ -586,6 +637,8 @@ const resetTokenCache = () => {
 module.exports = {
   ENVIRONMENTS,
   REQUEST_TIMEOUT_MS,
+  decodeBase64Pfx,
+  bradescoMtlsMaterial,
   bradescoConfig,
   httpsRequest,
   jsonFromResponse,

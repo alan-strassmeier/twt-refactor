@@ -14,8 +14,8 @@ const httpsRequest = ({ url, method = 'GET', headers = {}, body = null, config }
       : (Buffer.isBuffer(body) ? body : Buffer.from(String(body)));
     const request = https.request(new URL(url), {
       method,
-      pfx: config.pfx,
-      passphrase: config.passphrase || undefined,
+      cert: config.certificateChainPem || config.certificatePem,
+      key: config.privateKeyPem,
       minVersion: 'TLSv1.2',
       headers: {
         ...headers,
