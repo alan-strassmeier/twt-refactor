@@ -24,6 +24,22 @@ module.exports = async (req, res) => {
   try {
     const { id } = queryFromRequest(req);
     const documents = await resolveInvoiceCteKeys(id);
+    if (!documents.doccobFound) {
+      sendJson(res, 200, {
+        invoiceId: documents.invoiceId,
+        doccobFound: false,
+        hasCte: false,
+        cteCount: 0,
+        bankSlipEligible: false,
+        bankSlipBank: null,
+        bankSlipBankLabel: null,
+        paymentMethod: null,
+        nfseEligible: false,
+        nfseStatus: 'not_issued',
+        nfseNumber: null
+      });
+      return;
+    }
     const bank = bankSlipBankForIssuer(documents.issuerCnpj);
     let company = null;
     if (bank && documents.clientCnpj) {
@@ -65,6 +81,7 @@ module.exports = async (req, res) => {
     }
     sendJson(res, 200, {
       invoiceId: documents.invoiceId,
+      doccobFound: true,
       hasCte: documents.cteKeys.length > 0,
       cteCount: documents.cteKeys.length,
       bankSlipEligible: Boolean(bank) && !tedDocPayment,

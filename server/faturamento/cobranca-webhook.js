@@ -8,11 +8,13 @@ const billingStore = require('./cobranca-store');
 const MAX_WEBHOOK_BYTES = 1024 * 1024;
 const DEFAULT_MAX_AGE_MS = 5 * 60 * 1000;
 
-const deliveryReference = (event, invoiceId, email) => {
+const deliveryReference = (event, invoiceId, email, attemptId = '') => {
   const normalizedEvent = String(event || '').replace(/[^a-z_]/g, '').slice(0, 12) || 'email';
   const normalizedInvoice = String(invoiceId || '').replace(/\D/g, '').slice(0, 20) || '0';
+  const recipient = String(email || '').trim().toLocaleLowerCase('pt-BR');
+  const attempt = String(attemptId || '').trim();
   const recipientHash = createHash('sha256')
-    .update(String(email || '').trim().toLocaleLowerCase('pt-BR'))
+    .update(attempt ? `${recipient}\n${attempt}` : recipient)
     .digest('hex')
     .slice(0, 16);
   return `twt-${normalizedEvent}-${normalizedInvoice}-${recipientHash}`;
@@ -279,13 +281,14 @@ const processWebhookPayload = async (payload, dependencies = {}) => {
       await store.saveDelivery(reference.event, reference.invoiceId, reference.email, record);
       await store.addLog({
         createdAt: receivedAt,
-        event: reference.event,
+        event: reference.billingEvent || reference.event,
         status: event.status,
         invoiceId: String(reference.invoiceId),
         clientCnpj: reference.clientCnpj,
         clientName: reference.clientName,
         contactName: reference.contactName,
         email: reference.email || event.email,
+        ...(reference.manualResend ? { manualResend: true } : {}),
         ...(reference.recipientRole ? { recipientRole: reference.recipientRole } : {}),
         clientReference: event.clientReference,
         ...(reference.emailPreview ? { emailPreview: reference.emailPreview } : {}),

@@ -47,12 +47,20 @@ const {
   buildBillingQueue,
   scanInvoices,
   pendingRecord,
-  processInvoiceEvent
+  isTerminalBillingFailure,
+  processInvoiceEvent,
+  resendBillingInvoice
 } = require('../server/faturamento/cobranca-processor');
 const {
   constantTimeEqual,
   hasCronAuthorization
 } = require('../api/faturamento/cobranca');
+const {
+  invoiceControl,
+  buildUnifiedIssues,
+  buildInvoiceTimeline,
+  billingWhatsappText
+} = require('../server/faturamento/invoice-control');
 
 const invoiceData = (payment = null) => ({
   invoice: {
@@ -376,6 +384,23 @@ test('envia ao ZeptoMail uma referência determinística sem expor o e-mail', as
   assert.equal(calls[0].headers['X-TM-CLIENT-REF'], reference);
   assert.match(reference, /^twt-initial-11756-[a-f0-9]{16}$/);
   assert.doesNotMatch(reference, /maria|example/i);
+  assert.notEqual(
+    deliveryReference(EVENT_TYPES.initial, '11756', 'maria@example.com', 'reenvio-1'),
+    deliveryReference(EVENT_TYPES.initial, '11756', 'maria@example.com', 'reenvio-2')
+  );
+});
+
+test('monta mensagem de WhatsApp adequada para uma fatura vencida', () => {
+  const message = billingWhatsappText({
+    id: '11756',
+    dueAt: '2026-09-10',
+    balance: 2193.61,
+    client: 'CLIENTE TESTE'
+  }, new Date('2026-09-13T12:00:00Z'));
+  assert.match(message, /fatura 11756/);
+  assert.match(message, /10\/09\/2026/);
+  assert.match(message, /R\$\s*2\.193,61/);
+  assert.match(message, /previsão de pagamento/);
 });
 
 test('varre páginas e calcula o dia de lembrete sem depender do fuso do servidor', async () => {
@@ -491,6 +516,41 @@ test('mantém a fatura na fila enquanto o DOCCOB não chegou', async () => {
   assert.equal(saved.length, 1);
   assert.equal(saved[0].reason, 'doccob');
   assert.equal(context.summary.pendingDoccob, 1);
+});
+
+test('ignora cobrança da TWT antes de gerar boleto, documento ou log', async () => {
+  const calls = [];
+  const removed = [];
+  const context = processorContext({
+    findDoccobForInvoice: async () => ({
+      invoice: { issuerCnpj: '09123137000108' }
+    }),
+    fetchInvoicePdfData: async () => { calls.push('pdf-data'); },
+    generateInvoiceBankSlip: async () => { calls.push('boleto'); },
+    sendBillingEmail: async () => { calls.push('email'); },
+    addLog: async () => { calls.push('log'); },
+    removePending: async (invoiceId) => removed.push(String(invoiceId))
+  });
+  context.pendingByInvoice.set('11735', {
+    invoiceId: '11735',
+    reason: 'processing_error'
+  });
+
+  const result = await processInvoiceEvent({
+    event: EVENT_TYPES.reminder,
+    invoice: {
+      id: '11735',
+      clientDocument: '10629265000107',
+      client: 'JTT LOG'
+    },
+    context
+  });
+
+  assert.deepEqual(result, { skipped: 'twt' });
+  assert.deepEqual(calls, []);
+  assert.deepEqual(removed, ['11735']);
+  assert.equal(context.pendingByInvoice.has('11735'), false);
+  assert.equal(context.summary.skippedTwt, 1);
 });
 
 test('registra se a pendência foi conferida manualmente ou pelo agendador', () => {
@@ -930,10 +990,244 @@ test('endpoint do cron exige segredo longo e compara em tempo constante', () => 
   }), false);
 });
 
+test('reenvio manual ignora a trava do envio anterior e cria referência exclusiva', async () => {
+  const sent = [];
+  const references = [];
+  const savedDeliveries = [];
+  const invoiceQueries = [];
+  const fixedNow = () => new Date('2026-09-13T12:00:00.000Z');
+  const result = await resendBillingInvoice('11756', {
+    runId: 'reenvio-manual-1',
+    clientCnpj: '11280282000144',
+    now: fixedNow,
+    currentTime: fixedNow(),
+    transport: {},
+    emailConfig: {
+      fromName: 'TWT',
+      fromEmail: 'faturamento@twt.com.br',
+      alertEmail: ''
+    },
+    fetchInvoice: async (query) => {
+      invoiceQueries.push(query);
+      return {
+        invoices: query.cnpj ? [{
+          id: '11756',
+          clientDocument: '11280282000144',
+          client: 'CLIENTE TESTE',
+          issuedAt: '2026-09-01',
+          dueAt: '2026-09-30',
+          balance: 100,
+          status: 0,
+          statusLabel: 'Em aberto'
+        }] : []
+      };
+    },
+    listPending: async () => [],
+    findDoccobForInvoice: async () => ({}),
+    fetchInvoicePdfData: async () => invoiceData({ type: 'ted_doc' }),
+    buildInvoicePdf: async () => Buffer.from('fatura'),
+    getCategory: async () => ({
+      contacts: [{ id: '1', firstName: 'Maria', lastName: '', email: 'maria@example.com' }]
+    }),
+    getDelivery: async () => ({ state: 'sent' }),
+    claimDelivery: async () => false,
+    saveDelivery: async (...args) => savedDeliveries.push(args),
+    saveDeliveryReference: async (reference, record) => references.push({ reference, record }),
+    sendBillingEmail: async (input) => {
+      sent.push(input);
+      return { messageId: 'm-reenvio', accepted: [input.contact.email], rejected: [] };
+    },
+    addLog: async () => {},
+    removePending: async () => {}
+  });
+  assert.equal(result.sent, 1);
+  assert.equal(sent.length, 1);
+  assert.deepEqual(invoiceQueries, [
+    { id: '11756', limit: 100 },
+    { cnpj: '11280282000144', limit: 100 }
+  ]);
+  assert.match(savedDeliveries[0][0], /^manual_/);
+  assert.equal(savedDeliveries[0][3].manualResend, true);
+  assert.equal(references[0].record.manualResend, true);
+  assert.match(references[0].reference, /^twt-initial-11756-[a-f0-9]{16}$/);
+});
+
+test('reenvio manual não inicia envio sem destinatário ativo', async () => {
+  await assert.rejects(() => resendBillingInvoice('11756', {
+    transport: {},
+    emailConfig: {
+      fromName: 'TWT',
+      fromEmail: 'faturamento@twt.com.br',
+      alertEmail: ''
+    },
+    fetchInvoice: async () => ({
+      invoices: [{
+        id: '11756',
+        clientDocument: '11280282000144',
+        balance: 100,
+        status: 0,
+        statusLabel: 'Em aberto'
+      }]
+    }),
+    getCategory: async () => ({
+      contacts: [{ email: 'financeiro@example.com', enabled: false }]
+    }),
+    listPending: async () => [],
+    findDoccobForInvoice: async () => ({}),
+    fetchInvoicePdfData: async () => invoiceData({ type: 'ted_doc' }),
+    savePending: async () => {},
+    removePending: async () => {},
+    addLog: async () => {}
+  }), (error) => {
+    assert.equal(error.statusCode, 409);
+    assert.match(error.message, /destinatário ativo/i);
+    return true;
+  });
+});
+
+test('reenvio manual informa que o fluxo da TWT está pausado', async () => {
+  let sent = false;
+  await assert.rejects(() => resendBillingInvoice('11735', {
+    transport: {},
+    emailConfig: {
+      fromName: 'TWT',
+      fromEmail: 'faturamento@twt.com.br',
+      alertEmail: ''
+    },
+    fetchInvoice: async () => ({
+      invoices: [{
+        id: '11735',
+        clientDocument: '10629265000107',
+        issuerDocument: '09123137000108',
+        balance: 100,
+        status: 0,
+        statusLabel: 'Em aberto'
+      }]
+    }),
+    listPending: async () => [],
+    sendBillingEmail: async () => { sent = true; },
+    removePending: async () => {}
+  }), (error) => {
+    assert.equal(error.statusCode, 409);
+    assert.match(error.message, /TWT está pausado/i);
+    return true;
+  });
+  assert.equal(sent, false);
+});
+
+test('mantém estados financeiro, documental, de cobrança e pagamento independentes', () => {
+  const invoice = {
+    id: '11756',
+    dueAt: '2026-09-10',
+    status: 0,
+    statusLabel: 'Em aberto',
+    client: 'BHZ',
+    clientDocument: '11280282000144'
+  };
+  const control = invoiceControl(invoice, {
+    now: new Date('2026-09-13T12:00:00Z'),
+    pending: { reason: 'doccob' },
+    logs: [{ status: 'delivered', email: 'financeiro@example.com' }],
+    bankRecord: { state: 'ready', bank: 'itau', bankSlipId: 'boleto-1' }
+  });
+  assert.equal(control.financial.code, 'overdue');
+  assert.equal(control.documents.code, 'awaiting_doccob');
+  assert.equal(control.collection.code, 'delivered');
+  assert.equal(control.payment.code, 'registered');
+
+  const ted = invoiceControl({
+    ...invoice,
+    client: 'RS WHITE MARTINS GASES INDUSTRIAIS LTDA'
+  });
+  assert.equal(ted.payment.code, 'ted_doc');
+});
+
+test('fila unificada prioriza vencidas e reúne falhas de documentos e entrega', () => {
+  const issues = buildUnifiedIssues({
+    now: new Date('2026-09-13T12:00:00Z'),
+    pending: [{
+      invoiceId: '100',
+      clientName: 'Cliente vencido',
+      clientCnpj: '11280282000144',
+      reason: 'doccob',
+      dueAt: '2026-09-10',
+      lastCheckedAt: '2026-09-13T10:00:00Z'
+    }],
+    logs: [{
+      id: 'log-1',
+      invoiceId: '101',
+      clientName: 'Cliente e-mail',
+      status: 'hard_bounce',
+      email: 'invalido@example.com',
+      createdAt: '2026-09-13T11:00:00Z'
+    }]
+  });
+  assert.equal(issues.length, 2);
+  assert.equal(issues[0].invoiceId, '100');
+  assert.equal(issues[0].priority, 'critical');
+  assert.equal(issues[0].action, 'documents');
+  assert.equal(issues[1].type, 'email');
+  assert.equal(issues[1].action, 'logs');
+});
+
+test('fila direciona boleto e falha geral para a ação contextual correta', () => {
+  const issues = buildUnifiedIssues({
+    pending: [{
+      invoiceId: '200',
+      reason: 'processing_error',
+      message: 'Falha ao gerar boleto no Itaú.'
+    }, {
+      invoiceId: '201',
+      reason: 'processing_error',
+      message: 'Falha inesperada no processamento.'
+    }]
+  });
+  assert.equal(issues.find((issue) => issue.invoiceId === '200').action, 'payment');
+  assert.equal(issues.find((issue) => issue.invoiceId === '201').action, 'invoice');
+});
+
+test('fatura ausente na Brudam fica somente no histórico e não volta às pendências', () => {
+  const message = 'Fatura não encontrada na Brudam.';
+  assert.equal(isTerminalBillingFailure({ message }), true);
+  const issues = buildUnifiedIssues({
+    pending: [{
+      invoiceId: '11779',
+      reason: 'processing_error',
+      message
+    }],
+    logs: [{
+      id: 'erro-11779',
+      invoiceId: '11779',
+      status: 'error',
+      message
+    }, {
+      id: 'bounce-resolvivel',
+      invoiceId: '11780',
+      status: 'hard_bounce',
+      email: 'corrigir@example.com',
+      message: 'Destinatário rejeitado.'
+    }]
+  });
+  assert.deepEqual(issues.map((issue) => issue.invoiceId), ['11780']);
+});
+
+test('histórico da fatura combina emissão, boleto, pendência, e-mails e vencimento', () => {
+  const timeline = buildInvoiceTimeline({
+    invoice: { id: '11756', issuedAt: '2026-09-01', dueAt: '2026-09-20' },
+    pending: { reason: 'contacts', lastCheckedAt: '2026-09-03T12:00:00Z' },
+    bankRecord: { state: 'ready', bank: 'itau', bankSlipId: 'boleto', createdAt: '2026-09-02T12:00:00Z' },
+    logs: [{ status: 'submitted', event: 'initial', createdAt: '2026-09-04T12:00:00Z', email: 'a@b.com' }]
+  });
+  assert.deepEqual(new Set(timeline.map((event) => event.type)), new Set([
+    'invoice', 'payment', 'pending', 'email', 'due'
+  ]));
+});
+
 test('interface expõe cadastro, pendências e logs sem criar várias funções serverless', () => {
   const root = path.resolve(__dirname, '..');
   const html = fs.readFileSync(path.join(root, 'faturamento', 'index.html'), 'utf8');
   const source = fs.readFileSync(path.join(root, 'faturamento', 'cobranca.js'), 'utf8');
+  const appSource = fs.readFileSync(path.join(root, 'faturamento', 'app.js'), 'utf8');
   const apiSource = fs.readFileSync(path.join(root, 'api', 'faturamento', 'cobranca.js'), 'utf8');
   assert.match(html, /data-billing-area="collection"/);
   assert.match(html, /id="categoryForm"/);
@@ -943,8 +1237,16 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(html, /id="categoryDeleteModal"/);
   assert.match(html, /id="emailLogModal"/);
   assert.match(html, /id="emailLogBody"/);
-  assert.match(html, /href="#pendingDoccobSection"/);
-  assert.match(html, /href="#collectionLogsSection"/);
+  assert.match(html, /id="invoiceDetail"/);
+  assert.match(html, /id="invoiceDetailResend"/);
+  assert.match(html, /id="invoiceDetailDocuments"/);
+  assert.match(html, /id="invoiceDetailWhatsApp"/);
+  assert.match(html, /id="pendingIssueSummary"/);
+  assert.match(html, /data-collection-section="collectionContactsSection"/);
+  assert.match(html, /data-collection-section="pendingDoccobSection"/);
+  assert.match(html, /data-collection-section="collectionLogsSection"/);
+  assert.match(html, /id="pendingDoccobSection"[\s\S]*?hidden>/);
+  assert.match(html, /id="collectionLogsSection"[\s\S]*?hidden>/);
   assert.match(source, /route, \.\.\.query/);
   assert.match(source, /const filters = logFilters\(\);[\s\S]*setLoading\(true\)/);
   assert.doesNotMatch(source, /window\.confirm\(`Excluir \$\{category\.name\}/);
@@ -955,8 +1257,22 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(source, /method: 'PATCH'/);
   assert.match(source, /Object\.assign\(contact, saved\)/);
   assert.doesNotMatch(source, /const setContactEnabled[\s\S]*?await loadCategories\(\);[\s\S]*?const syncContacts/);
+  assert.match(source, /panel\.hidden = panel\.id !== sectionId/);
+  assert.match(source, /setCollectionSection\(state\.collectionSection\)/);
+  assert.match(source, /billing:open-documents/);
+  assert.match(source, /billing:open-invoice-detail/);
+  assert.match(source, /Conferir documentos/);
+  assert.match(source, /Conferir boleto/);
+  assert.match(source, /pendingFilter: 'all'/);
+  assert.match(source, /className = 'pending-summary-filter'/);
+  assert.match(source, /aria-pressed/);
+  assert.match(source, /record\.priority === 'critical'/);
+  assert.match(appSource, /route=resend/);
+  assert.match(appSource, /navigator\.clipboard/);
   assert.match(apiSource, /query\.route === 'webhook'/);
   assert.match(apiSource, /query\.route === 'contacts-sync'/);
+  assert.match(apiSource, /query\.route === 'invoice-detail'/);
+  assert.match(apiSource, /query\.route === 'resend'/);
   assert.match(apiSource, /req\.method === 'GET' \|\| req\.method === 'HEAD'/);
   assert.equal(fs.existsSync(path.join(root, 'api', 'faturamento', 'cobranca.js')), true);
 });

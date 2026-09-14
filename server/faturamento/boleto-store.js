@@ -45,6 +45,15 @@ const parseRecord = (value) => {
 const getBankSlipRecord = async (invoiceId, command = redisCommand) =>
   parseRecord(await command('GET', keyFor(invoiceId)));
 
+const getBankSlipRecords = async (invoiceIds, command = redisCommand) => {
+  const ids = [...new Set((Array.isArray(invoiceIds) ? invoiceIds : [])
+    .map((invoiceId) => String(invoiceId || '').replace(/\D/g, ''))
+    .filter(Boolean))];
+  if (!ids.length) return new Map();
+  const values = await command('MGET', ...ids.map(keyFor)) || [];
+  return new Map(ids.map((invoiceId, index) => [invoiceId, parseRecord(values[index])]));
+};
+
 const claimBankSlip = async (invoiceId, record, command = redisCommand) => {
   const result = await command(
     'SET',
@@ -68,6 +77,7 @@ module.exports = {
   keyFor,
   parseRecord,
   getBankSlipRecord,
+  getBankSlipRecords,
   claimBankSlip,
   saveBankSlipRecord,
   releaseBankSlipClaim

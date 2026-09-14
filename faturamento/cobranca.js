@@ -5,6 +5,8 @@
     areaButtons: [...document.querySelectorAll('[data-billing-area]')],
     invoiceWorkspace: document.getElementById('invoiceWorkspace'),
     collectionWorkspace: document.getElementById('collectionWorkspace'),
+    collectionSectionButtons: [...document.querySelectorAll('[data-collection-section]')],
+    collectionSectionPanels: [...document.querySelectorAll('.collection-anchor-target')],
     message: document.getElementById('collectionMessage'),
     runButton: document.getElementById('runCollectionButton'),
     companyCount: document.getElementById('collectionCompanyCount'),
@@ -15,6 +17,7 @@
     categoryEmpty: document.getElementById('categoryEmpty'),
     pendingRows: document.getElementById('pendingRows'),
     pendingEmpty: document.getElementById('pendingEmpty'),
+    pendingIssueSummary: document.getElementById('pendingIssueSummary'),
     pendingRunStatus: document.getElementById('pendingRunStatus'),
     refreshPendingButton: document.getElementById('refreshPendingButton'),
     logsForm: document.getElementById('collectionLogsForm'),
@@ -49,7 +52,9 @@
   const state = {
     loaded: false,
     loading: false,
+    collectionSection: 'collectionContactsSection',
     categories: [],
+    pendingFilter: 'all',
     logFilters: {},
     logPage: 1,
     logTotalPages: 1,
@@ -310,6 +315,7 @@
   const createCategoryCard = (category) => {
     const card = document.createElement('details');
     card.className = 'category-card';
+    card.dataset.cnpj = String(category.cnpj || '').replace(/\D/g, '');
     const summary = document.createElement('summary');
     const company = document.createElement('span');
     const name = document.createElement('strong');
@@ -396,39 +402,87 @@
   };
 
   const renderPending = (payload) => {
-    const pending = Array.isArray(payload.pending) ? payload.pending : [];
-    const reasons = {
-      doccob: 'Aguardando DOCCOB',
-      contacts: 'Sem destinatário cadastrado',
-      processing_error: 'Falha no processamento'
+    const allIssues = Array.isArray(payload.issues) ? payload.issues : [];
+    const issues = state.pendingFilter === 'all'
+      ? allIssues
+      : allIssues.filter((record) => (
+        state.pendingFilter === 'critical'
+          ? record.priority === 'critical'
+          : record.type === state.pendingFilter
+      ));
+    const priorityLabels = {
+      critical: 'Crítica',
+      high: 'Alta',
+      medium: 'Média'
     };
-    const rows = pending.map((record) => {
+    const actionLabels = {
+      contacts: 'Ver contatos',
+      logs: 'Ver logs',
+      documents: 'Conferir documentos',
+      payment: 'Conferir boleto',
+      invoice: 'Ver detalhes'
+    };
+    const rows = issues.map((record) => {
       const row = document.createElement('tr');
       appendCell(row, record.invoiceId || '—').className = 'invoice-id';
       const client = appendCell(row, record.clientName || 'Não informado');
       const documentLine = document.createElement('small');
       documentLine.textContent = formatCnpj(record.clientCnpj);
       client.appendChild(documentLine);
-      const reason = appendCell(row, reasons[record.reason] || 'Aguardando processamento');
+      const reason = appendCell(row, record.title || 'Aguardando processamento');
       if (record.message) {
         const detail = document.createElement('small');
         detail.textContent = record.message;
         reason.appendChild(detail);
       }
-      appendCell(row, formatDate(record.issuedAt));
+      const priority = appendCell(row, priorityLabels[record.priority] || 'Média');
+      priority.className = `issue-priority priority-${record.priority || 'medium'}`;
       appendCell(row, formatDate(record.dueAt));
-      appendCell(row, formatDateTime(record.lastCheckedAt));
-      appendCell(row, record.lastCheckSource === 'automatic'
-        ? 'Automática'
-        : record.lastCheckSource === 'manual' ? 'Manual' : 'Não registrada');
-      appendCell(row, String(record.attempts || 0));
+      appendCell(row, formatDateTime(record.updatedAt));
+      const actionCell = document.createElement('td');
+      const action = document.createElement('button');
+      action.type = 'button';
+      action.className = 'button button-quiet issue-action';
+      action.textContent = actionLabels[record.action] || 'Conferir';
+      action.addEventListener('click', (event) => navigateIssue(record, event.currentTarget));
+      actionCell.appendChild(action);
+      row.appendChild(actionCell);
       return row;
     });
     elements.pendingRows.replaceChildren(...rows);
-    elements.pendingEmpty.hidden = pending.length > 0;
-    elements.pendingCount.textContent = String(payload.doccobTotal ?? pending.filter(
-      (record) => record.reason === 'doccob'
-    ).length);
+    elements.pendingEmpty.hidden = issues.length > 0;
+    const emptyTitle = elements.pendingEmpty.querySelector('strong');
+    const emptyDescription = elements.pendingEmpty.querySelector('p');
+    if (state.pendingFilter === 'all') {
+      emptyTitle.textContent = 'Nenhuma pendência aberta';
+      emptyDescription.textContent = 'Documentos, contatos, pagamentos e entregas estão sem alertas registrados.';
+    } else {
+      emptyTitle.textContent = 'Nenhuma pendência neste filtro';
+      emptyDescription.textContent = 'Selecione outro tipo para conferir as demais ações abertas.';
+    }
+    elements.pendingCount.textContent = String(payload.total ?? allIssues.length);
+    const summary = payload.summary || {};
+    const summaryItems = [
+      ['Todas', payload.total ?? allIssues.length, 'all'],
+      ['Críticas', summary.critical || 0, 'critical'],
+      ['Documentos', summary.documents || 0, 'documents'],
+      ['Contatos', summary.contacts || 0, 'contacts'],
+      ['E-mail', summary.email || 0, 'email'],
+      ['Pagamento', summary.payment || 0, 'payment']
+    ];
+    elements.pendingIssueSummary.replaceChildren(...summaryItems.map(([label, count, type]) => {
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.className = 'pending-summary-filter';
+      item.dataset.type = type;
+      item.setAttribute('aria-pressed', String(state.pendingFilter === type));
+      item.textContent = `${label}: ${count}`;
+      item.addEventListener('click', () => {
+        state.pendingFilter = type;
+        renderPending(payload);
+      });
+      return item;
+    }));
     if (elements.pendingRunStatus) {
       const lastRun = payload.lastRun;
       if (!lastRun) {
@@ -439,6 +493,47 @@
         elements.pendingRunStatus.textContent = `Última execução ${source} ${status} em ${formatDateTime(lastRun.completedAt)}.`;
       }
     }
+  };
+
+  const navigateIssue = async (record, trigger) => {
+    if (record.action === 'contacts') {
+      setCollectionSection('collectionContactsSection');
+      const category = elements.categoryList.querySelector(
+        `[data-cnpj="${String(record.clientCnpj || '').replace(/\D/g, '')}"]`
+      );
+      if (category) {
+        category.open = true;
+        category.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      } else {
+        setMessage('Cadastre esta empresa para incluir destinatários de cobrança.', 'warning');
+        elements.categoryForm.elements.cnpj.value = formatCnpj(record.clientCnpj);
+        elements.categoryForm.elements.name.value = record.clientName === 'Não informado' ? '' : record.clientName;
+        elements.categoryForm.elements.name.focus();
+      }
+      return;
+    }
+    if (record.action === 'logs') {
+      setCollectionSection('collectionLogsSection');
+      elements.logsForm.elements.invoiceId.value = record.invoiceId || '';
+      setLoading(true);
+      try {
+        await loadLogs({ filters: { invoiceId: String(record.invoiceId || '') }, page: 1 });
+      } catch (error) {
+        setMessage(error.message, 'error');
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
+    if (record.action === 'documents' || record.action === 'payment') {
+      window.dispatchEvent(new CustomEvent('billing:open-documents', {
+        detail: { invoiceId: record.invoiceId, trigger }
+      }));
+      return;
+    }
+    window.dispatchEvent(new CustomEvent('billing:open-invoice-detail', {
+      detail: { invoiceId: record.invoiceId, trigger }
+    }));
   };
 
   const loadPending = async () => renderPending(await requestJson(endpoint('pending')));
@@ -474,7 +569,9 @@
       const email = document.createElement('small');
       email.textContent = record.email || record.message || '';
       recipient.appendChild(email);
-      appendCell(row, EVENT_LABELS[record.event] || record.event || '—');
+      appendCell(row, record.manualResend
+        ? 'Reenvio manual'
+        : EVENT_LABELS[record.event] || record.event || '—');
       const status = appendCell(row, STATUS_LABELS[record.status] || record.status || '—');
       status.className = `collection-status status-${record.status || 'unknown'}`;
       if (record.message) status.title = record.message;
@@ -545,9 +642,44 @@
     if (collection && !state.loaded) loadCollection();
   };
 
+  const setCollectionSection = (sectionId, { focus = false } = {}) => {
+    const button = elements.collectionSectionButtons.find(
+      (item) => item.dataset.collectionSection === sectionId
+    );
+    if (!button) return;
+    state.collectionSection = sectionId;
+    elements.collectionSectionPanels.forEach((panel) => {
+      panel.hidden = panel.id !== sectionId;
+    });
+    elements.collectionSectionButtons.forEach((item) => {
+      const active = item === button;
+      item.classList.toggle('is-active', active);
+      item.setAttribute('aria-selected', String(active));
+      item.tabIndex = active ? 0 : -1;
+    });
+    if (focus) button.focus();
+  };
+
   elements.areaButtons.forEach((button) => {
     button.addEventListener('click', () => setArea(button.dataset.billingArea));
   });
+
+  elements.collectionSectionButtons.forEach((button, index) => {
+    button.addEventListener('click', () => setCollectionSection(button.dataset.collectionSection));
+    button.addEventListener('keydown', (event) => {
+      if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+      event.preventDefault();
+      const last = elements.collectionSectionButtons.length - 1;
+      const targetIndex = event.key === 'Home'
+        ? 0
+        : event.key === 'End'
+          ? last
+          : (index + (event.key === 'ArrowRight' ? 1 : -1) + last + 1) % (last + 1);
+      const target = elements.collectionSectionButtons[targetIndex];
+      setCollectionSection(target.dataset.collectionSection, { focus: true });
+    });
+  });
+  setCollectionSection(state.collectionSection);
 
   elements.categoryForm.addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -648,6 +780,26 @@
         `Verificação concluída: ${result.sent} e-mail(s) enviado(s), ${result.pendingDoccob} aguardando DOCCOB e ${result.errors.length} erro(s).`,
         result.errors.length ? 'warning' : 'success'
       );
+    } catch (error) {
+      setMessage(error.message, 'error');
+    } finally {
+      setLoading(false);
+    }
+  });
+
+  window.addEventListener('billing:navigate-logs', async (event) => {
+    const invoiceId = String(event.detail?.invoiceId || '').replace(/\D/g, '');
+    if (!invoiceId) return;
+    elements.logsForm.elements.invoiceId.value = invoiceId;
+    state.logFilters = { invoiceId };
+    state.logPage = 1;
+    const wasLoaded = state.loaded;
+    setArea('collection');
+    setCollectionSection('collectionLogsSection');
+    if (!wasLoaded || state.loading) return;
+    setLoading(true);
+    try {
+      await loadLogs({ filters: state.logFilters, page: 1 });
     } catch (error) {
       setMessage(error.message, 'error');
     } finally {

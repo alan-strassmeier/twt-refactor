@@ -21,6 +21,7 @@ const {
   bankSlipBankForIssuer,
   requiresTedDocPayment
 } = require('../server/faturamento/billing-rules');
+const { getBankSlipRecords } = require('../server/faturamento/boleto-store');
 
 const twtInvoice = {
   fatura: 11518,
@@ -52,6 +53,22 @@ const billingDependencies = (issuerCnpj = '09123137000108') => ({
   }),
   fetchCompany: async () => payerCompany,
   now: new Date('2026-08-08T12:00:00Z')
+});
+
+test('consulta estados de vários boletos em uma única ida ao Redis', async () => {
+  const calls = [];
+  const records = await getBankSlipRecords(['11518', '11532', '11518'], async (...args) => {
+    calls.push(args);
+    return [
+      JSON.stringify({ state: 'ready', bankSlipId: 'a' }),
+      JSON.stringify({ state: 'review' })
+    ];
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], 'MGET');
+  assert.equal(calls[0].length, 3);
+  assert.equal(records.get('11518').state, 'ready');
+  assert.equal(records.get('11532').state, 'review');
 });
 
 test('normaliza o pagador conforme dados obrigatórios das APIs bancárias', () => {
