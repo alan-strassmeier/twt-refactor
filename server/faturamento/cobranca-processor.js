@@ -10,7 +10,14 @@ const {
 const { findDoccobForInvoice } = require('./r2-doccob');
 const { fetchInvoicePdfData, buildInvoicePdf } = require('./invoice-pdf');
 const { generateInvoiceBankSlip, getInvoiceBankSlipPdf } = require('./boleto');
-const { isDslIssuer, isTwtIssuer } = require('./billing-rules');
+const { issueInvoiceNfse, getIssuedNfseXml } = require('./nfse');
+const { buildDanfsePdf } = require('./danfse');
+const {
+  TWT_BILLING_START_DATE,
+  isDslIssuer,
+  isTwtIssuer,
+  isTwtBillingEligible
+} = require('./billing-rules');
 const {
   normalizeCteKeys,
   resolveInvoiceCteKeys,
@@ -240,14 +247,33 @@ const enabledContacts = (category) => Array.isArray(category?.contacts)
   ? category.contacts.filter((contact) => contact?.enabled !== false)
   : [];
 
-const skipPausedTwtBilling = async ({ invoice, context }) => {
+const skipTwtBeforeBillingStart = async ({ invoice, context }) => {
   const invoiceId = String(invoice.id);
   if (context.pendingByInvoice.has(invoiceId)) {
     await context.removePending(invoiceId);
     context.pendingByInvoice.delete(invoiceId);
   }
   context.summary.skippedTwt = Number(context.summary.skippedTwt || 0) + 1;
-  return { skipped: 'twt' };
+  return { skipped: 'twt_before_start' };
+};
+
+const shouldSkipTwtBeforeBillingStart = ({ issuerCnpj, issuedAt }) => (
+  isTwtIssuer(issuerCnpj) && !isTwtBillingEligible({ issuerCnpj, issuedAt })
+);
+
+const buildTwtNfseAttachment = async ({ invoiceId, doccob, data, context }) => {
+  const issuerCnpj = doccob?.invoice?.issuerCnpj || data.issuer?.document;
+  if (!isTwtIssuer(issuerCnpj)) return null;
+
+  const issuance = await context.issueInvoiceNfse(invoiceId);
+  if (issuance?.status !== 'issued') {
+    throw Object.assign(new Error('A NFS-e ainda não está pronta para ser anexada.'), {
+      statusCode: 409,
+      expose: true
+    });
+  }
+  const { xml } = await context.getIssuedNfseXml(invoiceId);
+  return context.buildDanfsePdf(xml);
 };
 
 const existingDeliveryPlan = async ({ event, invoiceId, category, context }) => {
@@ -295,8 +321,9 @@ const existingDeliveryPlan = async ({ event, invoiceId, category, context }) => 
 const processInvoiceEvent = async ({ event, invoice, context }) => {
   const now = context.now().toISOString();
   if (context.doccobPendingIds?.has(String(invoice.id))) return;
-  if (isTwtIssuer(invoice.issuerDocument || invoice.issuerCnpj)) {
-    return skipPausedTwtBilling({ invoice, context });
+  const listedIssuer = invoice.issuerDocument || invoice.issuerCnpj;
+  if (shouldSkipTwtBeforeBillingStart({ issuerCnpj: listedIssuer, issuedAt: invoice.issuedAt })) {
+    return skipTwtBeforeBillingStart({ invoice, context });
   }
   const clientCnpj = String(invoice.clientDocument || '').replace(/\D/g, '');
   const doccob = await context.findDoccobForInvoice({
@@ -324,8 +351,11 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
     context.summary.pendingDoccob += 1;
     return;
   }
-  if (isTwtIssuer(doccob?.invoice?.issuerCnpj)) {
-    return skipPausedTwtBilling({ invoice, context });
+  if (shouldSkipTwtBeforeBillingStart({
+    issuerCnpj: doccob?.invoice?.issuerCnpj,
+    issuedAt: doccob?.invoice?.issuedAt || invoice.issuedAt
+  })) {
+    return skipTwtBeforeBillingStart({ invoice, context });
   }
 
   const categoryBeforeInvoiceLookup = clientCnpj ? await context.getCategory(clientCnpj) : null;
@@ -345,8 +375,11 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
   }
 
   const data = await context.fetchInvoicePdfData(invoice.id);
-  if (isTwtIssuer(data.issuer?.document)) {
-    return skipPausedTwtBilling({ invoice, context });
+  if (shouldSkipTwtBeforeBillingStart({
+    issuerCnpj: data.issuer?.document,
+    issuedAt: data.invoice?.issuedAt || doccob?.invoice?.issuedAt || invoice.issuedAt
+  })) {
+    return skipTwtBeforeBillingStart({ invoice, context });
   }
   const resolvedCnpj = String(data.client?.document || clientCnpj).replace(/\D/g, '');
   const category = resolvedCnpj === clientCnpj
@@ -455,6 +488,12 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
     }
     bankSlipPdf = await context.getInvoiceBankSlipPdf(invoice.id);
   }
+  const nfsePdf = await buildTwtNfseAttachment({
+    invoiceId: invoice.id,
+    doccob,
+    data,
+    context
+  });
 
   for (const contact of unsentContacts) {
     const internalAlert = contact.id === '__alerta_interno__';
@@ -478,6 +517,7 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
       data,
       contact,
       dactePdf,
+      nfsePdf,
       bankSlipPdf,
       config: context.emailConfig
     });
@@ -510,6 +550,7 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
         contact,
         invoicePdf,
         dactePdf,
+        nfsePdf,
         bankSlipPdf,
         clientReference,
         transport: context.transport,
@@ -603,6 +644,9 @@ const createProcessorContext = ({
   fetchCteXmls: dependencies.fetchCteXmls || fetchCteXmls,
   parseCteXml: dependencies.parseCteXml || parseCteXml,
   buildDactePdf: dependencies.buildDactePdf || buildDactePdf,
+  issueInvoiceNfse: dependencies.issueInvoiceNfse || issueInvoiceNfse,
+  getIssuedNfseXml: dependencies.getIssuedNfseXml || getIssuedNfseXml,
+  buildDanfsePdf: dependencies.buildDanfsePdf || buildDanfsePdf,
   generateInvoiceBankSlip: dependencies.generateInvoiceBankSlip || generateInvoiceBankSlip,
   getInvoiceBankSlipPdf: dependencies.getInvoiceBankSlipPdf || getInvoiceBankSlipPdf,
   sendBillingEmail: dependencies.sendBillingEmail || sendBillingEmail,
@@ -710,9 +754,9 @@ const resendBillingInvoice = async (invoiceId, dependencies = {}) => {
     if (!dependencies.transport && typeof transport.close === 'function') transport.close();
   }
   summary.completedAt = nowFactory().toISOString();
-  if (outcome?.skipped === 'twt') {
+  if (outcome?.skipped === 'twt_before_start') {
     throw Object.assign(new Error(
-      'O envio de cobranças da TWT está pausado até a conclusão do fluxo bancário.'
+      `Faturas TWT emitidas antes de ${TWT_BILLING_START_DATE.split('-').reverse().join('/')} não entram no fluxo automático.`
     ), { statusCode: 409, expose: true });
   }
   if (summary.pendingDoccob) {
@@ -876,6 +920,8 @@ module.exports = {
   scanInvoices,
   pendingRecord,
   buildDslDacteAttachment,
+  buildTwtNfseAttachment,
+  shouldSkipTwtBeforeBillingStart,
   initialDeliveryAlreadyCoveredEvent,
   existingDeliveryPlan,
   isTerminalBillingFailure,

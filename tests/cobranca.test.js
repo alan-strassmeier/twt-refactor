@@ -61,6 +61,10 @@ const {
   buildInvoiceTimeline,
   billingWhatsappText
 } = require('../server/faturamento/invoice-control');
+const {
+  TWT_BILLING_START_DATE,
+  isTwtBillingEligible
+} = require('../server/faturamento/billing-rules');
 
 const invoiceData = (payment = null) => ({
   invoice: {
@@ -316,6 +320,20 @@ test('anexa DACTEs em um único PDF quando o documento é informado', () => {
   ]);
 });
 
+test('anexa a nota fiscal no lugar do DACTE para a cobrança da TWT', () => {
+  const attachments = billingAttachments({
+    invoiceId: 11780,
+    invoicePdf: Buffer.from('fatura'),
+    nfsePdf: Buffer.from('danfse'),
+    bankSlipPdf: Buffer.from('boleto')
+  });
+  assert.deepEqual(attachments.map((attachment) => attachment.filename), [
+    'fatura-11780.pdf',
+    'nota-fiscal-fatura-11780.pdf',
+    'boleto-fatura-11780.pdf'
+  ]);
+});
+
 test('salva uma prévia textual do e-mail sem duplicar os PDFs', () => {
   const preview = billingEmailPreview({
     event: EVENT_TYPES.reminder,
@@ -487,6 +505,9 @@ const processorContext = (overrides = {}) => {
     fetchCteXmls: async () => [],
     parseCteXml: (xml) => xml,
     buildDactePdf: async () => Buffer.from('dactes'),
+    issueInvoiceNfse: async () => ({ status: 'issued' }),
+    getIssuedNfseXml: async () => ({ xml: '<NFSe />' }),
+    buildDanfsePdf: async () => Buffer.from('danfse'),
     generateInvoiceBankSlip: async () => ({ status: 'ready' }),
     getInvoiceBankSlipPdf: async () => Buffer.from('boleto'),
     sendBillingEmail: async () => ({ messageId: 'm-1', accepted: [], rejected: [] }),
@@ -518,12 +539,12 @@ test('mantém a fatura na fila enquanto o DOCCOB não chegou', async () => {
   assert.equal(context.summary.pendingDoccob, 1);
 });
 
-test('ignora cobrança da TWT antes de gerar boleto, documento ou log', async () => {
+test('ignora cobrança da TWT anterior ao corte sem gerar boleto, documento ou log', async () => {
   const calls = [];
   const removed = [];
   const context = processorContext({
     findDoccobForInvoice: async () => ({
-      invoice: { issuerCnpj: '09123137000108' }
+      invoice: { issuerCnpj: '09123137000108', issuedAt: '2026-09-15' }
     }),
     fetchInvoicePdfData: async () => { calls.push('pdf-data'); },
     generateInvoiceBankSlip: async () => { calls.push('boleto'); },
@@ -541,16 +562,102 @@ test('ignora cobrança da TWT antes de gerar boleto, documento ou log', async ()
     invoice: {
       id: '11735',
       clientDocument: '10629265000107',
-      client: 'JTT LOG'
+      client: 'JTT LOG',
+      issuedAt: '2026-09-15'
     },
     context
   });
 
-  assert.deepEqual(result, { skipped: 'twt' });
+  assert.deepEqual(result, { skipped: 'twt_before_start' });
   assert.deepEqual(calls, []);
   assert.deepEqual(removed, ['11735']);
   assert.equal(context.pendingByInvoice.has('11735'), false);
   assert.equal(context.summary.skippedTwt, 1);
+});
+
+test('habilita a TWT no corte e envia fatura, boleto Bradesco e nota fiscal', async () => {
+  const calls = [];
+  const references = [];
+  let sentInput;
+  const context = processorContext({
+    findDoccobForInvoice: async () => ({
+      invoice: { issuerCnpj: '09123137000108', issuedAt: TWT_BILLING_START_DATE },
+      transports: []
+    }),
+    fetchInvoicePdfData: async () => ({
+      ...invoiceData(),
+      invoice: {
+        ...invoiceData().invoice,
+        id: '11780',
+        issuedAt: TWT_BILLING_START_DATE
+      },
+      issuer: { document: '09123137000108' }
+    }),
+    generateInvoiceBankSlip: async () => {
+      calls.push('boleto');
+      return { status: 'ready' };
+    },
+    getInvoiceBankSlipPdf: async () => {
+      calls.push('boleto-pdf');
+      return Buffer.from('boleto-bradesco');
+    },
+    issueInvoiceNfse: async () => {
+      calls.push('nfse');
+      return { status: 'issued' };
+    },
+    getIssuedNfseXml: async () => {
+      calls.push('nfse-xml');
+      return { xml: '<NFSe />' };
+    },
+    buildDanfsePdf: async (xml) => {
+      assert.equal(xml, '<NFSe />');
+      calls.push('danfse');
+      return Buffer.from('nota-fiscal');
+    },
+    saveDeliveryReference: async (_reference, record) => references.push(record),
+    sendBillingEmail: async (input) => {
+      sentInput = input;
+      return { messageId: 'm-twt', accepted: [input.contact.email], rejected: [] };
+    }
+  });
+
+  await processInvoiceEvent({
+    event: EVENT_TYPES.initial,
+    invoice: {
+      id: '11780',
+      clientDocument: '11280282000144',
+      client: 'BHZ',
+      issuerDocument: '09123137000108',
+      issuedAt: TWT_BILLING_START_DATE
+    },
+    context
+  });
+
+  assert.deepEqual(calls, ['boleto', 'boleto-pdf', 'nfse', 'nfse-xml', 'danfse']);
+  assert.equal(sentInput.dactePdf, null);
+  assert.equal(sentInput.bankSlipPdf.toString(), 'boleto-bradesco');
+  assert.equal(sentInput.nfsePdf.toString(), 'nota-fiscal');
+  assert.deepEqual(references[0].emailPreview.attachments, [
+    'fatura-11780.pdf',
+    'nota-fiscal-fatura-11780.pdf',
+    'boleto-fatura-11780.pdf'
+  ]);
+  assert.equal(context.summary.sent, 1);
+});
+
+test('considera a data de corte inclusiva somente para a emissora TWT', () => {
+  assert.equal(isTwtBillingEligible({
+    issuerCnpj: '09123137000108',
+    issuedAt: '15/09/2026'
+  }), false);
+  assert.equal(isTwtBillingEligible({
+    issuerCnpj: '09123137000108',
+    issuedAt: '16/09/2026'
+  }), true);
+  assert.equal(isTwtBillingEligible({
+    issuerCnpj: '97434690000129',
+    issuedAt: '2026-09-16'
+  }), false);
 });
 
 test('registra se a pendência foi conferida manualmente ou pelo agendador', () => {
@@ -1085,7 +1192,7 @@ test('reenvio manual não inicia envio sem destinatário ativo', async () => {
   });
 });
 
-test('reenvio manual informa que o fluxo da TWT está pausado', async () => {
+test('reenvio manual bloqueia fatura TWT anterior ao início da automação', async () => {
   let sent = false;
   await assert.rejects(() => resendBillingInvoice('11735', {
     transport: {},
@@ -1099,6 +1206,7 @@ test('reenvio manual informa que o fluxo da TWT está pausado', async () => {
         id: '11735',
         clientDocument: '10629265000107',
         issuerDocument: '09123137000108',
+        issuedAt: '2026-09-15',
         balance: 100,
         status: 0,
         statusLabel: 'Em aberto'
@@ -1109,7 +1217,7 @@ test('reenvio manual informa que o fluxo da TWT está pausado', async () => {
     removePending: async () => {}
   }), (error) => {
     assert.equal(error.statusCode, 409);
-    assert.match(error.message, /TWT está pausado/i);
+    assert.match(error.message, /antes de 16\/09\/2026/i);
     return true;
   });
   assert.equal(sent, false);

@@ -1,5 +1,6 @@
 const TWT_ISSUER_CNPJ = '09123137000108';
 const DSL_ISSUER_CNPJ = '97434690000129';
+const TWT_BILLING_START_DATE = '2026-09-16';
 const BL_POA_CNPJ = '27011022000103';
 const WHITE_MARTINS_TED_DOC_CNPJS = Object.freeze([
   '24380578002556',
@@ -78,6 +79,18 @@ const DSL_TED_DOC_ACCOUNT = Object.freeze({
 const isTwtIssuer = (value) => digits(value) === TWT_ISSUER_CNPJ;
 const isDslIssuer = (value) => digits(value) === DSL_ISSUER_CNPJ;
 
+const normalizedDateOnly = (value) => {
+  const iso = String(value || '').trim().match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+  const brazilian = String(value || '').trim().match(/^(\d{2})\/(\d{2})\/(\d{4})/);
+  return brazilian ? `${brazilian[3]}-${brazilian[2]}-${brazilian[1]}` : '';
+};
+
+const isTwtBillingEligible = ({ issuerCnpj = '', issuedAt = '' } = {}) => (
+  isTwtIssuer(issuerCnpj) &&
+  normalizedDateOnly(issuedAt) >= TWT_BILLING_START_DATE
+);
+
 const bankSlipBankForIssuer = (value) => {
   if (isTwtIssuer(value)) return BILLING_BANKS.bradesco;
   if (isDslIssuer(value)) return BILLING_BANKS.itau;
@@ -87,6 +100,7 @@ const bankSlipBankForIssuer = (value) => {
 module.exports = {
   TWT_ISSUER_CNPJ,
   DSL_ISSUER_CNPJ,
+  TWT_BILLING_START_DATE,
   BL_POA_CNPJ,
   WHITE_MARTINS_TED_DOC_CNPJS,
   ELECNOR_TED_DOC_CNPJS,
@@ -94,6 +108,8 @@ module.exports = {
   DSL_TED_DOC_ACCOUNT,
   isTwtIssuer,
   isDslIssuer,
+  normalizedDateOnly,
+  isTwtBillingEligible,
   bankSlipBankForIssuer,
   normalizedRuleText,
   isTedDocPaymentMethod,

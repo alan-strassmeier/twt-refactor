@@ -136,7 +136,7 @@ const billingHtml = (event, data, contact) => {
 </html>`;
 };
 
-const billingAttachments = ({ invoiceId, invoicePdf, dactePdf, bankSlipPdf }) => [
+const billingAttachments = ({ invoiceId, invoicePdf, dactePdf, nfsePdf, bankSlipPdf }) => [
   {
     filename: `fatura-${invoiceId}.pdf`,
     content: invoicePdf,
@@ -145,6 +145,11 @@ const billingAttachments = ({ invoiceId, invoicePdf, dactePdf, bankSlipPdf }) =>
   ...(dactePdf ? [{
     filename: `dactes-fatura-${invoiceId}.pdf`,
     content: dactePdf,
+    contentType: 'application/pdf'
+  }] : []),
+  ...(nfsePdf ? [{
+    filename: `nota-fiscal-fatura-${invoiceId}.pdf`,
+    content: nfsePdf,
     contentType: 'application/pdf'
   }] : []),
   ...(bankSlipPdf ? [{
@@ -159,6 +164,7 @@ const billingEmailPreview = ({
   data,
   contact,
   dactePdf = null,
+  nfsePdf = null,
   bankSlipPdf = null,
   config = zohoConfig()
 }) => ({
@@ -172,6 +178,7 @@ const billingEmailPreview = ({
   attachments: [
     `fatura-${data.invoice.id}.pdf`,
     ...(dactePdf ? [`dactes-fatura-${data.invoice.id}.pdf`] : []),
+    ...(nfsePdf ? [`nota-fiscal-fatura-${data.invoice.id}.pdf`] : []),
     ...(bankSlipPdf ? [`boleto-fatura-${data.invoice.id}.pdf`] : [])
   ]
 });
@@ -182,6 +189,7 @@ const sendBillingEmail = async ({
   contact,
   invoicePdf,
   dactePdf = null,
+  nfsePdf = null,
   bankSlipPdf = null,
   clientReference = '',
   transport,
@@ -203,6 +211,7 @@ const sendBillingEmail = async ({
       invoiceId: data.invoice.id,
       invoicePdf,
       dactePdf,
+      nfsePdf,
       bankSlipPdf
     })
   });
