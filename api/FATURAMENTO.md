@@ -215,12 +215,15 @@ conferência**, sem tentativa automática que possa duplicar a cobrança.
 Ao reprocessar uma fatura que aguardava alguma pendência, o evento é definido
 pelo estado atual: vencida tem prioridade sobre perto do vencimento, e perto do
 vencimento tem prioridade sobre o envio inicial. O contador **Verificações** da
-fila inclui tanto a rotina horária quanto o botão **Verificar agora**.
+fila inclui tanto as quatro rotinas automáticas diárias quanto o botão
+**Verificar agora**.
 
-O plano Hobby da Vercel não executa cron a cada hora. O diretório
+O plano Hobby da Vercel não executa vários crons diários. O diretório
 `cloudflare/billing-cron` contém um Worker da Cloudflare configurado para chamar
-a rotina no início de cada hora. Troque o domínio em `wrangler.jsonc`, configure
-na Vercel um `BILLING_CRON_SECRET` aleatório com pelo menos 32 caracteres e
+a rotina às **07:00, 12:00, 16:00 e 22:00**, no horário de São Paulo. O cron do
+Cloudflare está expresso em UTC como `0 1,10,15,19 * * *`. Troque o domínio em
+`wrangler.jsonc` somente se o domínio de produção deixar de ser `www.twt.com.br`.
+Configure na Vercel um `BILLING_CRON_SECRET` aleatório com pelo menos 32 caracteres e
 cadastre exatamente o mesmo valor no Worker:
 
 ```powershell

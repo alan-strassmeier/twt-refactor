@@ -28,3 +28,15 @@ test('preserva as URLs públicas das rotas consolidadas', () => {
   assert.equal(rewrites.get('/api/faturamento/nfse-pdf'), '/api/faturamento/nfse?route=pdf');
   assert.equal(rewrites.get('/api/faturamento/nfse-xml'), '/api/faturamento/nfse?route=xml');
 });
+
+test('agenda a cobrança às 07h, 12h, 16h e 22h de São Paulo', () => {
+  const config = JSON.parse(fs.readFileSync(
+    path.join(root, 'cloudflare', 'billing-cron', 'wrangler.jsonc'),
+    'utf8'
+  ));
+  assert.deepEqual(config.triggers.crons, ['0 1,10,15,19 * * *']);
+  assert.equal(
+    config.vars.BILLING_ENDPOINT,
+    'https://www.twt.com.br/api/faturamento/cobranca?route=process'
+  );
+});
