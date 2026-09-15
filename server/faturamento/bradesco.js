@@ -257,17 +257,72 @@ const cleanText = (value) => String(value ?? '')
 const validationIssue = (value, fieldHint = '') => {
   if (typeof value === 'string') return fieldHint ? `${fieldHint}: ${cleanText(value)}` : cleanText(value);
   if (!value || typeof value !== 'object') return '';
-  const field = cleanText(value.campo || value.field || value.path || fieldHint);
+  const field = cleanText(
+    value.campo || value.field || value.path || value.codigoErro || value.codigo || fieldHint
+  );
   const message = cleanText(
-    value.mensagem || value.message || value.descricao || value.description || value.tipoRestricao
+    value.mensagem || value.message || value.descricaoErro || value.mensagemErro ||
+    value.descricao || value.description || value.tipoRestricao
   );
   return field && message ? `${field}: ${message}` : (message || field);
+};
+
+const normalizedDiagnosticKey = (value) => String(value || '')
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .replace(/[^A-Za-z0-9]/g, '')
+  .toLowerCase();
+
+const MESSAGE_KEYS = new Set([
+  'mensagem', 'message', 'descricao', 'description', 'descricaoerro', 'mensagemerro',
+  'detail', 'title', 'causa', 'motivo', 'reason'
+]);
+const CODE_KEYS = new Set(['codigo', 'code', 'codigoerro', 'errorcode', 'codigoretorno']);
+const FIELD_KEYS = new Set(['campo', 'field', 'path', 'propriedade', 'property']);
+
+const recursiveBradescoIssues = (payload) => {
+  const issues = [];
+  let visited = 0;
+  const visit = (value, depth = 0) => {
+    if (!value || depth > 6 || issues.length >= 5 || visited >= 100) return;
+    visited += 1;
+    if (Array.isArray(value)) {
+      value.slice(0, 20).forEach((item) => visit(item, depth + 1));
+      return;
+    }
+    if (typeof value !== 'object') return;
+
+    const entries = Object.entries(value);
+    const primitive = (keys) => entries.find(([key, item]) => (
+      keys.has(normalizedDiagnosticKey(key)) &&
+      ['string', 'number'].includes(typeof item)
+    ))?.[1];
+    const code = cleanText(primitive(CODE_KEYS));
+    const field = cleanText(primitive(FIELD_KEYS));
+    const message = cleanText(primitive(MESSAGE_KEYS));
+    if (message) issues.push([code || field, message].filter(Boolean).join(': '));
+
+    for (const [, item] of entries) {
+      if (item && typeof item === 'object') visit(item, depth + 1);
+    }
+  };
+  visit(payload);
+  return [...new Set(issues)].slice(0, 5);
 };
 
 const bradescoIssues = (payload) => {
   const issues = [];
   for (const container of [payload, payload?.data, payload?.error].filter(Boolean)) {
-    for (const key of ['errosValidacao', 'errors', 'erros', 'details', 'detalhes', 'lista']) {
+    for (const key of [
+      'errosValidacao',
+      'listaErros',
+      'listaErrosValidacao',
+      'errors',
+      'erros',
+      'details',
+      'detalhes',
+      'lista'
+    ]) {
       const values = container?.[key];
       if (Array.isArray(values)) {
         for (const value of values) {
@@ -286,8 +341,18 @@ const bradescoIssues = (payload) => {
       }
     }
   }
+  issues.push(...recursiveBradescoIssues(payload));
   return [...new Set(issues)].slice(0, 5);
 };
+
+const upstreamDiagnostic = (result, payload) => ({
+  contentType: cleanText(result?.headers?.['content-type'] || 'não informado'),
+  bodyBytes: Buffer.isBuffer(result?.body) ? result.body.length : 0,
+  payloadType: Array.isArray(payload) ? 'array' : (payload === null ? 'null' : typeof payload),
+  payloadKeys: payload && typeof payload === 'object' && !Array.isArray(payload)
+    ? Object.keys(payload).slice(0, 20).map((key) => cleanText(key)).filter(Boolean)
+    : []
+});
 
 const safeUpstreamMessage = (payload, fallback) => {
   const general = [
@@ -385,6 +450,7 @@ const bradescoHttpError = (result, payload, fallback) => {
     upstreamStatus: result.statusCode,
     receivedResponse: true,
     expose: clientError || permissionError,
+    upstreamDiagnostic: upstreamDiagnostic(result, payload),
     ...(bradescoIssues(payload).length ? { validationDetails: bradescoIssues(payload) } : {})
   });
 };
