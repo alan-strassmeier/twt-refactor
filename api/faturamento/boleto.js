@@ -33,6 +33,15 @@ module.exports = async (req, res) => {
   } catch (error) {
     const statusCode = Number(error.statusCode) || (error.name === 'AbortError' ? 504 : 502);
     if (statusCode >= 500) console.error('[faturamento:boleto]', error);
+    else if (statusCode === 422 && Number.isInteger(error.upstreamStatus)) {
+      console.warn('[faturamento:boleto]', {
+        message: error.message,
+        upstreamStatus: error.upstreamStatus,
+        ...(Array.isArray(error.validationDetails)
+          ? { details: error.validationDetails }
+          : {})
+      });
+    }
     sendJson(res, statusCode, {
       message: statusCode >= 500
         ? (error.expose ? error.message : 'Não foi possível gerar o boleto no banco configurado.')

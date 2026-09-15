@@ -146,6 +146,22 @@ test('expõe os campos rejeitados nas respostas de validação do Bradesco', () 
   assert.match(error.message, /Agencia: Numero de caracteres exatos nao atendidos/);
 });
 
+test('expõe código e descrição da lista de erros negociais do Bradesco', () => {
+  const error = bradescoHttpError({ statusCode: 422 }, {
+    listaErros: [{
+      codigoErro: 'CBCA0222',
+      descricaoErro: 'CLIENTE NAO TEM COBRANCA BRADESCO'
+    }]
+  }, 'O Bradesco recusou a emissão do boleto.');
+
+  assert.equal(error.statusCode, 422);
+  assert.equal(error.upstreamStatus, 422);
+  assert.deepEqual(error.validationDetails, [
+    'CBCA0222: CLIENTE NAO TEM COBRANCA BRADESCO'
+  ]);
+  assert.match(error.message, /CBCA0222: CLIENTE NAO TEM COBRANCA BRADESCO/);
+});
+
 test('não transforma falha OAuth do Bradesco em expiração da sessão do site', () => {
   const error = bradescoHttpError({ statusCode: 401 }, {
     error: 'invalid_client',

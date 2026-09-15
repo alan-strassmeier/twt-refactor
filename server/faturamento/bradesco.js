@@ -257,9 +257,12 @@ const cleanText = (value) => String(value ?? '')
 const validationIssue = (value, fieldHint = '') => {
   if (typeof value === 'string') return fieldHint ? `${fieldHint}: ${cleanText(value)}` : cleanText(value);
   if (!value || typeof value !== 'object') return '';
-  const field = cleanText(value.campo || value.field || value.path || fieldHint);
+  const field = cleanText(
+    value.campo || value.field || value.path || value.codigoErro || value.codigo || fieldHint
+  );
   const message = cleanText(
-    value.mensagem || value.message || value.descricao || value.description || value.tipoRestricao
+    value.mensagem || value.message || value.descricaoErro || value.mensagemErro ||
+    value.descricao || value.description || value.tipoRestricao
   );
   return field && message ? `${field}: ${message}` : (message || field);
 };
@@ -267,7 +270,16 @@ const validationIssue = (value, fieldHint = '') => {
 const bradescoIssues = (payload) => {
   const issues = [];
   for (const container of [payload, payload?.data, payload?.error].filter(Boolean)) {
-    for (const key of ['errosValidacao', 'errors', 'erros', 'details', 'detalhes', 'lista']) {
+    for (const key of [
+      'errosValidacao',
+      'listaErros',
+      'listaErrosValidacao',
+      'errors',
+      'erros',
+      'details',
+      'detalhes',
+      'lista'
+    ]) {
       const values = container?.[key];
       if (Array.isArray(values)) {
         for (const value of values) {
