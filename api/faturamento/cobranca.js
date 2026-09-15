@@ -15,7 +15,12 @@ const {
 const { fetchInvoices } = require('../../server/faturamento/brudam');
 const { findDoccobForInvoice } = require('../../server/faturamento/r2-doccob');
 const { getBankSlipRecord } = require('../../server/faturamento/boleto-store');
-const { isDslIssuer, isTwtIssuer } = require('../../server/faturamento/billing-rules');
+const {
+  TWT_BILLING_START_DATE,
+  isDslIssuer,
+  isTwtIssuer,
+  isTwtBillingEligible
+} = require('../../server/faturamento/billing-rules');
 const {
   invoiceControl,
   buildUnifiedIssues,
@@ -233,11 +238,13 @@ const handleInvoiceDetail = async (req, res, query) => {
       ...(doccobError ? { detail: doccobError } : {})
     };
   }
-  const twtBillingPaused = isTwtIssuer(
-    doccob?.invoice?.issuerCnpj || invoice.issuerDocument || invoice.issuerCnpj
-  );
-  const resendBlockedReason = twtBillingPaused
-    ? 'O envio de cobranças da TWT está pausado até a conclusão do fluxo bancário.'
+  const invoiceIssuer = doccob?.invoice?.issuerCnpj || invoice.issuerDocument || invoice.issuerCnpj;
+  const twtBeforeBillingStart = isTwtIssuer(invoiceIssuer) && !isTwtBillingEligible({
+    issuerCnpj: invoiceIssuer,
+    issuedAt: doccob?.invoice?.issuedAt || invoice.issuedAt
+  });
+  const resendBlockedReason = twtBeforeBillingStart
+    ? `Faturas TWT emitidas antes de ${TWT_BILLING_START_DATE.split('-').reverse().join('/')} não entram no fluxo automático.`
     : ['paid', 'cancelled'].includes(controls.financial.code)
     ? 'Somente faturas em aberto podem ser reenviadas.'
     : !doccob

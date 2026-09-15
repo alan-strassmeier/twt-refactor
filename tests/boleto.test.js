@@ -549,6 +549,74 @@ test('emite uma única vez e reaproveita o boleto registrado no Redis', async ()
   assert.equal(createCalls, 1);
 });
 
+test('reconcilia boleto Bradesco em revisão e aplica a atualização sem repetir o POST', async () => {
+  let record = {
+    state: 'review',
+    invoiceId: '11518',
+    issuerCnpj: '09123137000108',
+    bank: 'bradesco',
+    ourNumber: '00000021311',
+    startedAt: '2026-08-08T12:00:00.000Z'
+  };
+  let createCalls = 0;
+  let queryCalls = 0;
+  const dependencies = {
+    ...billingDependencies(),
+    getBankSlipRecord: async () => record,
+    saveBankSlipRecord: async (_invoiceId, value) => { record = value; },
+    bradescoConfig: () => ({
+      beneficiaryRoot: '09123137',
+      beneficiaryBranch: '0001',
+      beneficiaryControl: '08',
+      beneficiaryName: 'TWT AIRPACK SERVICOS AUX. DE TRANSP. AEREO LTDA',
+      beneficiaryTaxId: '09123137000108',
+      agency: '7218',
+      agencyDigit: '4',
+      account: '0000074',
+      accountDigit: '4',
+      productId: '09',
+      registrationNegotiation: '721800000000000074',
+      species: '4',
+      acceptance: '2',
+      monthlyInterestPercent: 4.5,
+      dailyInterestPercent: 0.15,
+      penaltyPercent: 3,
+      interestStartDays: '2',
+      penaltyStartDays: '2'
+    }),
+    createBradescoBankSlip: async () => {
+      createCalls += 1;
+      throw new Error('POST não deveria ser repetido');
+    },
+    queryBradescoBankSlip: async (ourNumber) => {
+      queryCalls += 1;
+      assert.equal(ourNumber, '00000021311');
+      return {
+        id: '00000021311',
+        registered: true,
+        ourNumber: '00000021311',
+        yourNumber: 'FAT11518',
+        wallet: '09',
+        amount: 1900,
+        dueDate: '2026-08-20',
+        digitableLine: '23797218029000000213011000007408715790000072461',
+        barCode: '23797157900000724617218090000002131100000740'
+      };
+    }
+  };
+
+  const result = await generateInvoiceBankSlip('11518', dependencies);
+  assert.equal(result.status, 'ready');
+  assert.equal(result.created, false);
+  assert.equal(result.amount, 1900);
+  assert.equal(result.dueAt, '2026-08-20');
+  assert.equal(record.state, 'ready');
+  assert.equal(record.amount, 1900);
+  assert.equal(record.dueAt, '2026-08-20');
+  assert.equal(queryCalls, 1);
+  assert.equal(createCalls, 0);
+});
+
 test('mantém bloqueio para conferência quando a resposta bancária é incerta', async () => {
   let record = null;
   const dependencies = {
