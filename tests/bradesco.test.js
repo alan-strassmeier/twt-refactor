@@ -147,7 +147,11 @@ test('expõe os campos rejeitados nas respostas de validação do Bradesco', () 
 });
 
 test('expõe código e descrição da lista de erros negociais do Bradesco', () => {
-  const error = bradescoHttpError({ statusCode: 422 }, {
+  const error = bradescoHttpError({
+    statusCode: 422,
+    headers: { 'content-type': 'application/json' },
+    body: Buffer.from('{"listaErros":[]}')
+  }, {
     listaErros: [{
       codigoErro: 'CBCA0222',
       descricaoErro: 'CLIENTE NAO TEM COBRANCA BRADESCO'
@@ -160,6 +164,26 @@ test('expõe código e descrição da lista de erros negociais do Bradesco', () 
     'CBCA0222: CLIENTE NAO TEM COBRANCA BRADESCO'
   ]);
   assert.match(error.message, /CBCA0222: CLIENTE NAO TEM COBRANCA BRADESCO/);
+  assert.deepEqual(error.upstreamDiagnostic, {
+    contentType: 'application/json',
+    bodyBytes: 17,
+    payloadType: 'object',
+    payloadKeys: ['listaErros']
+  });
+});
+
+test('localiza mensagem negocial em estruturas não documentadas sem expor o payload inteiro', () => {
+  const error = bradescoHttpError({ statusCode: 422 }, {
+    retorno: {
+      falhas: [{
+        Codigo_Retorno: 'CBCA0999',
+        Descricao_Erro: 'CAMPO INVALIDO'
+      }]
+    }
+  }, 'O Bradesco recusou a emissão do boleto.');
+
+  assert.deepEqual(error.validationDetails, ['CBCA0999: CAMPO INVALIDO']);
+  assert.match(error.message, /CBCA0999: CAMPO INVALIDO/);
 });
 
 test('não transforma falha OAuth do Bradesco em expiração da sessão do site', () => {

@@ -39,7 +39,8 @@ module.exports = async (req, res) => {
         upstreamStatus: error.upstreamStatus,
         ...(Array.isArray(error.validationDetails)
           ? { details: error.validationDetails }
-          : {})
+          : {}),
+        ...(error.upstreamDiagnostic ? { diagnostic: error.upstreamDiagnostic } : {})
       });
     }
     sendJson(res, statusCode, {
@@ -51,6 +52,9 @@ module.exports = async (req, res) => {
         : {}),
       ...(Number.isInteger(error.upstreamStatus)
         ? { upstreamStatus: error.upstreamStatus }
+        : {}),
+      ...(statusCode === 422 && error.upstreamDiagnostic
+        ? { diagnostic: error.upstreamDiagnostic }
         : {})
     });
   }
