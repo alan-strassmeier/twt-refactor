@@ -93,6 +93,7 @@
     invoiceControlGrid: document.getElementById('invoiceControlGrid'),
     invoiceDetailActionMessage: document.getElementById('invoiceDetailActionMessage'),
     invoiceDetailResend: document.getElementById('invoiceDetailResend'),
+    invoiceDetailBlock: document.getElementById('invoiceDetailBlock'),
     invoiceDetailDocuments: document.getElementById('invoiceDetailDocuments'),
     invoiceDetailWhatsApp: document.getElementById('invoiceDetailWhatsApp'),
     invoiceTimeline: document.getElementById('invoiceTimeline'),
@@ -351,6 +352,7 @@
   let invoiceDetailId = '';
   let invoiceDetailClientCnpj = '';
   let invoiceDetailWhatsappMessage = '';
+  let invoiceDetailBlocked = false;
 
   const invoicePdfUrl = (invoiceId) =>
     `/api/faturamento/fatura-pdf?id=${encodeURIComponent(invoiceId)}`;
@@ -835,9 +837,15 @@
     }));
     elements.invoiceDetailDocuments.disabled = false;
     const actions = payload.actions || {};
+    invoiceDetailBlocked = Boolean(actions.blocked);
     invoiceDetailClientCnpj = String(payload.invoice?.clientDocument || '').replace(/\D/g, '');
     elements.invoiceDetailResend.disabled = actions.canResend === false;
     elements.invoiceDetailResend.title = actions.resendBlockedReason || '';
+    elements.invoiceDetailBlock.disabled = false;
+    elements.invoiceDetailBlock.textContent = invoiceDetailBlocked ? 'Liberar envio' : 'Bloquear envio';
+    elements.invoiceDetailBlock.classList.toggle('danger-button', !invoiceDetailBlocked);
+    elements.invoiceDetailBlock.classList.toggle('button-quiet', invoiceDetailBlocked);
+    elements.invoiceDetailBlock.setAttribute('aria-pressed', String(invoiceDetailBlocked));
     invoiceDetailWhatsappMessage = String(actions.whatsappMessage || '');
     elements.invoiceDetailWhatsApp.disabled = !invoiceDetailWhatsappMessage;
     elements.invoiceDetailActionMessage.textContent = '';
@@ -857,6 +865,8 @@
     elements.invoiceDetailActionMessage.textContent = '';
     invoiceDetailClientCnpj = '';
     invoiceDetailWhatsappMessage = '';
+    invoiceDetailBlocked = false;
+    elements.invoiceDetailBlock.disabled = true;
     elements.invoiceDetail.hidden = false;
     document.body.classList.add('modal-open');
     elements.invoiceDetailClose.focus();
@@ -1542,6 +1552,32 @@
       elements.invoiceDetailResend.disabled = false;
     } finally {
       elements.invoiceDetailResend.textContent = originalText;
+    }
+  });
+  elements.invoiceDetailBlock.addEventListener('click', async () => {
+    if (elements.invoiceDetailBlock.disabled || !invoiceDetailId) return;
+    const nextBlocked = !invoiceDetailBlocked;
+    const action = nextBlocked ? 'bloquear' : 'liberar';
+    if (!window.confirm(`${nextBlocked ? 'Bloquear' : 'Liberar'} o envio da fatura ${invoiceDetailId}?`)) return;
+    elements.invoiceDetailBlock.disabled = true;
+    elements.invoiceDetailBlock.textContent = nextBlocked ? 'Bloqueando…' : 'Liberando…';
+    elements.invoiceDetailActionMessage.textContent = '';
+    try {
+      const result = await requestJson('/api/faturamento/cobranca?route=invoice-block', {
+        method: 'POST',
+        body: JSON.stringify({ invoiceId: invoiceDetailId, blocked: nextBlocked })
+      });
+      const refreshed = await requestJson(
+        `/api/faturamento/cobranca?route=invoice-detail&id=${encodeURIComponent(invoiceDetailId)}`
+      );
+      if (!elements.invoiceDetail.hidden) renderInvoiceDetail(refreshed);
+      elements.invoiceDetailActionMessage.dataset.tone = 'success';
+      elements.invoiceDetailActionMessage.textContent = result.message;
+    } catch (error) {
+      elements.invoiceDetailActionMessage.dataset.tone = 'error';
+      elements.invoiceDetailActionMessage.textContent = `Não foi possível ${action} o envio: ${error.message}`;
+      elements.invoiceDetailBlock.disabled = false;
+      elements.invoiceDetailBlock.textContent = invoiceDetailBlocked ? 'Liberar envio' : 'Bloquear envio';
     }
   });
   elements.invoiceDetailWhatsApp.addEventListener('click', async () => {

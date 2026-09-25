@@ -576,12 +576,38 @@
       status.className = `collection-status status-${record.status || 'unknown'}`;
       if (record.message) status.title = record.message;
       const action = document.createElement('td');
+      const actionButtons = document.createElement('div');
+      actionButtons.className = 'collection-log-actions';
       const previewButton = document.createElement('button');
       previewButton.type = 'button';
       previewButton.className = 'button button-quiet log-preview-button';
       previewButton.textContent = 'Visualizar';
       previewButton.addEventListener('click', () => openEmailLogModal(record, previewButton));
-      action.appendChild(previewButton);
+      const deleteButton = document.createElement('button');
+      deleteButton.type = 'button';
+      deleteButton.className = 'button danger-button log-delete-button';
+      deleteButton.textContent = 'Excluir';
+      deleteButton.disabled = !record.id;
+      deleteButton.addEventListener('click', async () => {
+        if (!record.id || !window.confirm('Excluir somente este registro do log?')) return;
+        deleteButton.disabled = true;
+        setLoading(true);
+        try {
+          const result = await requestJson(endpoint('logs'), {
+            method: 'DELETE',
+            body: JSON.stringify({ id: record.id })
+          });
+          await loadLogs({ page: state.logPage });
+          setMessage(result.message || 'Registro de log excluído.', 'success');
+        } catch (error) {
+          setMessage(error.message, 'error');
+          deleteButton.disabled = false;
+        } finally {
+          setLoading(false);
+        }
+      });
+      actionButtons.append(previewButton, deleteButton);
+      action.appendChild(actionButtons);
       row.appendChild(action);
       return row;
     });
@@ -777,7 +803,7 @@
       const result = await requestJson(endpoint('process'), { method: 'POST' });
       await Promise.all([loadPending(), loadLogs()]);
       setMessage(
-        `Verificação concluída: ${result.sent} e-mail(s) enviado(s), ${result.pendingDoccob} aguardando DOCCOB e ${result.errors.length} erro(s).`,
+        `Verificação concluída: ${result.sent} e-mail(s) enviado(s), ${result.pendingDoccob} aguardando DOCCOB, ${result.blocked || 0} fatura(s) bloqueada(s) e ${result.errors.length} erro(s).`,
         result.errors.length ? 'warning' : 'success'
       );
     } catch (error) {

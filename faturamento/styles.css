@@ -1672,6 +1672,18 @@ body.modal-open {
 .pending-table { min-width: 1080px; }
 .collection-log-table { min-width: 1080px; }
 
+.collection-log-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.collection-log-actions .button {
+  min-height: 36px;
+  padding: 7px 11px;
+}
+
 .pending-summary {
   display: flex;
   flex-wrap: wrap;
@@ -2030,7 +2042,7 @@ body.modal-open {
 
 .invoice-detail-actions {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
   margin: 8px 0 26px;
 }

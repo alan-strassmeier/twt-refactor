@@ -7,10 +7,10 @@
   <meta name="theme-color" content="#112a40">
   <title>Faturamento | TWT Airpack</title>
   <link rel="icon" href="/favicon.ico">
-  <link rel="stylesheet" href="/faturamento/styles.css?v=15">
+  <link rel="stylesheet" href="/faturamento/styles.css?v=16">
   <script src="/faturamento/sort.js?v=1" defer></script>
-  <script src="/faturamento/app.js?v=20" defer></script>
-  <script src="/faturamento/cobranca.js?v=4" defer></script>
+  <script src="/faturamento/app.js?v=21" defer></script>
+  <script src="/faturamento/cobranca.js?v=5" defer></script>
 </head>
 <body>
   <div class="page-shell">
@@ -371,11 +371,11 @@
                 <input name="cnpj" type="text" inputmode="numeric" maxlength="18" placeholder="00.000.000/0000-00">
               </label>
               <button class="button button-primary" type="submit">Filtrar logs</button>
-              <button class="button button-quiet" id="clearCollectionLogs" type="button">Limpar</button>
+              <button class="button button-quiet" id="clearCollectionLogs" type="button">Limpar filtros</button>
             </form>
             <div class="table-scroll collection-table-scroll">
               <table class="collection-table collection-log-table">
-                <thead><tr><th>Data e hora</th><th>Fatura</th><th>Cliente</th><th>Destinatário</th><th>Evento</th><th>Status</th><th>E-mail</th></tr></thead>
+                <thead><tr><th>Data e hora</th><th>Fatura</th><th>Cliente</th><th>Destinatário</th><th>Evento</th><th>Status</th><th>Ações</th></tr></thead>
                 <tbody id="collectionLogRows"></tbody>
               </table>
               <div class="collection-empty" id="collectionLogsEmpty" hidden>
@@ -552,6 +552,7 @@
           <button class="button button-primary" id="invoiceDetailResend" type="button">Enviar cobrança novamente</button>
           <button class="button button-primary" id="invoiceDetailDocuments" type="button">Abrir documentos</button>
           <button class="button button-quiet" id="invoiceDetailWhatsApp" type="button">Copiar mensagem para WhatsApp</button>
+          <button class="button danger-button" id="invoiceDetailBlock" type="button">Bloquear envio</button>
         </div>
         <section class="invoice-timeline" aria-labelledby="invoiceTimelineTitle">
           <h3 id="invoiceTimelineTitle">Histórico</h3>

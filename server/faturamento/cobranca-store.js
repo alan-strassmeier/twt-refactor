@@ -15,6 +15,7 @@ const KEYS = Object.freeze({
   deliveryReferences: 'faturamento:cobranca:referencias:v1',
   webhookEvents: 'faturamento:cobranca:webhook-eventos:v1',
   logs: 'faturamento:cobranca:logs:v1',
+  invoiceBlocks: 'faturamento:cobranca:faturas-bloqueadas:v1',
   overdueCursor: 'faturamento:cobranca:cursor:vencidas:v1',
   processing: 'faturamento:cobranca:processamento:v1',
   lastRun: 'faturamento:cobranca:ultima-execucao:v1'
@@ -42,6 +43,14 @@ const requiredText = (value, label, maximum) => {
   const text = String(value || '').trim().replace(/\s+/g, ' ');
   if (!text) throw Object.assign(new Error(`${label} é obrigatório.`), { statusCode: 422 });
   return text.slice(0, maximum);
+};
+
+const requiredInvoiceId = (value) => {
+  const invoiceId = String(value || '').trim().replace(/^0+(?=\d)/, '');
+  if (!/^\d{1,20}$/.test(invoiceId) || Number(invoiceId) <= 0) {
+    throw Object.assign(new Error('Informe o número da fatura.'), { statusCode: 422 });
+  }
+  return invoiceId;
 };
 
 const normalizedEmail = (value) => {
@@ -271,6 +280,47 @@ const addLog = async (record, command = redisCommand) => {
   return log;
 };
 
+const deleteLog = async (id, command = redisCommand) => {
+  const logId = requiredText(id, 'Log', 128);
+  const values = await command('ZREVRANGE', KEYS.logs, '0', '999') || [];
+  const selected = values.find((value) => parseRecord(value)?.id === logId);
+  if (!selected) return { deleted: 0, id: logId };
+
+  const reference = String(parseRecord(selected)?.clientReference || '');
+  const members = reference
+    ? values.filter((value) => String(parseRecord(value)?.clientReference || '') === reference)
+    : [selected];
+  const deleted = Number(await command('ZREM', KEYS.logs, ...members)) || 0;
+  return { deleted, id: logId };
+};
+
+const getInvoiceBlock = async (invoiceId, command = redisCommand) => {
+  const normalizedId = requiredInvoiceId(invoiceId);
+  return parseRecord(await command('HGET', KEYS.invoiceBlocks, normalizedId));
+};
+
+const setInvoiceBlocked = async (invoiceId, blocked, command = redisCommand) => {
+  const normalizedId = requiredInvoiceId(invoiceId);
+  if (typeof blocked !== 'boolean') {
+    throw Object.assign(new Error('Informe se o envio da fatura deve ser bloqueado.'), { statusCode: 422 });
+  }
+  if (!blocked) {
+    await command('HDEL', KEYS.invoiceBlocks, normalizedId);
+    return { invoiceId: normalizedId, blocked: false };
+  }
+  const record = {
+    invoiceId: normalizedId,
+    blocked: true,
+    blockedAt: new Date().toISOString()
+  };
+  await command('HSET', KEYS.invoiceBlocks, normalizedId, JSON.stringify(record));
+  return record;
+};
+
+const listBlockedInvoiceIds = async (command = redisCommand) => (
+  (await command('HKEYS', KEYS.invoiceBlocks) || []).map(String)
+);
+
 const saoPauloDate = (value) => {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '';
@@ -355,6 +405,7 @@ module.exports = {
   KEYS,
   parseRecord,
   requiredCnpj,
+  requiredInvoiceId,
   normalizedEmail,
   normalizedCategory,
   normalizedContact,
@@ -379,6 +430,10 @@ module.exports = {
   claimWebhookEvent,
   releaseWebhookEvent,
   addLog,
+  deleteLog,
+  getInvoiceBlock,
+  setInvoiceBlocked,
+  listBlockedInvoiceIds,
   saoPauloDate,
   filteredLogs,
   listLogs,
