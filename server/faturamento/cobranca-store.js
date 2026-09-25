@@ -215,7 +215,7 @@ const savePending = (record, command = redisCommand) => command(
 );
 
 const removePending = (invoiceId, command = redisCommand) =>
-  command('HDEL', KEYS.pending, String(invoiceId));
+  command('HDEL', KEYS.pending, requiredInvoiceId(invoiceId));
 
 const deliveryField = (event, invoiceId, email) => [
   String(event || '').toLocaleLowerCase('pt-BR').replace(/[^a-z0-9_]/g, '').slice(0, 48),

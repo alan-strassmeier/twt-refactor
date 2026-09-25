@@ -1737,6 +1737,18 @@ body.modal-open {
 .issue-priority.priority-medium { color: var(--blue-600); }
 .issue-action { white-space: nowrap; }
 
+.pending-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.pending-row-actions .button {
+  min-height: 36px;
+  padding: 7px 11px;
+}
+
 .collection-table td small {
   display: block;
   margin-top: 3px;

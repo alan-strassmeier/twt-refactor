@@ -20,6 +20,7 @@ const {
   getInvoiceBlock,
   setInvoiceBlocked,
   listBlockedInvoiceIds,
+  removePending,
   claimProcessingRun,
   releaseProcessingRun
 } = require('../server/faturamento/cobranca-store');
@@ -1040,6 +1041,16 @@ test('persiste e remove o bloqueio de envio por fatura', async () => {
   assert.equal(await getInvoiceBlock('11756', command), null);
 });
 
+test('remove somente a pendência da fatura informada', async () => {
+  const calls = [];
+  const deleted = await removePending('011756', async (...args) => {
+    calls.push(args);
+    return 1;
+  });
+  assert.equal(deleted, 1);
+  assert.deepEqual(calls[0].slice(-1), ['11756']);
+});
+
 test('valida a assinatura HMAC do formulário enviado pelo ZeptoMail', () => {
   const payload = {
     event_name: ['delivered'],
@@ -1363,8 +1374,12 @@ test('fila unificada prioriza vencidas e reúne falhas de documentos e entrega',
   assert.equal(issues[0].invoiceId, '100');
   assert.equal(issues[0].priority, 'critical');
   assert.equal(issues[0].action, 'documents');
+  assert.equal(issues[0].source, 'pending');
+  assert.equal(issues[0].recordId, '100');
   assert.equal(issues[1].type, 'email');
   assert.equal(issues[1].action, 'logs');
+  assert.equal(issues[1].source, 'log');
+  assert.equal(issues[1].recordId, 'log-1');
 });
 
 test('fila direciona boleto e falha geral para a ação contextual correta', () => {
@@ -1462,6 +1477,7 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(source, /billing:open-invoice-detail/);
   assert.match(source, /Conferir documentos/);
   assert.match(source, /Conferir boleto/);
+  assert.match(source, /Remover somente a pendência da fatura/);
   assert.match(source, /pendingFilter: 'all'/);
   assert.match(source, /className = 'pending-summary-filter'/);
   assert.match(source, /aria-pressed/);
@@ -1473,6 +1489,7 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(apiSource, /query\.route === 'contacts-sync'/);
   assert.match(apiSource, /query\.route === 'invoice-detail'/);
   assert.match(apiSource, /query\.route === 'invoice-block'/);
+  assert.match(apiSource, /store\.removePending\(body\.invoiceId\)/);
   assert.match(apiSource, /query\.route === 'resend'/);
   assert.match(apiSource, /req\.method === 'GET' \|\| req\.method === 'HEAD'/);
   assert.equal(fs.existsSync(path.join(root, 'api', 'faturamento', 'cobranca.js')), true);

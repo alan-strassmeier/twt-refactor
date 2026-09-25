@@ -440,12 +440,44 @@
       appendCell(row, formatDate(record.dueAt));
       appendCell(row, formatDateTime(record.updatedAt));
       const actionCell = document.createElement('td');
+      const actionButtons = document.createElement('div');
+      actionButtons.className = 'pending-row-actions';
       const action = document.createElement('button');
       action.type = 'button';
       action.className = 'button button-quiet issue-action';
       action.textContent = actionLabels[record.action] || 'Conferir';
       action.addEventListener('click', (event) => navigateIssue(record, event.currentTarget));
-      actionCell.appendChild(action);
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'button danger-button issue-remove';
+      remove.textContent = 'Remover';
+      remove.disabled = record.source === 'log' && !record.recordId;
+      remove.addEventListener('click', async () => {
+        if (!window.confirm(
+          `Remover somente a pendência da fatura ${record.invoiceId}? Ela poderá reaparecer se a causa continuar.`
+        )) return;
+        remove.disabled = true;
+        setLoading(true);
+        try {
+          const result = await requestJson(endpoint('pending'), {
+            method: 'DELETE',
+            body: JSON.stringify({
+              source: record.source,
+              recordId: record.recordId,
+              invoiceId: record.invoiceId
+            })
+          });
+          await loadPending();
+          setMessage(result.message || 'Pendência removida.', 'success');
+        } catch (error) {
+          setMessage(error.message, 'error');
+          remove.disabled = false;
+        } finally {
+          setLoading(false);
+        }
+      });
+      actionButtons.append(action, remove);
+      actionCell.appendChild(actionButtons);
       row.appendChild(actionCell);
       return row;
     });

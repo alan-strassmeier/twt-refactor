@@ -151,8 +151,29 @@ const handleContactSync = async (req, res) => {
 
 const handlePending = async (req, res) => {
   if (!requireSession(req, res)) return;
+  if (req.method === 'DELETE') {
+    if (!requireSameOrigin(req, res)) return;
+    const body = await parseJsonBody(req, 4096);
+    let deleted = false;
+    if (body.source === 'pending') {
+      deleted = Number(await store.removePending(body.invoiceId)) > 0;
+    } else if (body.source === 'log') {
+      const result = await store.deleteLog(body.recordId);
+      deleted = result.deleted > 0;
+    } else {
+      sendJson(res, 422, { message: 'Pendência inválida.' });
+      return;
+    }
+    sendJson(res, deleted ? 200 : 404, {
+      deleted,
+      message: deleted
+        ? 'Pendência removida.'
+        : 'Pendência não encontrada ou já removida.'
+    });
+    return;
+  }
   if (req.method !== 'GET') {
-    res.setHeader('Allow', 'GET');
+    res.setHeader('Allow', 'GET, DELETE');
     sendJson(res, 405, { message: 'Método não permitido.' });
     return;
   }
