@@ -4,9 +4,9 @@
   "main": "worker.js",
   "compatibility_date": "2026-09-10",
   "triggers": {
-    "crons": ["0 * * * *"]
+    "crons": ["0 1,10,15,19 * * *"]
   },
   "vars": {
-    "BILLING_ENDPOINT": "https://SEU-DOMINIO/api/faturamento/cobranca?route=process"
+    "BILLING_ENDPOINT": "https://www.twt.com.br/api/faturamento/cobranca?route=process"
   }
 }

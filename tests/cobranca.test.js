@@ -16,6 +16,10 @@ const {
   deliveryField,
   saoPauloDate: logDate,
   listLogs,
+  deleteLog,
+  getInvoiceBlock,
+  setInvoiceBlocked,
+  listBlockedInvoiceIds,
   claimProcessingRun,
   releaseProcessingRun
 } = require('../server/faturamento/cobranca-store');
@@ -539,6 +543,24 @@ test('mantém a fatura na fila enquanto o DOCCOB não chegou', async () => {
   assert.equal(context.summary.pendingDoccob, 1);
 });
 
+test('fatura bloqueada não busca DOCCOB nem inicia envio', async () => {
+  const calls = [];
+  const context = processorContext({
+    getInvoiceBlock: async () => ({ invoiceId: '11756', blocked: true }),
+    findDoccobForInvoice: async () => { calls.push('doccob'); },
+    fetchInvoicePdfData: async () => { calls.push('fatura'); },
+    sendBillingEmail: async () => { calls.push('email'); }
+  });
+  const result = await processInvoiceEvent({
+    event: EVENT_TYPES.initial,
+    invoice: { id: '11756', clientDocument: '11280282000144', client: 'BHZ' },
+    context
+  });
+  assert.deepEqual(result, { skipped: 'blocked' });
+  assert.deepEqual(calls, []);
+  assert.equal(context.summary.blocked, 1);
+});
+
 test('ignora cobrança da TWT anterior ao corte sem gerar boleto, documento ou log', async () => {
   const calls = [];
   const removed = [];
@@ -977,6 +999,47 @@ test('exibe somente o estado mais recente de cada envio correlacionado', async (
   assert.equal(result.total, 2);
 });
 
+test('exclui somente o envio de log selecionado e seus estados correlacionados', async () => {
+  const records = [
+    JSON.stringify({ id: 'novo', clientReference: 'ref-1', status: 'delivered' }),
+    JSON.stringify({ id: 'antigo', clientReference: 'ref-1', status: 'submitted' }),
+    JSON.stringify({ id: 'outro', clientReference: 'ref-2', status: 'delivered' })
+  ];
+  let removed = [];
+  const result = await deleteLog('novo', async (command, key, ...values) => {
+    if (command === 'ZREVRANGE') return records;
+    assert.equal(command, 'ZREM');
+    assert.match(key, /logs/);
+    removed = values;
+    return values.length;
+  });
+  assert.equal(result.deleted, 2);
+  assert.deepEqual(removed, records.slice(0, 2));
+});
+
+test('persiste e remove o bloqueio de envio por fatura', async () => {
+  const blocks = new Map();
+  const command = async (operation, _key, field, value) => {
+    if (operation === 'HSET') {
+      blocks.set(field, value);
+      return 1;
+    }
+    if (operation === 'HGET') return blocks.get(field) || null;
+    if (operation === 'HKEYS') return [...blocks.keys()];
+    if (operation === 'HDEL') return blocks.delete(field) ? 1 : 0;
+    throw new Error(`Comando inesperado: ${operation}`);
+  };
+  const blocked = await setInvoiceBlocked('011756', true, command);
+  assert.equal(blocked.invoiceId, '11756');
+  assert.equal((await getInvoiceBlock('11756', command)).blocked, true);
+  assert.deepEqual(await listBlockedInvoiceIds(command), ['11756']);
+  assert.deepEqual(await setInvoiceBlocked('11756', false, command), {
+    invoiceId: '11756',
+    blocked: false
+  });
+  assert.equal(await getInvoiceBlock('11756', command), null);
+});
+
 test('valida a assinatura HMAC do formulário enviado pelo ZeptoMail', () => {
   const payload = {
     event_name: ['delivered'],
@@ -1129,6 +1192,7 @@ test('reenvio manual ignora a trava do envio anterior e cria referência exclusi
         }] : []
       };
     },
+    getInvoiceBlock: async () => null,
     listPending: async () => [],
     findDoccobForInvoice: async () => ({}),
     fetchInvoicePdfData: async () => invoiceData({ type: 'ted_doc' }),
@@ -1159,6 +1223,29 @@ test('reenvio manual ignora a trava do envio anterior e cria referência exclusi
   assert.match(references[0].reference, /^twt-initial-11756-[a-f0-9]{16}$/);
 });
 
+test('reenvio manual respeita o bloqueio da fatura', async () => {
+  let doccobLookups = 0;
+  await assert.rejects(() => resendBillingInvoice('11756', {
+    transport: {},
+    fetchInvoice: async () => ({
+      invoices: [{
+        id: '11756',
+        clientDocument: '11280282000144',
+        balance: 100,
+        status: 0,
+        statusLabel: 'Em aberto'
+      }]
+    }),
+    getInvoiceBlock: async () => ({ invoiceId: '11756', blocked: true }),
+    findDoccobForInvoice: async () => { doccobLookups += 1; }
+  }), (error) => {
+    assert.equal(error.statusCode, 409);
+    assert.match(error.message, /bloqueado manualmente/i);
+    return true;
+  });
+  assert.equal(doccobLookups, 0);
+});
+
 test('reenvio manual não inicia envio sem destinatário ativo', async () => {
   await assert.rejects(() => resendBillingInvoice('11756', {
     transport: {},
@@ -1176,6 +1263,7 @@ test('reenvio manual não inicia envio sem destinatário ativo', async () => {
         statusLabel: 'Em aberto'
       }]
     }),
+    getInvoiceBlock: async () => null,
     getCategory: async () => ({
       contacts: [{ email: 'financeiro@example.com', enabled: false }]
     }),
@@ -1212,6 +1300,7 @@ test('reenvio manual bloqueia fatura TWT anterior ao início da automação', as
         statusLabel: 'Em aberto'
       }]
     }),
+    getInvoiceBlock: async () => null,
     listPending: async () => [],
     sendBillingEmail: async () => { sent = true; },
     removePending: async () => {}
@@ -1347,6 +1436,7 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(html, /id="emailLogBody"/);
   assert.match(html, /id="invoiceDetail"/);
   assert.match(html, /id="invoiceDetailResend"/);
+  assert.match(html, /id="invoiceDetailBlock"/);
   assert.match(html, /id="invoiceDetailDocuments"/);
   assert.match(html, /id="invoiceDetailWhatsApp"/);
   assert.match(html, /id="pendingIssueSummary"/);
@@ -1359,6 +1449,7 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(source, /const filters = logFilters\(\);[\s\S]*setLoading\(true\)/);
   assert.doesNotMatch(source, /window\.confirm\(`Excluir \$\{category\.name\}/);
   assert.match(source, /openEmailLogModal\(record, previewButton\)/);
+  assert.match(source, /Excluir somente este registro do log/);
   assert.match(source, /Atualizar Contatos/);
   assert.match(source, /Envio ✔️/);
   assert.match(source, /Envio ❌/);
@@ -1376,10 +1467,12 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(source, /aria-pressed/);
   assert.match(source, /record\.priority === 'critical'/);
   assert.match(appSource, /route=resend/);
+  assert.match(appSource, /route=invoice-block/);
   assert.match(appSource, /navigator\.clipboard/);
   assert.match(apiSource, /query\.route === 'webhook'/);
   assert.match(apiSource, /query\.route === 'contacts-sync'/);
   assert.match(apiSource, /query\.route === 'invoice-detail'/);
+  assert.match(apiSource, /query\.route === 'invoice-block'/);
   assert.match(apiSource, /query\.route === 'resend'/);
   assert.match(apiSource, /req\.method === 'GET' \|\| req\.method === 'HEAD'/);
   assert.equal(fs.existsSync(path.join(root, 'api', 'faturamento', 'cobranca.js')), true);

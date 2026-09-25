@@ -194,11 +194,12 @@ const handleInvoiceDetail = async (req, res, query) => {
     return;
   }
   const clientCnpj = String(invoice.clientDocument || '').replace(/\D/g, '');
-  const [pendingRecords, logs, bankRecord, category] = await Promise.all([
+  const [pendingRecords, logs, bankRecord, category, invoiceBlock] = await Promise.all([
     store.listPending(),
     store.filteredLogs({ invoiceId }),
     getBankSlipRecord(invoiceId),
-    clientCnpj.length === 14 ? store.getCategory(clientCnpj) : Promise.resolve(null)
+    clientCnpj.length === 14 ? store.getCategory(clientCnpj) : Promise.resolve(null),
+    store.getInvoiceBlock(invoiceId)
   ]);
   const pending = pendingRecords.find((record) => String(record.invoiceId) === invoiceId) || null;
   let doccob = null;
@@ -239,11 +240,22 @@ const handleInvoiceDetail = async (req, res, query) => {
     };
   }
   const invoiceIssuer = doccob?.invoice?.issuerCnpj || invoice.issuerDocument || invoice.issuerCnpj;
+  const blocked = Boolean(invoiceBlock?.blocked);
+  if (blocked) {
+    controls.collection = {
+      code: 'blocked',
+      label: 'Envio bloqueado',
+      tone: 'danger',
+      detail: 'Esta fatura não será enviada pelo processamento automático nem pelo reenvio manual.'
+    };
+  }
   const twtBeforeBillingStart = isTwtIssuer(invoiceIssuer) && !isTwtBillingEligible({
     issuerCnpj: invoiceIssuer,
     issuedAt: doccob?.invoice?.issuedAt || invoice.issuedAt
   });
-  const resendBlockedReason = twtBeforeBillingStart
+  const resendBlockedReason = blocked
+    ? 'O envio desta fatura está bloqueado manualmente.'
+    : twtBeforeBillingStart
     ? `Faturas TWT emitidas antes de ${TWT_BILLING_START_DATE.split('-').reverse().join('/')} não entram no fluxo automático.`
     : ['paid', 'cancelled'].includes(controls.financial.code)
     ? 'Somente faturas em aberto podem ser reenviadas.'
@@ -267,9 +279,11 @@ const handleInvoiceDetail = async (req, res, query) => {
       createdAt: bankRecord.createdAt || bankRecord.startedAt || bankRecord.reviewedAt || ''
     } : null,
     pending,
+    collectionBlock: invoiceBlock,
     actions: {
       canResend: !resendBlockedReason,
       resendBlockedReason,
+      blocked,
       whatsappMessage: billingWhatsappText(invoice)
     },
     timeline: buildInvoiceTimeline({ invoice, pending, logs, bankRecord })
@@ -278,19 +292,47 @@ const handleInvoiceDetail = async (req, res, query) => {
 
 const handleLogs = async (req, res, query) => {
   if (!requireSession(req, res)) return;
-  if (req.method !== 'GET') {
-    res.setHeader('Allow', 'GET');
+  if (req.method === 'GET') {
+    const result = await store.listLogs({
+      invoiceId: query.invoiceId,
+      date: query.date,
+      cnpj: query.cnpj,
+      page: query.page,
+      limit: query.limit
+    });
+    sendJson(res, 200, result);
+    return;
+  }
+  if (req.method === 'DELETE') {
+    if (!requireSameOrigin(req, res)) return;
+    const body = await parseJsonBody(req, 4096);
+    const result = await store.deleteLog(body.id);
+    sendJson(res, result.deleted ? 200 : 404, {
+      ...result,
+      message: result.deleted ? 'Registro de log excluído.' : 'Registro de log não encontrado.'
+    });
+    return;
+  }
+  res.setHeader('Allow', 'GET, DELETE');
+  sendJson(res, 405, { message: 'Método não permitido.' });
+};
+
+const handleInvoiceBlock = async (req, res) => {
+  if (!requireSession(req, res)) return;
+  if (!requireSameOrigin(req, res)) return;
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', 'POST');
     sendJson(res, 405, { message: 'Método não permitido.' });
     return;
   }
-  const result = await store.listLogs({
-    invoiceId: query.invoiceId,
-    date: query.date,
-    cnpj: query.cnpj,
-    page: query.page,
-    limit: query.limit
+  const body = await parseJsonBody(req, 4096);
+  const result = await store.setInvoiceBlocked(body.invoiceId, body.blocked);
+  sendJson(res, 200, {
+    ...result,
+    message: result.blocked
+      ? `Envio da fatura ${result.invoiceId} bloqueado.`
+      : `Envio da fatura ${result.invoiceId} liberado.`
   });
-  sendJson(res, 200, result);
 };
 
 const handleProcess = async (req, res) => {
@@ -324,6 +366,7 @@ const handleProcess = async (req, res) => {
       scanned: result.scanned,
       processed: result.processed,
       sent: result.sent,
+      blocked: result.blocked,
       errors: result.errors.length
     };
     await store.saveLastRun(run);
@@ -424,6 +467,7 @@ module.exports = async (req, res) => {
     if (query.route === 'contacts-sync') return await handleContactSync(req, res);
     if (query.route === 'pending') return await handlePending(req, res);
     if (query.route === 'invoice-detail') return await handleInvoiceDetail(req, res, query);
+    if (query.route === 'invoice-block') return await handleInvoiceBlock(req, res);
     if (query.route === 'logs') return await handleLogs(req, res, query);
     if (query.route === 'resend') return await handleResend(req, res);
     if (query.route === 'process') return await handleProcess(req, res);

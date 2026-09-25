@@ -320,6 +320,14 @@ const existingDeliveryPlan = async ({ event, invoiceId, category, context }) => 
 
 const processInvoiceEvent = async ({ event, invoice, context }) => {
   const now = context.now().toISOString();
+  const invoiceId = String(invoice.id);
+  const blocked = context.blockedInvoiceIds?.has(invoiceId)
+    || (typeof context.getInvoiceBlock === 'function'
+      && Boolean((await context.getInvoiceBlock(invoiceId))?.blocked));
+  if (blocked) {
+    context.summary.blocked = Number(context.summary.blocked || 0) + 1;
+    return { skipped: 'blocked' };
+  }
   if (context.doccobPendingIds?.has(String(invoice.id))) return;
   const listedIssuer = invoice.issuerDocument || invoice.issuerCnpj;
   if (shouldSkipTwtBeforeBillingStart({ issuerCnpj: listedIssuer, issuedAt: invoice.issuedAt })) {
@@ -635,6 +643,7 @@ const createProcessorContext = ({
   emailConfig,
   transport,
   manualResend: Boolean(dependencies.manualResend),
+  blockedInvoiceIds: dependencies.blockedInvoiceIds || new Set(),
   sentInvoiceIds: new Set(),
   doccobPendingIds: new Set(),
   findDoccobForInvoice: dependencies.findDoccobForInvoice || findDoccobForInvoice,
@@ -659,7 +668,8 @@ const createProcessorContext = ({
   claimDelivery: dependencies.claimDelivery || store.claimDelivery,
   saveDelivery: dependencies.saveDelivery || store.saveDelivery,
   saveDeliveryReference: dependencies.saveDeliveryReference || store.saveDeliveryReference,
-  addLog: dependencies.addLog || store.addLog
+  addLog: dependencies.addLog || store.addLog,
+  getInvoiceBlock: dependencies.getInvoiceBlock || store.getInvoiceBlock
 });
 
 const resendBillingInvoice = async (invoiceId, dependencies = {}) => {
@@ -695,6 +705,12 @@ const resendBillingInvoice = async (invoiceId, dependencies = {}) => {
       expose: true
     });
   }
+  if ((await (dependencies.getInvoiceBlock || store.getInvoiceBlock)(normalizedId))?.blocked) {
+    throw Object.assign(new Error('O envio desta fatura está bloqueado manualmente.'), {
+      statusCode: 409,
+      expose: true
+    });
+  }
   if (!isPendingInvoice(invoice)) {
     throw Object.assign(new Error('Somente faturas em aberto podem ser reenviadas.'), {
       statusCode: 409,
@@ -718,6 +734,7 @@ const resendBillingInvoice = async (invoiceId, dependencies = {}) => {
     pendingDoccob: 0,
     waitingContacts: 0,
     skippedTwt: 0,
+    blocked: 0,
     review: 0,
     errors: [],
     stoppedByLimit: false
@@ -758,6 +775,12 @@ const resendBillingInvoice = async (invoiceId, dependencies = {}) => {
     throw Object.assign(new Error(
       `Faturas TWT emitidas antes de ${TWT_BILLING_START_DATE.split('-').reverse().join('/')} não entram no fluxo automático.`
     ), { statusCode: 409, expose: true });
+  }
+  if (outcome?.skipped === 'blocked') {
+    throw Object.assign(new Error('O envio desta fatura está bloqueado manualmente.'), {
+      statusCode: 409,
+      expose: true
+    });
   }
   if (summary.pendingDoccob) {
     throw Object.assign(new Error('O DOCCOB ainda não foi localizado. A cobrança não foi reenviada.'), {
@@ -815,6 +838,10 @@ const runBillingCollection = async (dependencies = {}) => {
     overdue: overdueScan.invoices,
     currentDate
   });
+  const blockedInvoiceIds = new Set(
+    await (dependencies.listBlockedInvoiceIds || store.listBlockedInvoiceIds)()
+  );
+  const activeQueue = queue.filter(({ invoice }) => !blockedInvoiceIds.has(String(invoice.id)));
 
   const summary = {
     source: dependencies.source === 'automatic' ? 'automatic' : 'manual',
@@ -828,6 +855,7 @@ const runBillingCollection = async (dependencies = {}) => {
     pendingDoccob: 0,
     waitingContacts: 0,
     skippedTwt: 0,
+    blocked: queue.length - activeQueue.length,
     review: 0,
     errors: [],
     stoppedByLimit: false
@@ -841,11 +869,11 @@ const runBillingCollection = async (dependencies = {}) => {
     emailConfig,
     transport,
     nowFactory,
-    dependencies
+    dependencies: { ...dependencies, blockedInvoiceIds }
   });
 
   try {
-    for (const item of queue) {
+    for (const item of activeQueue) {
       if (summary.processed >= config.maxInvoices || Date.now() >= deadline) {
         summary.stoppedByLimit = true;
         break;
