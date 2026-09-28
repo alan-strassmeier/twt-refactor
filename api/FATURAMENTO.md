@@ -233,7 +233,11 @@ npx wrangler deploy
 ```
 
 O botão **Verificar agora** usa a sessão administrativa e executa o mesmo fluxo
-sem depender do agendamento.
+sem depender do agendamento. Quando a fila ultrapassa o limite seguro de uma
+função da Vercel, o navegador continua automaticamente em novos lotes. Somente
+a primeira rodada refaz as consultas gerais na Brudam; as continuações tratam
+apenas os registros ainda marcados como **Aguardando processamento**, para não
+repetir na mesma ação as pendências de DOCCOB, contato ou pagamento.
 
 ## Roteamento dos boletos
 
