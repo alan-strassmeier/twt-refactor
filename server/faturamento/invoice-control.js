@@ -67,7 +67,7 @@ const financialState = (invoice, now = new Date()) => {
 };
 
 const documentState = (pending, logs = []) => {
-  if (pending?.reason === 'queued') {
+  if (pending?.reason === 'queued' && !logs.length) {
     return controlState('queued', 'Aguardando processamento', 'neutral');
   }
   if (pending?.reason === 'doccob') {
@@ -245,6 +245,7 @@ const issueFromLog = (record, now) => ({
 
 const buildUnifiedIssues = ({ pending = [], logs = [], now = new Date() } = {}) => {
   const issues = pending
+    .filter((record) => record.reason !== 'queued')
     .filter((record) => !isTerminalBillingFailure(record))
     .map((record) => issueFromPending(record, now));
   const pendingKeys = new Set(issues.map((issue) => `${digits(issue.invoiceId)}:${issue.type}`));
@@ -288,7 +289,7 @@ const buildInvoiceTimeline = ({ invoice, pending = null, logs = [], bankRecord =
     title: bankRecord.state === 'ready' ? 'Boleto registrado' : 'Tentativa de boleto',
     description: paymentState(invoice, bankRecord).label
   });
-  if (pending) timeline.push({
+  if (pending && (pending.reason !== 'queued' || !logs.length)) timeline.push({
     at: pending.lastCheckedAt || pending.firstSeenAt,
     type: 'pending',
     title: issueFromPending(pending, new Date()).title,

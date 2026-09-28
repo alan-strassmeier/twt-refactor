@@ -13,10 +13,10 @@ const { generateInvoiceBankSlip, getInvoiceBankSlipPdf } = require('./boleto');
 const { issueInvoiceNfse, getIssuedNfseXml } = require('./nfse');
 const { buildDanfsePdf } = require('./danfse');
 const {
-  TWT_BILLING_START_DATE,
+  BANK_SLIP_CREATION_START_DATE,
+  BANK_SLIP_CREATION_BLOCKED_CODE,
   isDslIssuer,
-  isTwtIssuer,
-  isTwtBillingEligible
+  isTwtIssuer
 } = require('./billing-rules');
 const {
   normalizeCteKeys,
@@ -291,20 +291,6 @@ const enabledContacts = (category) => Array.isArray(category?.contacts)
   ? category.contacts.filter((contact) => contact?.enabled !== false)
   : [];
 
-const skipTwtBeforeBillingStart = async ({ invoice, context }) => {
-  const invoiceId = String(invoice.id);
-  if (context.pendingByInvoice.has(invoiceId)) {
-    await context.removePending(invoiceId);
-    context.pendingByInvoice.delete(invoiceId);
-  }
-  context.summary.skippedTwt = Number(context.summary.skippedTwt || 0) + 1;
-  return { skipped: 'twt_before_start' };
-};
-
-const shouldSkipTwtBeforeBillingStart = ({ issuerCnpj, issuedAt }) => (
-  isTwtIssuer(issuerCnpj) && !isTwtBillingEligible({ issuerCnpj, issuedAt })
-);
-
 const buildTwtNfseAttachment = async ({ invoiceId, doccob, data, context }) => {
   const issuerCnpj = doccob?.invoice?.issuerCnpj || data.issuer?.document;
   if (!isTwtIssuer(issuerCnpj)) return null;
@@ -373,10 +359,6 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
     return { skipped: 'blocked' };
   }
   if (context.doccobPendingIds?.has(String(invoice.id))) return;
-  const listedIssuer = invoice.issuerDocument || invoice.issuerCnpj;
-  if (shouldSkipTwtBeforeBillingStart({ issuerCnpj: listedIssuer, issuedAt: invoice.issuedAt })) {
-    return skipTwtBeforeBillingStart({ invoice, context });
-  }
   const clientCnpj = String(invoice.clientDocument || '').replace(/\D/g, '');
   const doccob = await context.findDoccobForInvoice({
     invoiceId: invoice.id,
@@ -404,13 +386,6 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
     context.summary.pendingDoccob += 1;
     return;
   }
-  if (shouldSkipTwtBeforeBillingStart({
-    issuerCnpj: doccob?.invoice?.issuerCnpj,
-    issuedAt: doccob?.invoice?.issuedAt || invoice.issuedAt
-  })) {
-    return skipTwtBeforeBillingStart({ invoice, context });
-  }
-
   const categoryBeforeInvoiceLookup = clientCnpj ? await context.getCategory(clientCnpj) : null;
   const existingPlan = await existingDeliveryPlan({
     event,
@@ -428,12 +403,6 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
   }
 
   const data = await context.fetchInvoicePdfData(invoice.id);
-  if (shouldSkipTwtBeforeBillingStart({
-    issuerCnpj: data.issuer?.document,
-    issuedAt: data.invoice?.issuedAt || doccob?.invoice?.issuedAt || invoice.issuedAt
-  })) {
-    return skipTwtBeforeBillingStart({ invoice, context });
-  }
   const resolvedCnpj = String(data.client?.document || clientCnpj).replace(/\D/g, '');
   const category = resolvedCnpj === clientCnpj
     ? categoryBeforeInvoiceLookup
@@ -532,7 +501,20 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
   const tedDoc = data.invoice?.payment?.type === 'ted_doc';
   let bankSlipPdf = null;
   if (!tedDoc) {
-    const bankSlip = await context.generateInvoiceBankSlip(invoice.id);
+    let bankSlip;
+    try {
+      bankSlip = await context.generateInvoiceBankSlip(invoice.id);
+    } catch (error) {
+      if (error?.code !== BANK_SLIP_CREATION_BLOCKED_CODE) throw error;
+      if (context.pendingByInvoice.has(String(invoice.id))) {
+        await context.removePending(invoice.id);
+        context.pendingByInvoice.delete(String(invoice.id));
+      }
+      context.summary.skippedBankSlipCutoff = Number(
+        context.summary.skippedBankSlipCutoff || 0
+      ) + 1;
+      return { skipped: 'bank_slip_before_cutoff' };
+    }
     if (bankSlip.status !== 'ready') {
       throw Object.assign(new Error('O boleto ainda não está pronto para ser anexado.'), {
         statusCode: 409,
@@ -779,7 +761,7 @@ const resendBillingInvoice = async (invoiceId, dependencies = {}) => {
     alreadySent: 0,
     pendingDoccob: 0,
     waitingContacts: 0,
-    skippedTwt: 0,
+    skippedBankSlipCutoff: 0,
     blocked: 0,
     review: 0,
     errors: [],
@@ -817,9 +799,9 @@ const resendBillingInvoice = async (invoiceId, dependencies = {}) => {
     if (!dependencies.transport && typeof transport.close === 'function') transport.close();
   }
   summary.completedAt = nowFactory().toISOString();
-  if (outcome?.skipped === 'twt_before_start') {
+  if (outcome?.skipped === 'bank_slip_before_cutoff') {
     throw Object.assign(new Error(
-      `Faturas TWT emitidas antes de ${TWT_BILLING_START_DATE.split('-').reverse().join('/')} não entram no fluxo automático.`
+      `A geração de um novo boleto está bloqueada para faturas emitidas antes de ${BANK_SLIP_CREATION_START_DATE.split('-').reverse().join('/')}. O reenvio continua permitido quando já existe boleto registrado ou quando o pagamento é TED/DOC.`
     ), { statusCode: 409, expose: true });
   }
   if (outcome?.skipped === 'blocked') {
@@ -933,7 +915,7 @@ const runBillingCollection = async (dependencies = {}) => {
     alreadySent: 0,
     pendingDoccob: 0,
     waitingContacts: 0,
-    skippedTwt: 0,
+    skippedBankSlipCutoff: 0,
     blocked: queue.length - unblockedQueue.length,
     alreadyCompleted: unblockedQueue.length - activeQueue.length,
     remaining: 0,
@@ -1054,7 +1036,6 @@ module.exports = {
   queuedRecord,
   buildDslDacteAttachment,
   buildTwtNfseAttachment,
-  shouldSkipTwtBeforeBillingStart,
   initialDeliveryAlreadyCoveredEvent,
   existingDeliveryPlan,
   isTerminalBillingFailure,

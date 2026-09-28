@@ -1,6 +1,8 @@
 const TWT_ISSUER_CNPJ = '09123137000108';
 const DSL_ISSUER_CNPJ = '97434690000129';
-const TWT_BILLING_START_DATE = '2026-09-16';
+const BANK_SLIP_CREATION_START_DATE = '2026-09-16';
+const TWT_BILLING_START_DATE = BANK_SLIP_CREATION_START_DATE;
+const BANK_SLIP_CREATION_BLOCKED_CODE = 'BANK_SLIP_CREATION_BEFORE_CUTOFF';
 const BL_POA_CNPJ = '27011022000103';
 const WHITE_MARTINS_TED_DOC_CNPJS = Object.freeze([
   '24380578002556',
@@ -91,6 +93,10 @@ const isTwtBillingEligible = ({ issuerCnpj = '', issuedAt = '' } = {}) => (
   normalizedDateOnly(issuedAt) >= TWT_BILLING_START_DATE
 );
 
+const isBankSlipCreationEligible = ({ issuedAt = '' } = {}) => (
+  normalizedDateOnly(issuedAt) >= BANK_SLIP_CREATION_START_DATE
+);
+
 const bankSlipBankForIssuer = (value) => {
   if (isTwtIssuer(value)) return BILLING_BANKS.bradesco;
   if (isDslIssuer(value)) return BILLING_BANKS.itau;
@@ -100,6 +106,8 @@ const bankSlipBankForIssuer = (value) => {
 module.exports = {
   TWT_ISSUER_CNPJ,
   DSL_ISSUER_CNPJ,
+  BANK_SLIP_CREATION_START_DATE,
+  BANK_SLIP_CREATION_BLOCKED_CODE,
   TWT_BILLING_START_DATE,
   BL_POA_CNPJ,
   WHITE_MARTINS_TED_DOC_CNPJS,
@@ -110,6 +118,7 @@ module.exports = {
   isDslIssuer,
   normalizedDateOnly,
   isTwtBillingEligible,
+  isBankSlipCreationEligible,
   bankSlipBankForIssuer,
   normalizedRuleText,
   isTedDocPaymentMethod,

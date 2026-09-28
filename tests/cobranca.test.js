@@ -79,8 +79,9 @@ const {
   billingWhatsappText
 } = require('../server/faturamento/invoice-control');
 const {
-  TWT_BILLING_START_DATE,
-  isTwtBillingEligible
+  BANK_SLIP_CREATION_START_DATE,
+  BANK_SLIP_CREATION_BLOCKED_CODE,
+  isBankSlipCreationEligible
 } = require('../server/faturamento/billing-rules');
 
 const invoiceData = (payment = null) => ({
@@ -694,15 +695,32 @@ test('fatura bloqueada não busca DOCCOB nem inicia envio', async () => {
   assert.equal(context.summary.blocked, 1);
 });
 
-test('ignora cobrança da TWT anterior ao corte sem gerar boleto, documento ou log', async () => {
+test('fatura anterior ao corte para antes de criar um novo boleto', async () => {
   const calls = [];
   const removed = [];
   const context = processorContext({
     findDoccobForInvoice: async () => ({
       invoice: { issuerCnpj: '09123137000108', issuedAt: '2026-09-15' }
     }),
-    fetchInvoicePdfData: async () => { calls.push('pdf-data'); },
-    generateInvoiceBankSlip: async () => { calls.push('boleto'); },
+    fetchInvoicePdfData: async () => {
+      calls.push('pdf-data');
+      return {
+        ...invoiceData({ type: 'boleto' }),
+        invoice: {
+          ...invoiceData().invoice,
+          id: '11735',
+          issuedAt: '2026-09-15',
+          payment: { type: 'boleto' }
+        },
+        issuer: { document: '09123137000108' }
+      };
+    },
+    generateInvoiceBankSlip: async () => {
+      calls.push('boleto');
+      throw Object.assign(new Error('Novo boleto bloqueado.'), {
+        code: BANK_SLIP_CREATION_BLOCKED_CODE
+      });
+    },
     sendBillingEmail: async () => { calls.push('email'); },
     addLog: async () => { calls.push('log'); },
     removePending: async (invoiceId) => removed.push(String(invoiceId))
@@ -723,11 +741,11 @@ test('ignora cobrança da TWT anterior ao corte sem gerar boleto, documento ou l
     context
   });
 
-  assert.deepEqual(result, { skipped: 'twt_before_start' });
-  assert.deepEqual(calls, []);
+  assert.deepEqual(result, { skipped: 'bank_slip_before_cutoff' });
+  assert.deepEqual(calls, ['pdf-data', 'boleto']);
   assert.deepEqual(removed, ['11735']);
   assert.equal(context.pendingByInvoice.has('11735'), false);
-  assert.equal(context.summary.skippedTwt, 1);
+  assert.equal(context.summary.skippedBankSlipCutoff, 1);
 });
 
 test('habilita a TWT no corte e envia fatura, boleto Bradesco e nota fiscal', async () => {
@@ -736,7 +754,7 @@ test('habilita a TWT no corte e envia fatura, boleto Bradesco e nota fiscal', as
   let sentInput;
   const context = processorContext({
     findDoccobForInvoice: async () => ({
-      invoice: { issuerCnpj: '09123137000108', issuedAt: TWT_BILLING_START_DATE },
+      invoice: { issuerCnpj: '09123137000108', issuedAt: BANK_SLIP_CREATION_START_DATE },
       transports: []
     }),
     fetchInvoicePdfData: async () => ({
@@ -744,7 +762,7 @@ test('habilita a TWT no corte e envia fatura, boleto Bradesco e nota fiscal', as
       invoice: {
         ...invoiceData().invoice,
         id: '11780',
-        issuedAt: TWT_BILLING_START_DATE
+        issuedAt: BANK_SLIP_CREATION_START_DATE
       },
       issuer: { document: '09123137000108' }
     }),
@@ -783,7 +801,7 @@ test('habilita a TWT no corte e envia fatura, boleto Bradesco e nota fiscal', as
       clientDocument: '11280282000144',
       client: 'BHZ',
       issuerDocument: '09123137000108',
-      issuedAt: TWT_BILLING_START_DATE
+      issuedAt: BANK_SLIP_CREATION_START_DATE
     },
     context
   });
@@ -800,19 +818,14 @@ test('habilita a TWT no corte e envia fatura, boleto Bradesco e nota fiscal', as
   assert.equal(context.summary.sent, 1);
 });
 
-test('considera a data de corte inclusiva somente para a emissora TWT', () => {
-  assert.equal(isTwtBillingEligible({
-    issuerCnpj: '09123137000108',
+test('considera a data de corte inclusiva para criação de boleto de qualquer emitente', () => {
+  assert.equal(isBankSlipCreationEligible({
     issuedAt: '15/09/2026'
   }), false);
-  assert.equal(isTwtBillingEligible({
-    issuerCnpj: '09123137000108',
+  assert.equal(isBankSlipCreationEligible({
     issuedAt: '16/09/2026'
   }), true);
-  assert.equal(isTwtBillingEligible({
-    issuerCnpj: '97434690000129',
-    issuedAt: '2026-09-16'
-  }), false);
+  assert.equal(isBankSlipCreationEligible({ issuedAt: '2026-09-16' }), true);
 });
 
 test('registra se a pendência foi conferida manualmente ou pelo agendador', () => {
@@ -858,7 +871,12 @@ test('fatura TED envia somente a fatura e não tenta gerar boleto', async () => 
   });
   await processInvoiceEvent({
     event: EVENT_TYPES.initial,
-    invoice: { id: '11756', clientDocument: '11280282000144', client: 'BHZ' },
+    invoice: {
+      id: '11756',
+      clientDocument: '11280282000144',
+      client: 'BHZ',
+      issuedAt: '2026-09-15'
+    },
     context
   });
   assert.equal(boletoCalls, 0);
@@ -1475,9 +1493,9 @@ test('reenvio manual não inicia envio sem destinatário ativo', async () => {
   });
 });
 
-test('reenvio manual bloqueia fatura TWT anterior ao início da automação', async () => {
+test('reenvio manual permite fatura antiga quando o pagamento é TED/DOC', async () => {
   let sent = false;
-  await assert.rejects(() => resendBillingInvoice('11735', {
+  const result = await resendBillingInvoice('11735', {
     transport: {},
     emailConfig: {
       fromName: 'TWT',
@@ -1497,14 +1515,40 @@ test('reenvio manual bloqueia fatura TWT anterior ao início da automação', as
     }),
     getInvoiceBlock: async () => null,
     listPending: async () => [],
-    sendBillingEmail: async () => { sent = true; },
+    findDoccobForInvoice: async () => ({
+      invoice: { issuerCnpj: '09123137000108', issuedAt: '2026-09-15' }
+    }),
+    getCategory: async () => ({
+      contacts: [{ id: '1', firstName: 'Maria', email: 'maria@example.com' }]
+    }),
+    fetchInvoicePdfData: async () => ({
+      ...invoiceData({ type: 'ted_doc' }),
+      invoice: {
+        ...invoiceData().invoice,
+        id: '11735',
+        issuedAt: '2026-09-15',
+        payment: { type: 'ted_doc' }
+      },
+      issuer: { document: '09123137000108' }
+    }),
+    buildInvoicePdf: async () => Buffer.from('fatura'),
+    issueInvoiceNfse: async () => ({ status: 'issued' }),
+    getIssuedNfseXml: async () => ({ xml: '<NFSe />' }),
+    buildDanfsePdf: async () => Buffer.from('danfse'),
+    generateInvoiceBankSlip: async () => {
+      throw new Error('Não deve gerar boleto para TED/DOC.');
+    },
+    sendBillingEmail: async () => {
+      sent = true;
+      return { messageId: 'manual-antiga', accepted: ['maria@example.com'], rejected: [] };
+    },
+    saveDelivery: async () => {},
+    saveDeliveryReference: async () => {},
+    addLog: async () => {},
     removePending: async () => {}
-  }), (error) => {
-    assert.equal(error.statusCode, 409);
-    assert.match(error.message, /antes de 16\/09\/2026/i);
-    return true;
   });
-  assert.equal(sent, false);
+  assert.equal(sent, true);
+  assert.equal(result.sent, 1);
 });
 
 test('mantém estados financeiro, documental, de cobrança e pagamento independentes', () => {
@@ -1565,6 +1609,40 @@ test('fila unificada prioriza vencidas e reúne falhas de documentos e entrega',
   assert.equal(issues[0].action, 'documents');
   assert.equal(issues[1].type, 'email');
   assert.equal(issues[1].action, 'logs');
+});
+
+test('fila técnica não reaparece como pendência em fatura que já possui envio', () => {
+  const invoice = {
+    id: '9396',
+    issuedAt: '2025-05-07',
+    dueAt: '2025-07-07',
+    status: 0
+  };
+  const pending = {
+    invoiceId: '9396',
+    reason: 'queued',
+    firstSeenAt: '2026-09-28T19:32:00.000Z'
+  };
+  const logs = [{
+    id: 'entrega-9396',
+    invoiceId: '9396',
+    event: 'initial',
+    status: 'delivered',
+    email: 'financeiro@example.com',
+    createdAt: '2026-09-13T21:25:00.000Z'
+  }];
+
+  const control = invoiceControl(invoice, { pending, logs });
+  assert.equal(control.documents.code, 'complete');
+  assert.equal(control.collection.code, 'delivered');
+  assert.deepEqual(buildUnifiedIssues({ pending: [pending], logs }), []);
+  assert.ok(!buildInvoiceTimeline({ invoice, pending, logs })
+    .some((event) => event.type === 'pending'));
+
+  const unprocessed = invoiceControl(invoice, { pending, logs: [] });
+  assert.equal(unprocessed.documents.code, 'queued');
+  assert.ok(buildInvoiceTimeline({ invoice, pending, logs: [] })
+    .some((event) => event.type === 'pending'));
 });
 
 test('fila direciona boleto e falha geral para a ação contextual correta', () => {

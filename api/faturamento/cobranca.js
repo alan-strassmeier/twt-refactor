@@ -16,10 +16,9 @@ const { fetchInvoices } = require('../../server/faturamento/brudam');
 const { findDoccobForInvoice } = require('../../server/faturamento/r2-doccob');
 const { getBankSlipRecord } = require('../../server/faturamento/boleto-store');
 const {
-  TWT_BILLING_START_DATE,
+  BANK_SLIP_CREATION_START_DATE,
   isDslIssuer,
-  isTwtIssuer,
-  isTwtBillingEligible
+  isBankSlipCreationEligible
 } = require('../../server/faturamento/billing-rules');
 const {
   invoiceControl,
@@ -265,7 +264,6 @@ const handleInvoiceDetail = async (req, res, query) => {
       ...(doccobError ? { detail: doccobError } : {})
     };
   }
-  const invoiceIssuer = doccob?.invoice?.issuerCnpj || invoice.issuerDocument || invoice.issuerCnpj;
   const blocked = Boolean(invoiceBlock?.blocked);
   if (blocked) {
     controls.collection = {
@@ -275,14 +273,13 @@ const handleInvoiceDetail = async (req, res, query) => {
       detail: 'Esta fatura não será enviada pelo processamento automático nem pelo reenvio manual.'
     };
   }
-  const twtBeforeBillingStart = isTwtIssuer(invoiceIssuer) && !isTwtBillingEligible({
-    issuerCnpj: invoiceIssuer,
+  const bankSlipBeforeCreationStart = !isBankSlipCreationEligible({
     issuedAt: doccob?.invoice?.issuedAt || invoice.issuedAt
-  });
+  }) && !['ted_doc', 'registered'].includes(controls.payment.code);
   const resendBlockedReason = blocked
     ? 'O envio desta fatura está bloqueado manualmente.'
-    : twtBeforeBillingStart
-    ? `Faturas TWT emitidas antes de ${TWT_BILLING_START_DATE.split('-').reverse().join('/')} não entram no fluxo automático.`
+    : bankSlipBeforeCreationStart
+    ? `Novos boletos não podem ser gerados para faturas emitidas antes de ${BANK_SLIP_CREATION_START_DATE.split('-').reverse().join('/')}. O reenvio é permitido quando já existe boleto registrado ou o pagamento é TED/DOC.`
     : ['paid', 'cancelled'].includes(controls.financial.code)
     ? 'Somente faturas em aberto podem ser reenviadas.'
     : !doccob
