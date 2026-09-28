@@ -563,7 +563,8 @@ const fetchInvoicePdfData = async (invoiceId, options = {}) => {
   try {
     doccob = await findDoccobForInvoice({
       invoiceId: normalizedInvoice.id || invoiceId,
-      clientCnpj: clientDocument
+      clientCnpj: clientDocument,
+      issuedAt: normalizedInvoice.issuedAt
     });
   } catch (error) {
     console.warn('[faturamento:doccob]', {

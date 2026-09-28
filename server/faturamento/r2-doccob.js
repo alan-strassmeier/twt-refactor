@@ -7,6 +7,7 @@ const { parseDoccob } = require('./doccob');
 
 const DOCCOB_CACHE_TTL_MS = 30 * 60 * 1000;
 const DEFAULT_SCAN_LIMIT = 250;
+const DEFAULT_ISSUED_DATE_SCAN_LIMIT = 1000;
 const DOWNLOAD_CONCURRENCY = 6;
 const doccobCache = new Map();
 
@@ -31,7 +32,12 @@ const r2ConfigFromEnv = (env = process.env) => {
     secretAccessKey,
     bucket,
     basePrefix: cleanPathPart(env.R2_DOCCOB_PREFIX || 'brudam/clientes'),
-    scanLimit: positiveInteger(env.R2_DOCCOB_SCAN_LIMIT, DEFAULT_SCAN_LIMIT, 2000)
+    scanLimit: positiveInteger(env.R2_DOCCOB_SCAN_LIMIT, DEFAULT_SCAN_LIMIT, 2000),
+    issuedDateScanLimit: positiveInteger(
+      env.R2_DOCCOB_ISSUED_DATE_SCAN_LIMIT,
+      DEFAULT_ISSUED_DATE_SCAN_LIMIT,
+      5000
+    )
   };
 };
 
@@ -97,9 +103,51 @@ const cachedDoccob = (key) => {
 const sortNewestFirst = (objects) => [...objects].sort((left, right) =>
   new Date(right.LastModified || 0).getTime() - new Date(left.LastModified || 0).getTime());
 
+const compactDate = (value) => {
+  const match = String(value || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return match ? `${match[3]}${match[2]}${match[1]}` : '';
+};
+
+const objectDateToken = (object) => {
+  const filename = String(object?.Key || '').split('/').pop() || '';
+  const match = filename.match(/(?:^|[_-])(\d{8})\d{6}(?:\D|$)/);
+  return match?.[1] || '';
+};
+
+const uniqueObjects = (objects) => {
+  const seen = new Set();
+  return objects.filter((object) => {
+    const key = String(object?.Key || '');
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+};
+
+const scanCandidates = (objects, issuedAt, config) => {
+  const sorted = sortNewestFirst(objects)
+    .filter((object) => typeof object.Key === 'string' && /\.txt$/i.test(object.Key));
+  const dateToken = compactDate(issuedAt);
+  const sameDate = dateToken
+    ? sorted
+      .filter((object) => objectDateToken(object) === dateToken)
+      .slice(0, config.issuedDateScanLimit || DEFAULT_ISSUED_DATE_SCAN_LIMIT)
+    : [];
+  return {
+    candidates: uniqueObjects([
+      ...sameDate,
+      ...sorted.slice(0, config.scanLimit || DEFAULT_SCAN_LIMIT)
+    ]),
+    dateToken,
+    sameDateCount: sameDate.length,
+    textObjectCount: sorted.length
+  };
+};
+
 const findDoccobForInvoice = async ({
   invoiceId,
   clientCnpj,
+  issuedAt = '',
   config = r2ConfigFromEnv(),
   storage = null
 }) => {
@@ -114,16 +162,21 @@ const findDoccobForInvoice = async ({
 
   const activeConfig = config || {
     basePrefix: 'brudam/clientes',
-    scanLimit: DEFAULT_SCAN_LIMIT
+    scanLimit: DEFAULT_SCAN_LIMIT,
+    issuedDateScanLimit: DEFAULT_ISSUED_DATE_SCAN_LIMIT
   };
   const activeStorage = storage || createR2Storage(activeConfig);
   const prefix = [activeConfig.basePrefix, normalizedCnpj, 'doccob']
     .map(cleanPathPart)
     .filter(Boolean)
     .join('/') + '/';
-  const objects = sortNewestFirst(await activeStorage.listObjects(prefix))
-    .filter((object) => typeof object.Key === 'string' && /\.txt$/i.test(object.Key))
-    .slice(0, activeConfig.scanLimit || DEFAULT_SCAN_LIMIT);
+  const listedObjects = await activeStorage.listObjects(prefix);
+  const {
+    candidates: objects,
+    dateToken,
+    sameDateCount,
+    textObjectCount
+  } = scanCandidates(listedObjects, issuedAt, activeConfig);
 
   for (let offset = 0; offset < objects.length; offset += DOWNLOAD_CONCURRENCY) {
     const batch = objects.slice(offset, offset + DOWNLOAD_CONCURRENCY);
@@ -151,13 +204,28 @@ const findDoccobForInvoice = async ({
       return match;
     }
   }
+  if (!storage) {
+    console.warn('[faturamento:doccob-miss]', {
+      invoiceId: normalizedInvoice,
+      clientCnpj: normalizedCnpj,
+      prefix,
+      issuedAt: String(issuedAt || '').slice(0, 10),
+      issuedDateToken: dateToken,
+      listedObjects: listedObjects.length,
+      textObjects: textObjectCount,
+      sameDateCandidates: sameDateCount,
+      scannedCandidates: objects.length
+    });
+  }
   return null;
 };
 
 module.exports = {
   DEFAULT_SCAN_LIMIT,
+  DEFAULT_ISSUED_DATE_SCAN_LIMIT,
   r2ConfigFromEnv,
   bodyToString,
   createR2Storage,
+  scanCandidates,
   findDoccobForInvoice
 };

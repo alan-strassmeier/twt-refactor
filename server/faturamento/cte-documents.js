@@ -57,7 +57,8 @@ const resolveInvoiceCteKeys = async (invoiceId, dependencies = {}) => {
   try {
     doccob = await findDoccob({
       invoiceId: normalized.id || invoiceId,
-      clientCnpj
+      clientCnpj,
+      issuedAt: normalized.issuedAt
     });
   } catch (error) {
     console.warn('[faturamento:documentos-doccob]', {
