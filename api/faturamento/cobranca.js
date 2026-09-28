@@ -151,17 +151,42 @@ const handleContactSync = async (req, res) => {
 
 const handlePending = async (req, res) => {
   if (!requireSession(req, res)) return;
+  if (req.method === 'DELETE') {
+    if (!requireSameOrigin(req, res)) return;
+    const body = await parseJsonBody(req, 4096);
+    const [pending, logs] = await Promise.all([
+      store.listPending(),
+      store.filteredLogs()
+    ]);
+    const issue = buildUnifiedIssues({ pending, logs }).find((record) => record.id === body.id);
+    if (!issue) {
+      sendJson(res, 404, {
+        deleted: false,
+        message: 'Pendência não encontrada ou já removida.'
+      });
+      return;
+    }
+    await store.dismissIssue(issue.id, issue.updatedAt);
+    sendJson(res, 200, {
+      deleted: true,
+      message: 'Pendência removida da lista. Os logs foram preservados.'
+    });
+    return;
+  }
   if (req.method !== 'GET') {
-    res.setHeader('Allow', 'GET');
+    res.setHeader('Allow', 'GET, DELETE');
     sendJson(res, 405, { message: 'Método não permitido.' });
     return;
   }
-  const [pending, logs, lastRun] = await Promise.all([
+  const [pending, logs, lastRun, dismissedIssues] = await Promise.all([
     store.listPending(),
     store.filteredLogs(),
-    store.getLastRun()
+    store.getLastRun(),
+    store.listDismissedIssues()
   ]);
-  const issues = buildUnifiedIssues({ pending, logs });
+  const issues = buildUnifiedIssues({ pending, logs }).filter((issue) => (
+    dismissedIssues.get(issue.id) !== String(issue.updatedAt || '')
+  ));
   sendJson(res, 200, {
     pending,
     issues,
@@ -364,9 +389,14 @@ const handleProcess = async (req, res) => {
       startedAt,
       completedAt: result.completedAt,
       scanned: result.scanned,
+      discovered: result.discovered,
+      reconciled: result.reconciled,
       processed: result.processed,
       sent: result.sent,
       blocked: result.blocked,
+      alreadyCompleted: result.alreadyCompleted,
+      remaining: result.remaining,
+      stoppedByLimit: result.stoppedByLimit,
       errors: result.errors.length
     };
     await store.saveLastRun(run);

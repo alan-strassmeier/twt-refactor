@@ -20,6 +20,15 @@ const {
   getInvoiceBlock,
   setInvoiceBlocked,
   listBlockedInvoiceIds,
+  removePending,
+  listDismissedIssues,
+  dismissIssue,
+  savePendingBatch,
+  completedEventField,
+  getCompletedBillingEvents,
+  markBillingEventCompleted,
+  getBillingQueueCursor,
+  saveBillingQueueCursor,
   claimProcessingRun,
   releaseProcessingRun
 } = require('../server/faturamento/cobranca-store');
@@ -49,11 +58,14 @@ const {
   addDays,
   billingEventForInvoice,
   buildBillingQueue,
+  rotateBillingQueue,
   scanInvoices,
   pendingRecord,
+  queuedRecord,
   isTerminalBillingFailure,
   processInvoiceEvent,
-  resendBillingInvoice
+  resendBillingInvoice,
+  runBillingCollection
 } = require('../server/faturamento/cobranca-processor');
 const {
   constantTimeEqual,
@@ -477,15 +489,135 @@ test('mantém somente o evento mais urgente para cada fatura', () => {
       { id: '11780', issuedAt: '2026-09-10', dueAt: '2026-09-13' },
       { id: '11782', issuedAt: '2026-09-11', dueAt: '2026-09-13' }
     ],
-    overdue: [{ id: '10630', issuedAt: '2025-05-07', dueAt: '2025-07-07' }]
+    overdue: [{ id: '10630', issuedAt: '2025-05-07', dueAt: '2025-07-07' }],
+    reconciliation: [
+      { id: '11781', issuedAt: '2026-09-11', dueAt: '2026-10-01' },
+      { id: '11770', issuedAt: '2026-09-09', dueAt: '2026-10-01' }
+    ]
   });
   assert.deepEqual(queue.map(({ invoice, event }) => [invoice.id, event]), [
-    ['10630', EVENT_TYPES.overdue],
-    ['11780', EVENT_TYPES.reminder],
     ['11781', EVENT_TYPES.initial],
-    ['11782', EVENT_TYPES.reminder]
+    ['11782', EVENT_TYPES.reminder],
+    ['11780', EVENT_TYPES.reminder],
+    ['10630', EVENT_TYPES.overdue],
+    ['11770', EVENT_TYPES.initial]
   ]);
   assert.equal(queue.find((item) => item.invoice.id === '10630').fromPending, true);
+});
+
+test('continua a fila do ponto salvo sem repetir sempre os primeiros itens', () => {
+  const queue = ['11837', '11838', '11839', '11840'].map((id) => ({ invoice: { id } }));
+  const rotated = rotateBillingQueue(queue, 3);
+  assert.equal(rotated.startIndex, 3);
+  assert.deepEqual(rotated.queue.map((item) => item.invoice.id), [
+    '11840', '11837', '11838', '11839'
+  ]);
+});
+
+test('persiste a posição da fila de cobrança no Redis', async () => {
+  let value = null;
+  const command = async (operation, _key, nextValue) => {
+    if (operation === 'SET') {
+      value = nextValue;
+      return 'OK';
+    }
+    if (operation === 'GET') return value;
+    throw new Error(`Comando inesperado: ${operation}`);
+  };
+  assert.equal(await getBillingQueueCursor(command), 0);
+  await saveBillingQueueCursor(13, command);
+  assert.equal(await getBillingQueueCursor(command), 13);
+});
+
+test('registra em um único comando todas as faturas descobertas', async () => {
+  const calls = [];
+  const records = [
+    queuedRecord({ id: '11839', clientDocument: '35820448008110' }, '2026-09-28T13:02:30Z'),
+    queuedRecord({ id: '11840', clientDocument: '41870054000276' }, '2026-09-28T13:02:29Z')
+  ];
+  await savePendingBatch(records, async (...args) => {
+    calls.push(args);
+    return 2;
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], 'HSET');
+  assert.equal(calls[0][2], '11839');
+  assert.equal(calls[0][4], '11840');
+  assert.equal(JSON.parse(calls[0][3]).reason, 'queued');
+  assert.equal(JSON.parse(calls[0][5]).attempts, 0);
+});
+
+test('marca e consulta eventos concluídos sem misturar etapas da mesma fatura', async () => {
+  const values = new Map();
+  const command = async (operation, _key, ...args) => {
+    if (operation === 'HSET') {
+      values.set(args[0], args[1]);
+      return 1;
+    }
+    if (operation === 'HMGET') return args.map((field) => values.get(field) || null);
+    throw new Error(`Comando inesperado: ${operation}`);
+  };
+  await markBillingEventCompleted(
+    EVENT_TYPES.initial,
+    '11840',
+    { completedAt: '2026-09-28T14:00:00Z' },
+    command
+  );
+  const completed = await getCompletedBillingEvents([
+    { event: EVENT_TYPES.initial, invoiceId: '11840' },
+    { event: EVENT_TYPES.reminder, invoiceId: '11840' }
+  ], command);
+  assert.equal(completed.has(completedEventField(EVENT_TYPES.initial, '11840')), true);
+  assert.equal(completed.has(completedEventField(EVENT_TYPES.reminder, '11840')), false);
+});
+
+test('persiste toda a descoberta antes de limitar o lote de processamento', async () => {
+  const queued = [];
+  const pendingUpdates = [];
+  let nextQueueCursor = null;
+  const invoices = [
+    { id: '11839', status: 0, issuedAt: '2026-09-28', dueAt: '2026-11-27', clientDocument: '35820448008110' },
+    { id: '11840', status: 0, issuedAt: '2026-09-28', dueAt: '2026-10-13', clientDocument: '41870054000276' }
+  ];
+  const result = await runBillingCollection({
+    source: 'automatic',
+    runId: 'execucao-lote',
+    currentTime: new Date(),
+    now: () => new Date(),
+    config: { maxInvoices: 1, maxPages: 1, deadlineMs: 55000 },
+    listPending: async () => [],
+    getBillingQueueCursor: async () => 0,
+    getOverdueCursor: async () => 0,
+    getReconciliationCursor: async () => 0,
+    saveOverdueCursor: async () => {},
+    saveReconciliationCursor: async () => {},
+    saveBillingQueueCursor: async (cursor) => { nextQueueCursor = cursor; },
+    fetchInvoices: async (filters) => ({
+      invoices: filters['emissao[eq]'] || Object.keys(filters).every((key) => ['status', 'limit', 'skip'].includes(key))
+        ? invoices
+        : [],
+      pagination: { hasMore: false }
+    }),
+    listBlockedInvoiceIds: async () => [],
+    getCompletedBillingEvents: async () => new Set(),
+    getInvoiceBlock: async () => null,
+    savePendingBatch: async (records) => { queued.push(...records); },
+    savePending: async (record) => { pendingUpdates.push(record); },
+    removePending: async () => {},
+    addLog: async () => {},
+    markBillingEventCompleted: async () => {},
+    findDoccobForInvoice: async () => null,
+    getCategory: async () => null,
+    emailConfig: { fromName: 'TWT', fromEmail: 'faturamento@twt.com.br' },
+    transport: {}
+  });
+  assert.deepEqual(queued.map((record) => record.invoiceId), ['11839', '11840']);
+  assert.equal(pendingUpdates[0].invoiceId, '11839');
+  assert.equal(pendingUpdates[0].reason, 'doccob');
+  assert.equal(result.processed, 1);
+  assert.equal(result.remaining, 1);
+  assert.equal(result.stoppedByLimit, true);
+  assert.equal(nextQueueCursor, 1);
 });
 
 const processorContext = (overrides = {}) => {
@@ -1040,6 +1172,31 @@ test('persiste e remove o bloqueio de envio por fatura', async () => {
   assert.equal(await getInvoiceBlock('11756', command), null);
 });
 
+test('remove somente a pendência operacional da fatura informada', async () => {
+  const calls = [];
+  const deleted = await removePending('011756', async (...args) => {
+    calls.push(args);
+    return 1;
+  });
+  assert.equal(deleted, 1);
+  assert.deepEqual(calls[0].slice(-1), ['11756']);
+});
+
+test('oculta a pendência sem remover o log que a originou', async () => {
+  const values = new Map();
+  const command = async (operation, _key, field, value) => {
+    if (operation === 'HSET') {
+      values.set(field, value);
+      return 1;
+    }
+    if (operation === 'HGETALL') return [...values.entries()].flat();
+    throw new Error(`Comando inesperado: ${operation}`);
+  };
+  await dismissIssue('log:falha-1', '2026-09-28T10:00:00Z', command);
+  const dismissed = await listDismissedIssues(command);
+  assert.equal(dismissed.get('log:falha-1'), '2026-09-28T10:00:00Z');
+});
+
 test('valida a assinatura HMAC do formulário enviado pelo ZeptoMail', () => {
   const payload = {
     event_name: ['delivered'],
@@ -1462,6 +1619,7 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(source, /billing:open-invoice-detail/);
   assert.match(source, /Conferir documentos/);
   assert.match(source, /Conferir boleto/);
+  assert.match(source, /O log será preservado/);
   assert.match(source, /pendingFilter: 'all'/);
   assert.match(source, /className = 'pending-summary-filter'/);
   assert.match(source, /aria-pressed/);
@@ -1473,6 +1631,7 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(apiSource, /query\.route === 'contacts-sync'/);
   assert.match(apiSource, /query\.route === 'invoice-detail'/);
   assert.match(apiSource, /query\.route === 'invoice-block'/);
+  assert.match(apiSource, /store\.dismissIssue\(issue\.id, issue\.updatedAt\)/);
   assert.match(apiSource, /query\.route === 'resend'/);
   assert.match(apiSource, /req\.method === 'GET' \|\| req\.method === 'HEAD'/);
   assert.equal(fs.existsSync(path.join(root, 'api', 'faturamento', 'cobranca.js')), true);

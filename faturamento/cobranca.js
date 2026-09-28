@@ -440,12 +440,39 @@
       appendCell(row, formatDate(record.dueAt));
       appendCell(row, formatDateTime(record.updatedAt));
       const actionCell = document.createElement('td');
+      const actionButtons = document.createElement('div');
+      actionButtons.className = 'pending-row-actions';
       const action = document.createElement('button');
       action.type = 'button';
       action.className = 'button button-quiet issue-action';
       action.textContent = actionLabels[record.action] || 'Conferir';
       action.addEventListener('click', (event) => navigateIssue(record, event.currentTarget));
-      actionCell.appendChild(action);
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'button danger-button issue-remove';
+      remove.textContent = 'Remover';
+      remove.addEventListener('click', async () => {
+        if (!window.confirm(
+          `Remover somente a pendência da fatura ${record.invoiceId}? O log será preservado e a pendência poderá reaparecer se houver uma nova ocorrência.`
+        )) return;
+        remove.disabled = true;
+        setLoading(true);
+        try {
+          const result = await requestJson(endpoint('pending'), {
+            method: 'DELETE',
+            body: JSON.stringify({ id: record.id })
+          });
+          await loadPending();
+          setMessage(result.message || 'Pendência removida.', 'success');
+        } catch (error) {
+          setMessage(error.message, 'error');
+          remove.disabled = false;
+        } finally {
+          setLoading(false);
+        }
+      });
+      actionButtons.append(action, remove);
+      actionCell.appendChild(actionButtons);
       row.appendChild(actionCell);
       return row;
     });
@@ -490,7 +517,10 @@
       } else {
         const source = lastRun.source === 'automatic' ? 'automática' : 'manual';
         const status = lastRun.status === 'completed' ? 'concluída' : 'falhou';
-        elements.pendingRunStatus.textContent = `Última execução ${source} ${status} em ${formatDateTime(lastRun.completedAt)}.`;
+        const continuation = lastRun.stoppedByLimit
+          ? ` ${lastRun.remaining || 0} fatura(s) ficaram para a próxima rodada.`
+          : '';
+        elements.pendingRunStatus.textContent = `Última execução ${source} ${status} em ${formatDateTime(lastRun.completedAt)}.${continuation}`;
       }
     }
   };
@@ -803,8 +833,8 @@
       const result = await requestJson(endpoint('process'), { method: 'POST' });
       await Promise.all([loadPending(), loadLogs()]);
       setMessage(
-        `Verificação concluída: ${result.sent} e-mail(s) enviado(s), ${result.pendingDoccob} aguardando DOCCOB, ${result.blocked || 0} fatura(s) bloqueada(s) e ${result.errors.length} erro(s).`,
-        result.errors.length ? 'warning' : 'success'
+        `Verificação concluída: ${result.discovered || 0} nova(s) fatura(s) registrada(s), ${result.sent} e-mail(s) enviado(s), ${result.pendingDoccob} aguardando DOCCOB, ${result.blocked || 0} fatura(s) bloqueada(s) e ${result.errors.length} erro(s).${result.stoppedByLimit ? ` ${result.remaining || 0} fatura(s) continuarão na próxima rodada.` : ''}`,
+        result.errors.length || result.stoppedByLimit ? 'warning' : 'success'
       );
     } catch (error) {
       setMessage(error.message, 'error');
