@@ -370,7 +370,7 @@ const handleInvoiceBlock = async (req, res) => {
   });
 };
 
-const handleProcess = async (req, res) => {
+const handleProcess = async (req, res, query) => {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     sendJson(res, 405, { message: 'Método não permitido.' });
@@ -381,6 +381,7 @@ const handleProcess = async (req, res) => {
     if (!requireSession(req, res) || !requireSameOrigin(req, res)) return;
   }
   const source = cron ? 'automatic' : 'manual';
+  const continuation = !cron && query.continuation === '1';
   const runId = randomUUID();
   if (!await store.claimProcessingRun(runId)) {
     sendJson(res, 409, {
@@ -391,7 +392,7 @@ const handleProcess = async (req, res) => {
 
   const startedAt = new Date().toISOString();
   try {
-    const result = await runBillingCollection({ source, runId });
+    const result = await runBillingCollection({ source, runId, continuation });
     const run = {
       runId,
       source,
@@ -510,7 +511,7 @@ module.exports = async (req, res) => {
     if (query.route === 'invoice-block') return await handleInvoiceBlock(req, res);
     if (query.route === 'logs') return await handleLogs(req, res, query);
     if (query.route === 'resend') return await handleResend(req, res);
-    if (query.route === 'process') return await handleProcess(req, res);
+    if (query.route === 'process') return await handleProcess(req, res, query);
     if (query.route === 'webhook') return await handleWebhook(req, res);
     sendJson(res, 404, { message: 'Rota de cobrança não encontrada.' });
   } catch (error) {

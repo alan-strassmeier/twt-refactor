@@ -839,6 +839,7 @@ const resendBillingInvoice = async (invoiceId, dependencies = {}) => {
 
 const runBillingCollection = async (dependencies = {}) => {
   const config = dependencies.config || processorConfig();
+  const continuation = Boolean(dependencies.continuation);
   const currentDate = saoPauloDate(dependencies.currentTime || new Date());
   const nowFactory = dependencies.now || (() => new Date());
   const startedAt = nowFactory();
@@ -852,29 +853,36 @@ const runBillingCollection = async (dependencies = {}) => {
   const pendingByInvoice = new Map(pending.map((record) => [String(record.invoiceId), record]));
   const fetch = dependencies.fetchInvoices || fetchInvoiceScanPage;
 
-  const [todayScan, reminderScan, overdueScan, reconciliationScan] = await Promise.all([
-    scanInvoices({ 'emissao[eq]': currentDate, status: '0' }, { maxPages: config.maxPages, fetch }),
-    scanInvoices({ 'vencimento[eq]': addDays(currentDate, 2), status: '0' }, { maxPages: config.maxPages, fetch }),
-    scanInvoices({ 'vencimento[lte]': addDays(currentDate, -1), status: '0' }, {
-      startSkip: overdueStart,
-      maxPages: config.maxPages,
-      fetch
-    }),
-    scanInvoices({ status: '0' }, {
-      startSkip: reconciliationStart,
-      maxPages: config.maxPages,
-      fetch
-    })
-  ]);
-  await Promise.all([
-    (dependencies.saveOverdueCursor || store.saveOverdueCursor)(overdueScan.nextSkip),
-    (dependencies.saveReconciliationCursor || store.saveReconciliationCursor)(
-      reconciliationScan.nextSkip
-    )
-  ]);
+  const emptyScan = { invoices: [], pages: 0, hasMore: false, nextSkip: 0 };
+  const [todayScan, reminderScan, overdueScan, reconciliationScan] = continuation
+    ? [emptyScan, emptyScan, emptyScan, emptyScan]
+    : await Promise.all([
+      scanInvoices({ 'emissao[eq]': currentDate, status: '0' }, { maxPages: config.maxPages, fetch }),
+      scanInvoices({ 'vencimento[eq]': addDays(currentDate, 2), status: '0' }, { maxPages: config.maxPages, fetch }),
+      scanInvoices({ 'vencimento[lte]': addDays(currentDate, -1), status: '0' }, {
+        startSkip: overdueStart,
+        maxPages: config.maxPages,
+        fetch
+      }),
+      scanInvoices({ status: '0' }, {
+        startSkip: reconciliationStart,
+        maxPages: config.maxPages,
+        fetch
+      })
+    ]);
+  if (!continuation) {
+    await Promise.all([
+      (dependencies.saveOverdueCursor || store.saveOverdueCursor)(overdueScan.nextSkip),
+      (dependencies.saveReconciliationCursor || store.saveReconciliationCursor)(
+        reconciliationScan.nextSkip
+      )
+    ]);
+  }
 
   const queue = buildBillingQueue({
-    pending,
+    pending: continuation
+      ? pending.filter((record) => record.reason === 'queued')
+      : pending,
     today: todayScan.invoices,
     reminder: reminderScan.invoices,
     overdue: overdueScan.invoices,
@@ -900,10 +908,11 @@ const runBillingCollection = async (dependencies = {}) => {
     await (dependencies.savePendingBatch || store.savePendingBatch)(newlyQueued);
     newlyQueued.forEach((record) => pendingByInvoice.set(record.invoiceId, record));
   }
-  const rotated = rotateBillingQueue(activeQueue, queueCursor);
+  const rotated = rotateBillingQueue(activeQueue, continuation ? 0 : queueCursor);
 
   const summary = {
     source: dependencies.source === 'automatic' ? 'automatic' : 'manual',
+    continuation,
     currentDate,
     startedAt: startedAt.toISOString(),
     completedAt: null,
@@ -1014,7 +1023,9 @@ const runBillingCollection = async (dependencies = {}) => {
     const nextCursor = summary.stoppedByLimit && activeQueue.length
       ? (rotated.startIndex + examined) % activeQueue.length
       : 0;
-    await (dependencies.saveBillingQueueCursor || store.saveBillingQueueCursor)(nextCursor);
+    if (!continuation) {
+      await (dependencies.saveBillingQueueCursor || store.saveBillingQueueCursor)(nextCursor);
+    }
     if (!dependencies.transport && typeof transport.close === 'function') transport.close();
   }
   summary.completedAt = nowFactory().toISOString();

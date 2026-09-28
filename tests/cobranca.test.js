@@ -622,6 +622,62 @@ test('persiste toda a descoberta antes de limitar o lote de processamento', asyn
   assert.equal(nextQueueCursor, 1);
 });
 
+test('continuação drena somente itens ainda não examinados sem repetir a varredura', async () => {
+  const pendingUpdates = [];
+  const now = new Date();
+  let scanCalls = 0;
+  let scanCursorSaves = 0;
+  let queueCursorSaves = 0;
+  const result = await runBillingCollection({
+    source: 'manual',
+    runId: 'continuacao-lote',
+    continuation: true,
+    currentTime: now,
+    now: () => now,
+    config: { maxInvoices: 1, maxPages: 1, deadlineMs: 55000 },
+    listPending: async () => [
+      { invoiceId: '11839', reason: 'queued', clientCnpj: '35820448008110', issuedAt: '2026-09-28', dueAt: '2026-11-27' },
+      { invoiceId: '11840', reason: 'queued', clientCnpj: '41870054000276', issuedAt: '2026-09-28', dueAt: '2026-10-13' },
+      { invoiceId: '11838', reason: 'doccob', clientCnpj: '35640442000187', issuedAt: '2026-09-28', dueAt: '2026-10-13' }
+    ],
+    getBillingQueueCursor: async () => 19,
+    getOverdueCursor: async () => 100,
+    getReconciliationCursor: async () => 100,
+    saveOverdueCursor: async () => { scanCursorSaves += 1; },
+    saveReconciliationCursor: async () => { scanCursorSaves += 1; },
+    saveBillingQueueCursor: async () => { queueCursorSaves += 1; },
+    fetchInvoices: async () => {
+      scanCalls += 1;
+      throw new Error('A continuação não deve consultar novamente a Brudam.');
+    },
+    listBlockedInvoiceIds: async () => [],
+    getCompletedBillingEvents: async () => new Set(),
+    getInvoiceBlock: async () => null,
+    savePendingBatch: async () => {
+      throw new Error('Itens da continuação já devem estar registrados.');
+    },
+    savePending: async (record) => { pendingUpdates.push(record); },
+    removePending: async () => {},
+    addLog: async () => {},
+    markBillingEventCompleted: async () => {},
+    findDoccobForInvoice: async () => null,
+    getCategory: async () => null,
+    emailConfig: { fromName: 'TWT', fromEmail: 'faturamento@twt.com.br' },
+    transport: {}
+  });
+  assert.equal(scanCalls, 0);
+  assert.equal(scanCursorSaves, 0);
+  assert.equal(queueCursorSaves, 0);
+  assert.equal(result.continuation, true);
+  assert.equal(result.scanned, 2);
+  assert.equal(result.processed, 1);
+  assert.equal(result.remaining, 1);
+  assert.equal(result.stoppedByLimit, true);
+  assert.equal(pendingUpdates.length, 1);
+  assert.equal(pendingUpdates[0].reason, 'doccob');
+  assert.notEqual(pendingUpdates[0].invoiceId, '11838');
+});
+
 const processorContext = (overrides = {}) => {
   const summary = {
     pendingDoccob: 0,
@@ -1727,6 +1783,8 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(html, /id="pendingDoccobSection"[\s\S]*?hidden>/);
   assert.match(html, /id="collectionLogsSection"[\s\S]*?hidden>/);
   assert.match(source, /route, \.\.\.query/);
+  assert.match(source, /continuation: '1'/);
+  assert.match(apiSource, /runBillingCollection\(\{ source, runId, continuation \}\)/);
   assert.match(source, /const filters = logFilters\(\);[\s\S]*setLoading\(true\)/);
   assert.doesNotMatch(source, /window\.confirm\(`Excluir \$\{category\.name\}/);
   assert.match(source, /openEmailLogModal\(record, previewButton\)/);

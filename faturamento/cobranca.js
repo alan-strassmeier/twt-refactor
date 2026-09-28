@@ -892,14 +892,47 @@
   });
 
   elements.runButton.addEventListener('click', async () => {
+    const maxRounds = 25;
+    const totals = {
+      discovered: 0,
+      processed: 0,
+      sent: 0,
+      pendingDoccob: 0,
+      blocked: 0,
+      errors: []
+    };
+    let result = null;
+    let round = 0;
     setLoading(true);
     setMessage('Conferindo faturas, documentos e envios…');
     try {
-      const result = await requestJson(endpoint('process'), { method: 'POST' });
+      do {
+        round += 1;
+        setMessage(
+          round === 1
+            ? 'Conferindo faturas, documentos e envios…'
+            : `Processando o lote ${round} da fila acumulada…`
+        );
+        result = await requestJson(endpoint('process', {
+          ...(round > 1 ? { continuation: '1' } : {})
+        }), { method: 'POST' });
+        totals.discovered += Number(result.discovered || 0);
+        totals.processed += Number(result.processed || 0);
+        totals.sent += Number(result.sent || 0);
+        totals.pendingDoccob += Number(result.pendingDoccob || 0);
+        totals.blocked = Math.max(totals.blocked, Number(result.blocked || 0));
+        totals.errors.push(...(Array.isArray(result.errors) ? result.errors : []));
+      } while (
+        result.stoppedByLimit
+        && Number(result.remaining || 0) > 0
+        && Number(result.processed || 0) > 0
+        && round < maxRounds
+      );
       await Promise.all([loadPending(), loadLogs()]);
+      const incomplete = Boolean(result?.stoppedByLimit && Number(result.remaining || 0) > 0);
       setMessage(
-        `Verificação concluída: ${result.discovered || 0} nova(s) fatura(s) registrada(s), ${result.sent} e-mail(s) enviado(s), ${result.pendingDoccob} aguardando DOCCOB, ${result.blocked || 0} fatura(s) bloqueada(s) e ${result.errors.length} erro(s).${result.stoppedByLimit ? ` ${result.remaining || 0} fatura(s) continuarão na próxima rodada.` : ''}`,
-        result.errors.length || result.stoppedByLimit ? 'warning' : 'success'
+        `Verificação concluída em ${round} lote(s): ${totals.processed} fatura(s) examinada(s), ${totals.discovered} nova(s) fatura(s) registrada(s), ${totals.sent} e-mail(s) enviado(s), ${totals.pendingDoccob} aguardando DOCCOB, ${totals.blocked} fatura(s) bloqueada(s) e ${totals.errors.length} erro(s).${incomplete ? ` ${result.remaining || 0} fatura(s) continuarão na próxima verificação.` : ''}`,
+        totals.errors.length || incomplete ? 'warning' : 'success'
       );
     } catch (error) {
       setMessage(error.message, 'error');
