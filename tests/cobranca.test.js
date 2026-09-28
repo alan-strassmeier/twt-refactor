@@ -1567,6 +1567,40 @@ test('fila unificada prioriza vencidas e reúne falhas de documentos e entrega',
   assert.equal(issues[1].action, 'logs');
 });
 
+test('fila técnica não reaparece como pendência em fatura que já possui envio', () => {
+  const invoice = {
+    id: '9396',
+    issuedAt: '2025-05-07',
+    dueAt: '2025-07-07',
+    status: 0
+  };
+  const pending = {
+    invoiceId: '9396',
+    reason: 'queued',
+    firstSeenAt: '2026-09-28T19:32:00.000Z'
+  };
+  const logs = [{
+    id: 'entrega-9396',
+    invoiceId: '9396',
+    event: 'initial',
+    status: 'delivered',
+    email: 'financeiro@example.com',
+    createdAt: '2026-09-13T21:25:00.000Z'
+  }];
+
+  const control = invoiceControl(invoice, { pending, logs });
+  assert.equal(control.documents.code, 'complete');
+  assert.equal(control.collection.code, 'delivered');
+  assert.deepEqual(buildUnifiedIssues({ pending: [pending], logs }), []);
+  assert.ok(!buildInvoiceTimeline({ invoice, pending, logs })
+    .some((event) => event.type === 'pending'));
+
+  const unprocessed = invoiceControl(invoice, { pending, logs: [] });
+  assert.equal(unprocessed.documents.code, 'queued');
+  assert.ok(buildInvoiceTimeline({ invoice, pending, logs: [] })
+    .some((event) => event.type === 'pending'));
+});
+
 test('fila direciona boleto e falha geral para a ação contextual correta', () => {
   const issues = buildUnifiedIssues({
     pending: [{
