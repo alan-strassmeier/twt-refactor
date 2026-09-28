@@ -98,6 +98,9 @@ const collectionState = (logs = []) => {
   if (logs.some((log) => log.status === 'waiting_contacts')) {
     return controlState('no_contacts', 'Sem destinatário', 'warning');
   }
+  if (logs.some((log) => log.status === 'resolved')) {
+    return controlState('resolved', 'Resolvida manualmente', 'success');
+  }
   const deliveryLogs = logs.filter((log) => log.email || log.clientReference);
   if (deliveryLogs.length && deliveryLogs.every((log) => log.status === 'delivered')) {
     return controlState('delivered', 'Entregue', 'success');

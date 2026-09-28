@@ -116,6 +116,37 @@
     return cell;
   };
 
+  const openInvoiceInWorkspace = (invoiceId) => {
+    const normalizedId = String(invoiceId || '').replace(/\D/g, '');
+    if (!normalizedId) return;
+    const invoicesTab = elements.areaButtons.find((button) => button.dataset.billingArea === 'invoices');
+    setArea('invoices');
+    window.requestAnimationFrame(() => {
+      window.dispatchEvent(new CustomEvent('billing:open-invoice-detail', {
+        detail: { invoiceId: normalizedId, trigger: invoicesTab }
+      }));
+    });
+  };
+
+  const appendInvoiceNavigationCell = (row, invoiceId) => {
+    const cell = document.createElement('td');
+    cell.className = 'invoice-id';
+    const normalizedId = String(invoiceId || '').replace(/\D/g, '');
+    if (!normalizedId) {
+      cell.textContent = '—';
+    } else {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'invoice-detail-trigger';
+      button.textContent = normalizedId;
+      button.setAttribute('aria-label', `Abrir a fatura ${normalizedId}`);
+      button.addEventListener('click', () => openInvoiceInWorkspace(normalizedId));
+      cell.appendChild(button);
+    }
+    row.appendChild(cell);
+    return cell;
+  };
+
   const setMessage = (message, kind = '') => {
     elements.message.textContent = message;
     elements.message.dataset.kind = kind;
@@ -424,7 +455,7 @@
     };
     const rows = issues.map((record) => {
       const row = document.createElement('tr');
-      appendCell(row, record.invoiceId || '—').className = 'invoice-id';
+      appendInvoiceNavigationCell(row, record.invoiceId);
       const client = appendCell(row, record.clientName || 'Não informado');
       const documentLine = document.createElement('small');
       documentLine.textContent = formatCnpj(record.clientCnpj);
@@ -582,15 +613,19 @@
     bounced: 'Entrega recusada',
     review: 'Requer conferência',
     error: 'Erro',
-    waiting_contacts: 'Sem destinatário'
+    waiting_contacts: 'Sem destinatário',
+    resolved: 'Resolvido manualmente'
   };
+  const RESOLVABLE_LOG_STATUSES = new Set([
+    'soft_bounce', 'hard_bounce', 'bounced', 'review', 'error', 'waiting_contacts'
+  ]);
 
   const renderLogs = (payload) => {
     const logs = Array.isArray(payload.logs) ? payload.logs : [];
     const rows = logs.map((record) => {
       const row = document.createElement('tr');
       appendCell(row, formatDateTime(record.createdAt));
-      appendCell(row, record.invoiceId || '—').className = 'invoice-id';
+      appendInvoiceNavigationCell(row, record.invoiceId);
       const client = appendCell(row, record.clientName || 'Não informado');
       const documentLine = document.createElement('small');
       documentLine.textContent = formatCnpj(record.clientCnpj);
@@ -613,6 +648,34 @@
       previewButton.className = 'button button-quiet log-preview-button';
       previewButton.textContent = 'Visualizar';
       previewButton.addEventListener('click', () => openEmailLogModal(record, previewButton));
+      const resolveButton = document.createElement('button');
+      resolveButton.type = 'button';
+      resolveButton.className = 'button button-quiet log-resolve-button';
+      resolveButton.textContent = 'Marcar resolvido';
+      resolveButton.disabled = !record.id;
+      resolveButton.addEventListener('click', async () => {
+        if (!record.id || !window.confirm(
+          'Marcar esta ocorrência como resolvida? O histórico será preservado e ela sairá das pendências.'
+        )) return;
+        resolveButton.disabled = true;
+        setLoading(true);
+        try {
+          const result = await requestJson(endpoint('logs'), {
+            method: 'PATCH',
+            body: JSON.stringify({ id: record.id })
+          });
+          await Promise.all([
+            loadLogs({ page: state.logPage }),
+            loadPending()
+          ]);
+          setMessage(result.message || 'Ocorrência marcada como resolvida.', 'success');
+        } catch (error) {
+          setMessage(error.message, 'error');
+          resolveButton.disabled = false;
+        } finally {
+          setLoading(false);
+        }
+      });
       const deleteButton = document.createElement('button');
       deleteButton.type = 'button';
       deleteButton.className = 'button danger-button log-delete-button';
@@ -636,7 +699,9 @@
           setLoading(false);
         }
       });
-      actionButtons.append(previewButton, deleteButton);
+      actionButtons.append(previewButton);
+      if (RESOLVABLE_LOG_STATUSES.has(record.status)) actionButtons.append(resolveButton);
+      actionButtons.append(deleteButton);
       action.appendChild(actionButtons);
       row.appendChild(action);
       return row;

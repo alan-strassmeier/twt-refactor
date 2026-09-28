@@ -17,6 +17,7 @@ const {
   saoPauloDate: logDate,
   listLogs,
   deleteLog,
+  resolveLog,
   getInvoiceBlock,
   setInvoiceBlocked,
   listBlockedInvoiceIds,
@@ -1149,6 +1150,43 @@ test('exclui somente o envio de log selecionado e seus estados correlacionados',
   assert.deepEqual(removed, records.slice(0, 2));
 });
 
+test('marca falha de entrega como resolvida sem apagar seu histórico', async () => {
+  const original = JSON.stringify({
+    id: 'falha-1',
+    invoiceId: '11756',
+    clientReference: 'ref-1',
+    status: 'hard_bounce',
+    email: 'antigo@example.com',
+    createdAt: '2026-09-11T12:00:00.000Z'
+  });
+  const unrelated = JSON.stringify({
+    id: 'outro',
+    invoiceId: '11757',
+    status: 'delivered',
+    createdAt: '2026-09-11T11:00:00.000Z'
+  });
+  const records = [original, unrelated];
+  const command = async (operation, _key, ...values) => {
+    if (operation === 'ZREVRANGE') return records;
+    if (operation === 'ZADD') {
+      records.unshift(values[1]);
+      return 1;
+    }
+    throw new Error(`Comando inesperado: ${operation}`);
+  };
+
+  const resolved = await resolveLog('falha-1', 'Contato removido do cadastro.', command);
+  assert.equal(resolved.status, 'resolved');
+  assert.equal(resolved.previousStatus, 'hard_bounce');
+  assert.equal(resolved.resolvedLogId, 'falha-1');
+  assert.equal(resolved.resolutionNote, 'Contato removido do cadastro.');
+
+  const result = await listLogs({ invoiceId: '11756' }, command);
+  assert.equal(result.total, 1);
+  assert.equal(result.logs[0].status, 'resolved');
+  assert.ok(!result.logs.some((record) => record.id === 'falha-1'));
+});
+
 test('persiste e remove o bloqueio de envio por fatura', async () => {
   const blocks = new Map();
   const command = async (operation, _key, field, value) => {
@@ -1489,6 +1527,11 @@ test('mantém estados financeiro, documental, de cobrança e pagamento independe
   assert.equal(control.collection.code, 'delivered');
   assert.equal(control.payment.code, 'registered');
 
+  const resolved = invoiceControl(invoice, {
+    logs: [{ status: 'resolved', email: 'antigo@example.com' }]
+  });
+  assert.equal(resolved.collection.code, 'resolved');
+
   const ted = invoiceControl({
     ...invoice,
     client: 'RS WHITE MARTINS GASES INDUSTRIAIS LTDA'
@@ -1588,6 +1631,9 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(html, /id="pendingRows"/);
   assert.match(html, /id="collectionLogsForm"/);
   assert.match(html, /id="previousLogPage"/);
+  assert.match(source, /appendInvoiceNavigationCell/);
+  assert.match(source, /Marcar resolvido/);
+  assert.match(apiSource, /store\.resolveLog\(body\.id, body\.note\)/);
   assert.match(html, /id="categoryDeleteModal"/);
   assert.match(html, /id="emailLogModal"/);
   assert.match(html, /id="emailLogBody"/);

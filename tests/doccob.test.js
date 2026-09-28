@@ -286,6 +286,45 @@ test('quando há dois DOCCOBs válidos da mesma fatura usa o arquivo mais recent
   assert.equal(result.objectKey, `${prefix}INCOMING-DOF_28092026113241.txt`);
 });
 
+test('prioriza arquivos da data de emissão mesmo fora do corte dos mais recentes', async () => {
+  const invoice12840 = cteDoccob.replaceAll('11532', '12840');
+  const prefix = 'brudam/clientes/41870054000276/doccob/';
+  const targetKey = `${prefix}INCOMING-DOF_28092026100229.txt`;
+  const objects = [
+    ...Array.from({ length: 12 }, (_, index) => ({
+      Key: `${prefix}INCOMING-DOF_27092026${String(120000 + index).padStart(6, '0')}.txt`,
+      LastModified: new Date(Date.UTC(2026, 8, 28, 14, index))
+    })),
+    {
+      Key: targetKey,
+      LastModified: new Date('2026-09-28T13:02:29.000Z')
+    }
+  ];
+  const downloaded = [];
+  const result = await findDoccobForInvoice({
+    invoiceId: 12840,
+    clientCnpj: '41.870.054/0002-76',
+    issuedAt: '2026-09-28',
+    config: {
+      basePrefix: 'brudam/clientes',
+      scanLimit: 5,
+      issuedDateScanLimit: 50
+    },
+    storage: {
+      async listObjects() {
+        return objects;
+      },
+      async getObject(key) {
+        downloaded.push(key);
+        return key === targetKey ? invoice12840 : minuteDoccob;
+      }
+    }
+  });
+  assert.equal(result.invoice.id, '12840');
+  assert.equal(result.objectKey, targetKey);
+  assert.equal(downloaded[0], targetKey);
+});
+
 test('só habilita R2 quando todas as credenciais privadas existem', () => {
   assert.equal(r2ConfigFromEnv({}), null);
   assert.deepEqual(r2ConfigFromEnv({
@@ -299,7 +338,8 @@ test('só habilita R2 quando todas as credenciais privadas existem', () => {
     secretAccessKey: 'secret',
     bucket: 'bucket',
     basePrefix: 'brudam/clientes',
-    scanLimit: 250
+    scanLimit: 250,
+    issuedDateScanLimit: 1000
   });
 });
 

@@ -124,7 +124,8 @@ const resolveInvoiceBillingData = async (invoiceId, dependencies = {}) => {
   try {
     doccob = await findDoccob({
       invoiceId: normalizedInvoiceId,
-      clientCnpj
+      clientCnpj,
+      issuedAt: normalized.issuedAt
     });
   } catch (error) {
     throw Object.assign(new Error('Não foi possível confirmar o emitente da fatura no DOCCOB.'), {

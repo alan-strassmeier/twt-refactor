@@ -232,7 +232,8 @@ const handleInvoiceDetail = async (req, res, query) => {
   try {
     doccob = await findDoccobForInvoice({
       invoiceId,
-      clientCnpj: invoice.clientDocument
+      clientCnpj: invoice.clientDocument,
+      issuedAt: invoice.issuedAt
     });
   } catch (error) {
     doccobError = error.message;
@@ -338,7 +339,19 @@ const handleLogs = async (req, res, query) => {
     });
     return;
   }
-  res.setHeader('Allow', 'GET, DELETE');
+  if (req.method === 'PATCH') {
+    if (!requireSameOrigin(req, res)) return;
+    const body = await parseJsonBody(req, 4096);
+    const log = await store.resolveLog(body.id, body.note);
+    sendJson(res, log ? 200 : 404, {
+      log,
+      message: log
+        ? 'Ocorrência marcada como resolvida.'
+        : 'Registro de log não encontrado.'
+    });
+    return;
+  }
+  res.setHeader('Allow', 'GET, PATCH, DELETE');
   sendJson(res, 405, { message: 'Método não permitido.' });
 };
 

@@ -380,7 +380,8 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
   const clientCnpj = String(invoice.clientDocument || '').replace(/\D/g, '');
   const doccob = await context.findDoccobForInvoice({
     invoiceId: invoice.id,
-    clientCnpj
+    clientCnpj,
+    issuedAt: invoice.issuedAt
   });
   if (!doccob) {
     const current = context.pendingByInvoice.get(String(invoice.id));

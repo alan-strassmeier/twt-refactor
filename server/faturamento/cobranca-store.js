@@ -348,6 +348,30 @@ const deleteLog = async (id, command = redisCommand) => {
   return { deleted, id: logId };
 };
 
+const resolveLog = async (id, note = '', command = redisCommand) => {
+  const logId = requiredText(id, 'Log', 128);
+  const values = await command('ZREVRANGE', KEYS.logs, '0', '999') || [];
+  const selected = values
+    .map((value) => parseRecord(value))
+    .find((record) => record?.id === logId);
+  if (!selected) return null;
+  if (selected.status === 'resolved') return selected;
+
+  const resolvedAt = new Date().toISOString();
+  const resolutionNote = String(note || '').trim().replace(/\s+/g, ' ').slice(0, 500);
+  return addLog({
+    ...selected,
+    id: randomUUID(),
+    createdAt: resolvedAt,
+    status: 'resolved',
+    previousStatus: selected.status || '',
+    resolvedAt,
+    resolvedLogId: selected.id,
+    resolutionNote,
+    message: resolutionNote || 'Ocorrência marcada como resolvida manualmente.'
+  }, command);
+};
+
 const getInvoiceBlock = async (invoiceId, command = redisCommand) => {
   const normalizedId = requiredInvoiceId(invoiceId);
   return parseRecord(await command('HGET', KEYS.invoiceBlocks, normalizedId));
@@ -392,8 +416,12 @@ const filteredLogs = async ({ invoiceId = '', date = '', cnpj = '' } = {}, comma
   const normalizedInvoice = String(invoiceId || '').replace(/\D/g, '');
   const normalizedCnpj = digits(cnpj);
   const normalizedDate = String(date || '').slice(0, 10);
-  const matching = values
-    .map((value) => parseRecord(value))
+  const records = values.map((value) => parseRecord(value)).filter(Boolean);
+  const resolvedLogIds = new Set(records
+    .filter((record) => record.status === 'resolved' && record.resolvedLogId)
+    .map((record) => String(record.resolvedLogId)));
+  const matching = records
+    .filter((record) => !resolvedLogIds.has(String(record.id || '')))
     .filter(Boolean)
     .filter((record) => !normalizedInvoice || digits(record.invoiceId) === normalizedInvoice)
     .filter((record) => !normalizedCnpj || digits(record.clientCnpj) === normalizedCnpj)
@@ -503,6 +531,7 @@ module.exports = {
   releaseWebhookEvent,
   addLog,
   deleteLog,
+  resolveLog,
   getInvoiceBlock,
   setInvoiceBlocked,
   listBlockedInvoiceIds,

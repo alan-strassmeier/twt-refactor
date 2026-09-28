@@ -40,7 +40,11 @@ test('localiza os CT-es da fatura pelo DOCCOB sem depender da empresa', async ()
       }
     }),
     findDoccobForInvoice: async (input) => {
-      assert.deepEqual(input, { invoiceId: 11532, clientCnpj: '41870054000276' });
+      assert.deepEqual(input, {
+        invoiceId: 11532,
+        clientCnpj: '41870054000276',
+        issuedAt: null
+      });
       return { transports: [{ accessKey: KEY }, { accessKey: KEY }] };
     }
   });
