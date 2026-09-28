@@ -833,7 +833,7 @@
       const result = await requestJson(endpoint('process'), { method: 'POST' });
       await Promise.all([loadPending(), loadLogs()]);
       setMessage(
-        `Verificação concluída: ${result.sent} e-mail(s) enviado(s), ${result.pendingDoccob} aguardando DOCCOB, ${result.blocked || 0} fatura(s) bloqueada(s) e ${result.errors.length} erro(s).${result.stoppedByLimit ? ` ${result.remaining || 0} fatura(s) continuarão na próxima rodada.` : ''}`,
+        `Verificação concluída: ${result.discovered || 0} nova(s) fatura(s) registrada(s), ${result.sent} e-mail(s) enviado(s), ${result.pendingDoccob} aguardando DOCCOB, ${result.blocked || 0} fatura(s) bloqueada(s) e ${result.errors.length} erro(s).${result.stoppedByLimit ? ` ${result.remaining || 0} fatura(s) continuarão na próxima rodada.` : ''}`,
         result.errors.length || result.stoppedByLimit ? 'warning' : 'success'
       );
     } catch (error) {

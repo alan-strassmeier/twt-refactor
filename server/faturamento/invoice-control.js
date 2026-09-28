@@ -67,6 +67,9 @@ const financialState = (invoice, now = new Date()) => {
 };
 
 const documentState = (pending, logs = []) => {
+  if (pending?.reason === 'queued') {
+    return controlState('queued', 'Aguardando processamento', 'neutral');
+  }
   if (pending?.reason === 'doccob') {
     return controlState('awaiting_doccob', 'Aguardando DOCCOB', 'warning', pending.message || '');
   }
@@ -198,7 +201,7 @@ const issueFromPending = (record, now) => {
     contacts: 'Cadastrar destinatário',
     documents: record.reason === 'doccob' ? 'Aguardando DOCCOB' : 'Falha nos documentos',
     payment: 'Falha no boleto',
-    processing: 'Falha no processamento'
+    processing: record.reason === 'queued' ? 'Aguardando processamento' : 'Falha no processamento'
   };
   return {
     id: `pending:${digits(record.invoiceId)}`,

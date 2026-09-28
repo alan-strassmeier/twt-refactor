@@ -389,9 +389,12 @@ const handleProcess = async (req, res) => {
       startedAt,
       completedAt: result.completedAt,
       scanned: result.scanned,
+      discovered: result.discovered,
+      reconciled: result.reconciled,
       processed: result.processed,
       sent: result.sent,
       blocked: result.blocked,
+      alreadyCompleted: result.alreadyCompleted,
       remaining: result.remaining,
       stoppedByLimit: result.stoppedByLimit,
       errors: result.errors.length

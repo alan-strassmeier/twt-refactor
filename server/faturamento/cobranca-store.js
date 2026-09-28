@@ -11,6 +11,7 @@ const KEYS = Object.freeze({
   categories: 'faturamento:cobranca:categorias:v1',
   seed: 'faturamento:cobranca:categorias-seed:v1',
   pending: 'faturamento:cobranca:doccob-pendente:v1',
+  completedEvents: 'faturamento:cobranca:eventos-concluidos:v1',
   dismissedIssues: 'faturamento:cobranca:pendencias-ocultas:v1',
   deliveries: 'faturamento:cobranca:envios:v1',
   deliveryReferences: 'faturamento:cobranca:referencias:v1',
@@ -18,6 +19,7 @@ const KEYS = Object.freeze({
   logs: 'faturamento:cobranca:logs:v1',
   invoiceBlocks: 'faturamento:cobranca:faturas-bloqueadas:v1',
   overdueCursor: 'faturamento:cobranca:cursor:vencidas:v1',
+  reconciliationCursor: 'faturamento:cobranca:cursor:reconciliacao:v1',
   billingQueueCursor: 'faturamento:cobranca:cursor:fila:v1',
   processing: 'faturamento:cobranca:processamento:v1',
   lastRun: 'faturamento:cobranca:ultima-execucao:v1'
@@ -216,8 +218,42 @@ const savePending = (record, command = redisCommand) => command(
   JSON.stringify(record)
 );
 
+const savePendingBatch = (records, command = redisCommand) => {
+  const validRecords = (Array.isArray(records) ? records : [])
+    .filter((record) => record?.invoiceId);
+  if (!validRecords.length) return Promise.resolve(0);
+  return command(
+    'HSET',
+    KEYS.pending,
+    ...validRecords.flatMap((record) => [String(record.invoiceId), JSON.stringify(record)])
+  );
+};
+
 const removePending = (invoiceId, command = redisCommand) =>
   command('HDEL', KEYS.pending, requiredInvoiceId(invoiceId));
+
+const completedEventField = (event, invoiceId) => {
+  const normalizedEvent = requiredText(event, 'Evento', 48)
+    .toLocaleLowerCase('pt-BR')
+    .replace(/[^a-z0-9_]/g, '');
+  return `${normalizedEvent}:${requiredInvoiceId(invoiceId)}`;
+};
+
+const getCompletedBillingEvents = async (items, command = redisCommand) => {
+  const fields = [...new Set((Array.isArray(items) ? items : []).map((item) => (
+    completedEventField(item.event, item.invoiceId)
+  )))];
+  if (!fields.length) return new Set();
+  const values = await command('HMGET', KEYS.completedEvents, ...fields) || [];
+  return new Set(fields.filter((_field, index) => Boolean(values[index])));
+};
+
+const markBillingEventCompleted = (event, invoiceId, record, command = redisCommand) => command(
+  'HSET',
+  KEYS.completedEvents,
+  completedEventField(event, invoiceId),
+  JSON.stringify(record)
+);
 
 const listDismissedIssues = async (command = redisCommand) => {
   const flat = await command('HGETALL', KEYS.dismissedIssues) || [];
@@ -398,6 +434,12 @@ const getOverdueCursor = async (command = redisCommand) =>
 const saveOverdueCursor = (cursor, command = redisCommand) =>
   command('SET', KEYS.overdueCursor, String(Math.max(0, Number(cursor) || 0)));
 
+const getReconciliationCursor = async (command = redisCommand) =>
+  Math.max(0, Number(await command('GET', KEYS.reconciliationCursor)) || 0);
+
+const saveReconciliationCursor = (cursor, command = redisCommand) =>
+  command('SET', KEYS.reconciliationCursor, String(Math.max(0, Number(cursor) || 0)));
+
 const getBillingQueueCursor = async (command = redisCommand) =>
   Math.max(0, Number(await command('GET', KEYS.billingQueueCursor)) || 0);
 
@@ -444,7 +486,11 @@ module.exports = {
   deleteContact,
   listPending,
   savePending,
+  savePendingBatch,
   removePending,
+  completedEventField,
+  getCompletedBillingEvents,
+  markBillingEventCompleted,
   listDismissedIssues,
   dismissIssue,
   deliveryField,
@@ -465,6 +511,8 @@ module.exports = {
   listLogs,
   getOverdueCursor,
   saveOverdueCursor,
+  getReconciliationCursor,
+  saveReconciliationCursor,
   getBillingQueueCursor,
   saveBillingQueueCursor,
   claimProcessingRun,
