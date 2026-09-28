@@ -202,8 +202,6 @@ const issueFromPending = (record, now) => {
   };
   return {
     id: `pending:${digits(record.invoiceId)}`,
-    source: 'pending',
-    recordId: digits(record.invoiceId),
     type,
     priority: priorityFor(record, type, now),
     invoiceId: String(record.invoiceId || ''),
@@ -226,8 +224,6 @@ const issueFromPending = (record, now) => {
 
 const issueFromLog = (record, now) => ({
   id: `log:${record.id || record.clientReference || `${digits(record.invoiceId)}:${record.email || ''}`}`,
-  source: 'log',
-  recordId: String(record.id || ''),
   type: record.status === 'waiting_contacts' ? 'contacts' : 'email',
   priority: priorityFor(record, 'email', now),
   invoiceId: String(record.invoiceId || ''),

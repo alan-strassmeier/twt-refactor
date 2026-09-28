@@ -154,21 +154,22 @@ const handlePending = async (req, res) => {
   if (req.method === 'DELETE') {
     if (!requireSameOrigin(req, res)) return;
     const body = await parseJsonBody(req, 4096);
-    let deleted = false;
-    if (body.source === 'pending') {
-      deleted = Number(await store.removePending(body.invoiceId)) > 0;
-    } else if (body.source === 'log') {
-      const result = await store.deleteLog(body.recordId);
-      deleted = result.deleted > 0;
-    } else {
-      sendJson(res, 422, { message: 'Pendência inválida.' });
+    const [pending, logs] = await Promise.all([
+      store.listPending(),
+      store.filteredLogs()
+    ]);
+    const issue = buildUnifiedIssues({ pending, logs }).find((record) => record.id === body.id);
+    if (!issue) {
+      sendJson(res, 404, {
+        deleted: false,
+        message: 'Pendência não encontrada ou já removida.'
+      });
       return;
     }
-    sendJson(res, deleted ? 200 : 404, {
-      deleted,
-      message: deleted
-        ? 'Pendência removida.'
-        : 'Pendência não encontrada ou já removida.'
+    await store.dismissIssue(issue.id, issue.updatedAt);
+    sendJson(res, 200, {
+      deleted: true,
+      message: 'Pendência removida da lista. Os logs foram preservados.'
     });
     return;
   }
@@ -177,12 +178,15 @@ const handlePending = async (req, res) => {
     sendJson(res, 405, { message: 'Método não permitido.' });
     return;
   }
-  const [pending, logs, lastRun] = await Promise.all([
+  const [pending, logs, lastRun, dismissedIssues] = await Promise.all([
     store.listPending(),
     store.filteredLogs(),
-    store.getLastRun()
+    store.getLastRun(),
+    store.listDismissedIssues()
   ]);
-  const issues = buildUnifiedIssues({ pending, logs });
+  const issues = buildUnifiedIssues({ pending, logs }).filter((issue) => (
+    dismissedIssues.get(issue.id) !== String(issue.updatedAt || '')
+  ));
   sendJson(res, 200, {
     pending,
     issues,

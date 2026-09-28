@@ -21,6 +21,8 @@ const {
   setInvoiceBlocked,
   listBlockedInvoiceIds,
   removePending,
+  listDismissedIssues,
+  dismissIssue,
   claimProcessingRun,
   releaseProcessingRun
 } = require('../server/faturamento/cobranca-store');
@@ -1041,7 +1043,7 @@ test('persiste e remove o bloqueio de envio por fatura', async () => {
   assert.equal(await getInvoiceBlock('11756', command), null);
 });
 
-test('remove somente a pendência da fatura informada', async () => {
+test('remove somente a pendência operacional da fatura informada', async () => {
   const calls = [];
   const deleted = await removePending('011756', async (...args) => {
     calls.push(args);
@@ -1049,6 +1051,21 @@ test('remove somente a pendência da fatura informada', async () => {
   });
   assert.equal(deleted, 1);
   assert.deepEqual(calls[0].slice(-1), ['11756']);
+});
+
+test('oculta a pendência sem remover o log que a originou', async () => {
+  const values = new Map();
+  const command = async (operation, _key, field, value) => {
+    if (operation === 'HSET') {
+      values.set(field, value);
+      return 1;
+    }
+    if (operation === 'HGETALL') return [...values.entries()].flat();
+    throw new Error(`Comando inesperado: ${operation}`);
+  };
+  await dismissIssue('log:falha-1', '2026-09-28T10:00:00Z', command);
+  const dismissed = await listDismissedIssues(command);
+  assert.equal(dismissed.get('log:falha-1'), '2026-09-28T10:00:00Z');
 });
 
 test('valida a assinatura HMAC do formulário enviado pelo ZeptoMail', () => {
@@ -1374,12 +1391,8 @@ test('fila unificada prioriza vencidas e reúne falhas de documentos e entrega',
   assert.equal(issues[0].invoiceId, '100');
   assert.equal(issues[0].priority, 'critical');
   assert.equal(issues[0].action, 'documents');
-  assert.equal(issues[0].source, 'pending');
-  assert.equal(issues[0].recordId, '100');
   assert.equal(issues[1].type, 'email');
   assert.equal(issues[1].action, 'logs');
-  assert.equal(issues[1].source, 'log');
-  assert.equal(issues[1].recordId, 'log-1');
 });
 
 test('fila direciona boleto e falha geral para a ação contextual correta', () => {
@@ -1477,7 +1490,7 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(source, /billing:open-invoice-detail/);
   assert.match(source, /Conferir documentos/);
   assert.match(source, /Conferir boleto/);
-  assert.match(source, /Remover somente a pendência da fatura/);
+  assert.match(source, /O log será preservado/);
   assert.match(source, /pendingFilter: 'all'/);
   assert.match(source, /className = 'pending-summary-filter'/);
   assert.match(source, /aria-pressed/);
@@ -1489,7 +1502,7 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(apiSource, /query\.route === 'contacts-sync'/);
   assert.match(apiSource, /query\.route === 'invoice-detail'/);
   assert.match(apiSource, /query\.route === 'invoice-block'/);
-  assert.match(apiSource, /store\.removePending\(body\.invoiceId\)/);
+  assert.match(apiSource, /store\.dismissIssue\(issue\.id, issue\.updatedAt\)/);
   assert.match(apiSource, /query\.route === 'resend'/);
   assert.match(apiSource, /req\.method === 'GET' \|\| req\.method === 'HEAD'/);
   assert.equal(fs.existsSync(path.join(root, 'api', 'faturamento', 'cobranca.js')), true);

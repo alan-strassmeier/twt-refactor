@@ -258,6 +258,34 @@ test('localiza no R2 o DOCCOB que contém a fatura exata', async () => {
   assert.equal(result.objectKey, 'brudam/clientes/41870054000276/doccob/correto.txt');
 });
 
+test('quando há dois DOCCOBs válidos da mesma fatura usa o arquivo mais recente', async () => {
+  const invoice11840 = cteDoccob.replaceAll('11532', '11840');
+  const prefix = 'brudam/clientes/41870054000276/doccob/';
+  const objects = [{
+    Key: `${prefix}INCOMING-DOF_28092026100229.txt`,
+    LastModified: new Date('2026-09-28T13:02:29.000Z')
+  }, {
+    Key: `${prefix}INCOMING-DOF_28092026113241.txt`,
+    LastModified: new Date('2026-09-28T14:32:41.000Z')
+  }];
+  const result = await findDoccobForInvoice({
+    invoiceId: 11840,
+    clientCnpj: '41.870.054/0002-76',
+    config: { basePrefix: 'brudam/clientes', scanLimit: 20 },
+    storage: {
+      async listObjects(receivedPrefix) {
+        assert.equal(receivedPrefix, prefix);
+        return objects;
+      },
+      async getObject() {
+        return invoice11840;
+      }
+    }
+  });
+  assert.equal(result.invoice.id, '11840');
+  assert.equal(result.objectKey, `${prefix}INCOMING-DOF_28092026113241.txt`);
+});
+
 test('só habilita R2 quando todas as credenciais privadas existem', () => {
   assert.equal(r2ConfigFromEnv({}), null);
   assert.deepEqual(r2ConfigFromEnv({

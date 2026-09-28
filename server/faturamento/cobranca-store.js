@@ -11,6 +11,7 @@ const KEYS = Object.freeze({
   categories: 'faturamento:cobranca:categorias:v1',
   seed: 'faturamento:cobranca:categorias-seed:v1',
   pending: 'faturamento:cobranca:doccob-pendente:v1',
+  dismissedIssues: 'faturamento:cobranca:pendencias-ocultas:v1',
   deliveries: 'faturamento:cobranca:envios:v1',
   deliveryReferences: 'faturamento:cobranca:referencias:v1',
   webhookEvents: 'faturamento:cobranca:webhook-eventos:v1',
@@ -217,6 +218,22 @@ const savePending = (record, command = redisCommand) => command(
 const removePending = (invoiceId, command = redisCommand) =>
   command('HDEL', KEYS.pending, requiredInvoiceId(invoiceId));
 
+const listDismissedIssues = async (command = redisCommand) => {
+  const flat = await command('HGETALL', KEYS.dismissedIssues) || [];
+  const dismissed = new Map();
+  for (let index = 0; index < flat.length; index += 2) {
+    dismissed.set(String(flat[index]), String(flat[index + 1] || ''));
+  }
+  return dismissed;
+};
+
+const dismissIssue = async (id, version = '', command = redisCommand) => {
+  const issueId = requiredText(id, 'Pendência', 256);
+  const issueVersion = String(version || '');
+  await command('HSET', KEYS.dismissedIssues, issueId, issueVersion);
+  return { id: issueId, version: issueVersion };
+};
+
 const deliveryField = (event, invoiceId, email) => [
   String(event || '').toLocaleLowerCase('pt-BR').replace(/[^a-z0-9_]/g, '').slice(0, 48),
   String(invoiceId || '').replace(/\D/g, ''),
@@ -421,6 +438,8 @@ module.exports = {
   listPending,
   savePending,
   removePending,
+  listDismissedIssues,
+  dismissIssue,
   deliveryField,
   getDelivery,
   claimDelivery,

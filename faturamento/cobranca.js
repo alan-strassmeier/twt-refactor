@@ -451,21 +451,16 @@
       remove.type = 'button';
       remove.className = 'button danger-button issue-remove';
       remove.textContent = 'Remover';
-      remove.disabled = record.source === 'log' && !record.recordId;
       remove.addEventListener('click', async () => {
         if (!window.confirm(
-          `Remover somente a pendência da fatura ${record.invoiceId}? Ela poderá reaparecer se a causa continuar.`
+          `Remover somente a pendência da fatura ${record.invoiceId}? O log será preservado e a pendência poderá reaparecer se houver uma nova ocorrência.`
         )) return;
         remove.disabled = true;
         setLoading(true);
         try {
           const result = await requestJson(endpoint('pending'), {
             method: 'DELETE',
-            body: JSON.stringify({
-              source: record.source,
-              recordId: record.recordId,
-              invoiceId: record.invoiceId
-            })
+            body: JSON.stringify({ id: record.id })
           });
           await loadPending();
           setMessage(result.message || 'Pendência removida.', 'success');
