@@ -15,10 +15,13 @@ const {
   getInvoiceBankSlipPdf
 } = require('../server/faturamento/boleto');
 const {
+  BANK_SLIP_CREATION_START_DATE,
+  BANK_SLIP_CREATION_BLOCKED_CODE,
   BILLING_BANKS,
   WHITE_MARTINS_TED_DOC_CNPJS,
   ELECNOR_TED_DOC_CNPJS,
   bankSlipBankForIssuer,
+  isBankSlipCreationEligible,
   requiresTedDocPayment
 } = require('../server/faturamento/billing-rules');
 const { getBankSlipRecords } = require('../server/faturamento/boleto-store');
@@ -52,6 +55,7 @@ const billingDependencies = (issuerCnpj = '09123137000108') => ({
     transports: []
   }),
   fetchCompany: async () => payerCompany,
+  isBankSlipCreationEligible: () => true,
   now: new Date('2026-08-08T12:00:00Z')
 });
 
@@ -142,6 +146,62 @@ test('bloqueia geração de boleto para cliente com pagamento por TED/DOC', asyn
     }),
     (error) => error.statusCode === 422 && /TED\/DOC/.test(error.message)
   );
+});
+
+test('bloqueia somente a criação de boleto para fatura anterior ao corte', async () => {
+  let bankCalls = 0;
+  await assert.rejects(generateInvoiceBankSlip('11518', {
+    ...billingDependencies('97434690000129'),
+    isBankSlipCreationEligible,
+    getBankSlipRecord: async () => null,
+    itauBoletoConfig: () => {
+      bankCalls += 1;
+      throw new Error('Não deve carregar credenciais bancárias.');
+    },
+    claimBankSlip: async () => {
+      bankCalls += 1;
+      throw new Error('Não deve reservar emissão.');
+    },
+    createItauBankSlip: async () => {
+      bankCalls += 1;
+      throw new Error('Não deve registrar boleto.');
+    }
+  }), (error) => {
+    assert.equal(error.code, BANK_SLIP_CREATION_BLOCKED_CODE);
+    assert.equal(error.statusCode, 409);
+    assert.match(error.message, new RegExp(BANK_SLIP_CREATION_START_DATE.split('-').reverse().join('/')));
+    return true;
+  });
+  assert.equal(bankCalls, 0);
+});
+
+test('reaproveita boleto pronto anterior ao corte sem nova chamada bancária', async () => {
+  let bankCalls = 0;
+  const result = await generateInvoiceBankSlip('11518', {
+    ...billingDependencies('97434690000129'),
+    now: new Date('2026-09-28T12:00:00Z'),
+    isBankSlipCreationEligible,
+    getBankSlipRecord: async () => ({
+      state: 'ready',
+      invoiceId: '11518',
+      bank: 'itau',
+      bankSlipId: 'boleto-existente',
+      amount: 1844,
+      dueAt: '2026-08-14'
+    }),
+    itauBoletoConfig: () => {
+      bankCalls += 1;
+      throw new Error('Não deve carregar credenciais bancárias.');
+    },
+    createItauBankSlip: async () => {
+      bankCalls += 1;
+      throw new Error('Não deve registrar boleto.');
+    }
+  });
+  assert.equal(result.status, 'ready');
+  assert.equal(result.created, false);
+  assert.equal(result.bank, 'itau');
+  assert.equal(bankCalls, 0);
 });
 
 test('fatura DSL é validada no Itaú sem registrar título nem chamar o Bradesco', async () => {

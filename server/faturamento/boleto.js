@@ -6,7 +6,10 @@ const {
 } = require('./invoice-pdf');
 const { findDoccobForInvoice } = require('./r2-doccob');
 const {
+  BANK_SLIP_CREATION_START_DATE,
+  BANK_SLIP_CREATION_BLOCKED_CODE,
   bankSlipBankForIssuer,
+  isBankSlipCreationEligible,
   requiresTedDocPayment
 } = require('./billing-rules');
 const {
@@ -109,7 +112,7 @@ const issuerFromInvoice = (invoice, doccob) => digits(
   invoice?.emitente?.cnpj
 );
 
-const resolveInvoiceBillingData = async (invoiceId, dependencies = {}) => {
+const resolveInvoiceBillingData = async (invoiceId, dependencies = {}, options = {}) => {
   if (!validInvoiceId(invoiceId)) throw validationError('Número da fatura inválido.');
   const requestInvoice = dependencies.requestExactInvoice || requestExactInvoice;
   const findDoccob = dependencies.findDoccobForInvoice || findDoccobForInvoice;
@@ -154,7 +157,7 @@ const resolveInvoiceBillingData = async (invoiceId, dependencies = {}) => {
     now.getUTCDate()
   )).toISOString().slice(0, 10);
   if (!dueAt) throw validationError('A fatura não possui data de vencimento válida.');
-  if (dueAt < today) {
+  if (dueAt < today && !options.allowExpiredDueDate) {
     throw validationError('O vencimento da fatura já passou. Atualize o vencimento na Brudam antes de gerar o boleto.');
   }
   if (clientCnpj.length !== 14) throw validationError('CNPJ do cliente não está completo.');
@@ -652,8 +655,10 @@ const generateInvoiceBankSlip = async (invoiceId, dependencies = {}) => {
   const release = dependencies.releaseBankSlipClaim || store.releaseBankSlipClaim;
   const now = dependencies.now || new Date();
   const normalizedInvoiceId = String(invoiceId);
-  const billing = await resolveInvoiceBillingData(normalizedInvoiceId, dependencies);
   const existing = await getRecord(normalizedInvoiceId);
+  const billing = await resolveInvoiceBillingData(normalizedInvoiceId, dependencies, {
+    allowExpiredDueDate: existing?.state === 'ready'
+  });
   const existingBank = existing?.bank || 'c6';
   if (existing && existingBank !== billing.bank.id) {
     throw Object.assign(new Error('Existe um registro bancário divergente para esta fatura. Faça a conferência antes de emitir outro boleto.'), {
@@ -670,12 +675,20 @@ const generateInvoiceBankSlip = async (invoiceId, dependencies = {}) => {
   const create = isItau
     ? (dependencies.createItauBankSlip || createItauBankSlip)
     : (dependencies.createBradescoBankSlip || createBradescoBankSlip);
-  const config = getConfig();
-  const payload = isItau
-    ? itauBankSlipPayload(billing, config)
-    : bradescoBankSlipPayload(billing, config);
+  let config;
+  let payload;
+  const prepareBankRequest = () => {
+    if (!config) {
+      config = getConfig();
+      payload = isItau
+        ? itauBankSlipPayload(billing, config)
+        : bradescoBankSlipPayload(billing, config);
+    }
+    return { config, payload };
+  };
 
   if (existing?.state === 'review' && isItau) {
+    prepareBankRequest();
     const query = dependencies.queryItauBankSlips || queryItauBankSlips;
     const attemptedAt = existing.startedAt || existing.reviewedAt || now.toISOString();
     let recovered;
@@ -711,6 +724,7 @@ const generateInvoiceBankSlip = async (invoiceId, dependencies = {}) => {
     ), { statusCode: 409 });
   }
   if (existing?.state === 'review' && isBradesco) {
+    prepareBankRequest();
     const ourNumber = digits(existing.ourNumber);
     if (ourNumber.length !== 11) {
       throw Object.assign(new Error(
@@ -747,6 +761,19 @@ const generateInvoiceBankSlip = async (invoiceId, dependencies = {}) => {
   if (existing?.state === 'processing' || existing?.state === 'review') {
     throw generationConflict(existing.state);
   }
+
+  const creationEligible = dependencies.isBankSlipCreationEligible || isBankSlipCreationEligible;
+  if (!creationEligible({ issuedAt: billing.issuedAt })) {
+    throw Object.assign(new Error(
+      `A geração automática de novos boletos está bloqueada para faturas emitidas antes de ${BANK_SLIP_CREATION_START_DATE.split('-').reverse().join('/')}. Use somente boleto já registrado pelo sistema ou pagamento por TED/DOC.`
+    ), {
+      code: BANK_SLIP_CREATION_BLOCKED_CODE,
+      statusCode: 409,
+      expose: true
+    });
+  }
+
+  prepareBankRequest();
 
   if (isItau && config.stage === 'validacao') {
     const validation = await create(payload, { config });
