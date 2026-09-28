@@ -23,6 +23,8 @@ const {
   removePending,
   listDismissedIssues,
   dismissIssue,
+  getBillingQueueCursor,
+  saveBillingQueueCursor,
   claimProcessingRun,
   releaseProcessingRun
 } = require('../server/faturamento/cobranca-store');
@@ -52,6 +54,7 @@ const {
   addDays,
   billingEventForInvoice,
   buildBillingQueue,
+  rotateBillingQueue,
   scanInvoices,
   pendingRecord,
   isTerminalBillingFailure,
@@ -483,12 +486,36 @@ test('mantém somente o evento mais urgente para cada fatura', () => {
     overdue: [{ id: '10630', issuedAt: '2025-05-07', dueAt: '2025-07-07' }]
   });
   assert.deepEqual(queue.map(({ invoice, event }) => [invoice.id, event]), [
-    ['10630', EVENT_TYPES.overdue],
-    ['11780', EVENT_TYPES.reminder],
     ['11781', EVENT_TYPES.initial],
-    ['11782', EVENT_TYPES.reminder]
+    ['11782', EVENT_TYPES.reminder],
+    ['11780', EVENT_TYPES.reminder],
+    ['10630', EVENT_TYPES.overdue]
   ]);
   assert.equal(queue.find((item) => item.invoice.id === '10630').fromPending, true);
+});
+
+test('continua a fila do ponto salvo sem repetir sempre os primeiros itens', () => {
+  const queue = ['11837', '11838', '11839', '11840'].map((id) => ({ invoice: { id } }));
+  const rotated = rotateBillingQueue(queue, 3);
+  assert.equal(rotated.startIndex, 3);
+  assert.deepEqual(rotated.queue.map((item) => item.invoice.id), [
+    '11840', '11837', '11838', '11839'
+  ]);
+});
+
+test('persiste a posição da fila de cobrança no Redis', async () => {
+  let value = null;
+  const command = async (operation, _key, nextValue) => {
+    if (operation === 'SET') {
+      value = nextValue;
+      return 'OK';
+    }
+    if (operation === 'GET') return value;
+    throw new Error(`Comando inesperado: ${operation}`);
+  };
+  assert.equal(await getBillingQueueCursor(command), 0);
+  await saveBillingQueueCursor(13, command);
+  assert.equal(await getBillingQueueCursor(command), 13);
 });
 
 const processorContext = (overrides = {}) => {

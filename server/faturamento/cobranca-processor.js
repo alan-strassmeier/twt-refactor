@@ -82,11 +82,14 @@ const buildBillingQueue = ({ pending, today, reminder, overdue, currentDate }) =
       queue.push(item);
       return;
     }
+    const wasFromPending = current.fromPending;
     current.fromPending ||= fromPending;
     if ((EVENT_PRIORITY[event] || 0) >= (EVENT_PRIORITY[current.event] || 0)) {
       current.event = event;
       current.key = `${event}:${invoiceId}`;
-      current.invoice = invoice;
+      // Um registro pendente contém apenas dados resumidos. Quando a mesma
+      // fatura veio da Brudam nesta execução, preserva o objeto completo.
+      if (!fromPending || wasFromPending) current.invoice = invoice;
     }
   });
 
@@ -97,13 +100,26 @@ const buildBillingQueue = ({ pending, today, reminder, overdue, currentDate }) =
     issuedAt: record.issuedAt,
     dueAt: record.dueAt
   }));
-  pendingInvoices.forEach((invoice) => {
-    enqueue(billingEventForInvoice(invoice, currentDate), [invoice], true);
-  });
+  // Faturas recém-emitidas precisam entrar primeiro para não ficarem atrás de
+  // um histórico grande de pendências. O cursor abaixo garante que os demais
+  // itens continuem sendo revisitados nas execuções seguintes.
   enqueue(EVENT_TYPES.initial, today);
   enqueue(EVENT_TYPES.reminder, reminder);
   enqueue(EVENT_TYPES.overdue, overdue);
+  pendingInvoices.forEach((invoice) => {
+    enqueue(billingEventForInvoice(invoice, currentDate), [invoice], true);
+  });
   return queue;
+};
+
+const rotateBillingQueue = (queue, cursor = 0) => {
+  if (!queue.length) return { queue: [], startIndex: 0 };
+  const normalizedCursor = Math.max(0, Number(cursor) || 0);
+  const startIndex = normalizedCursor % queue.length;
+  return {
+    queue: [...queue.slice(startIndex), ...queue.slice(0, startIndex)],
+    startIndex
+  };
 };
 
 const positiveInteger = (value, fallback, maximum) => {
@@ -815,7 +831,10 @@ const runBillingCollection = async (dependencies = {}) => {
   const nowFactory = dependencies.now || (() => new Date());
   const startedAt = nowFactory();
   const deadline = startedAt.getTime() + config.deadlineMs;
-  const pending = await (dependencies.listPending || store.listPending)();
+  const [pending, queueCursor] = await Promise.all([
+    (dependencies.listPending || store.listPending)(),
+    (dependencies.getBillingQueueCursor || store.getBillingQueueCursor)()
+  ]);
   const pendingByInvoice = new Map(pending.map((record) => [String(record.invoiceId), record]));
   const overdueStart = await (dependencies.getOverdueCursor || store.getOverdueCursor)();
   const fetch = dependencies.fetchInvoices || fetchInvoiceScanPage;
@@ -842,6 +861,7 @@ const runBillingCollection = async (dependencies = {}) => {
     await (dependencies.listBlockedInvoiceIds || store.listBlockedInvoiceIds)()
   );
   const activeQueue = queue.filter(({ invoice }) => !blockedInvoiceIds.has(String(invoice.id)));
+  const rotated = rotateBillingQueue(activeQueue, queueCursor);
 
   const summary = {
     source: dependencies.source === 'automatic' ? 'automatic' : 'manual',
@@ -856,6 +876,7 @@ const runBillingCollection = async (dependencies = {}) => {
     waitingContacts: 0,
     skippedTwt: 0,
     blocked: queue.length - activeQueue.length,
+    remaining: 0,
     review: 0,
     errors: [],
     stoppedByLimit: false
@@ -872,12 +893,14 @@ const runBillingCollection = async (dependencies = {}) => {
     dependencies: { ...dependencies, blockedInvoiceIds }
   });
 
+  let examined = 0;
   try {
-    for (const item of activeQueue) {
+    for (const item of rotated.queue) {
       if (summary.processed >= config.maxInvoices || Date.now() >= deadline) {
         summary.stoppedByLimit = true;
         break;
       }
+      examined += 1;
       try {
         if (item.event !== EVENT_TYPES.initial && context.sentInvoiceIds.has(String(item.invoice.id))) {
           summary.processed += 1;
@@ -930,6 +953,13 @@ const runBillingCollection = async (dependencies = {}) => {
       summary.processed += 1;
     }
   } finally {
+    summary.remaining = summary.stoppedByLimit
+      ? Math.max(0, activeQueue.length - examined)
+      : 0;
+    const nextCursor = summary.stoppedByLimit && activeQueue.length
+      ? (rotated.startIndex + examined) % activeQueue.length
+      : 0;
+    await (dependencies.saveBillingQueueCursor || store.saveBillingQueueCursor)(nextCursor);
     if (!dependencies.transport && typeof transport.close === 'function') transport.close();
   }
   summary.completedAt = nowFactory().toISOString();
@@ -943,6 +973,7 @@ module.exports = {
   addDays,
   billingEventForInvoice,
   buildBillingQueue,
+  rotateBillingQueue,
   processorConfig,
   fetchInvoiceScanPage,
   scanInvoices,

@@ -517,7 +517,10 @@
       } else {
         const source = lastRun.source === 'automatic' ? 'automática' : 'manual';
         const status = lastRun.status === 'completed' ? 'concluída' : 'falhou';
-        elements.pendingRunStatus.textContent = `Última execução ${source} ${status} em ${formatDateTime(lastRun.completedAt)}.`;
+        const continuation = lastRun.stoppedByLimit
+          ? ` ${lastRun.remaining || 0} fatura(s) ficaram para a próxima rodada.`
+          : '';
+        elements.pendingRunStatus.textContent = `Última execução ${source} ${status} em ${formatDateTime(lastRun.completedAt)}.${continuation}`;
       }
     }
   };
@@ -830,8 +833,8 @@
       const result = await requestJson(endpoint('process'), { method: 'POST' });
       await Promise.all([loadPending(), loadLogs()]);
       setMessage(
-        `Verificação concluída: ${result.sent} e-mail(s) enviado(s), ${result.pendingDoccob} aguardando DOCCOB, ${result.blocked || 0} fatura(s) bloqueada(s) e ${result.errors.length} erro(s).`,
-        result.errors.length ? 'warning' : 'success'
+        `Verificação concluída: ${result.sent} e-mail(s) enviado(s), ${result.pendingDoccob} aguardando DOCCOB, ${result.blocked || 0} fatura(s) bloqueada(s) e ${result.errors.length} erro(s).${result.stoppedByLimit ? ` ${result.remaining || 0} fatura(s) continuarão na próxima rodada.` : ''}`,
+        result.errors.length || result.stoppedByLimit ? 'warning' : 'success'
       );
     } catch (error) {
       setMessage(error.message, 'error');

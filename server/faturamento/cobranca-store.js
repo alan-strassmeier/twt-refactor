@@ -18,6 +18,7 @@ const KEYS = Object.freeze({
   logs: 'faturamento:cobranca:logs:v1',
   invoiceBlocks: 'faturamento:cobranca:faturas-bloqueadas:v1',
   overdueCursor: 'faturamento:cobranca:cursor:vencidas:v1',
+  billingQueueCursor: 'faturamento:cobranca:cursor:fila:v1',
   processing: 'faturamento:cobranca:processamento:v1',
   lastRun: 'faturamento:cobranca:ultima-execucao:v1'
 });
@@ -397,6 +398,12 @@ const getOverdueCursor = async (command = redisCommand) =>
 const saveOverdueCursor = (cursor, command = redisCommand) =>
   command('SET', KEYS.overdueCursor, String(Math.max(0, Number(cursor) || 0)));
 
+const getBillingQueueCursor = async (command = redisCommand) =>
+  Math.max(0, Number(await command('GET', KEYS.billingQueueCursor)) || 0);
+
+const saveBillingQueueCursor = (cursor, command = redisCommand) =>
+  command('SET', KEYS.billingQueueCursor, String(Math.max(0, Number(cursor) || 0)));
+
 const claimProcessingRun = async (runId, command = redisCommand) => (
   await command('SET', KEYS.processing, String(runId), 'NX', 'EX', '90')
 ) === 'OK';
@@ -458,6 +465,8 @@ module.exports = {
   listLogs,
   getOverdueCursor,
   saveOverdueCursor,
+  getBillingQueueCursor,
+  saveBillingQueueCursor,
   claimProcessingRun,
   releaseProcessingRun,
   saveLastRun,

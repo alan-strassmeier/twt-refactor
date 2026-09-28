@@ -392,6 +392,8 @@ const handleProcess = async (req, res) => {
       processed: result.processed,
       sent: result.sent,
       blocked: result.blocked,
+      remaining: result.remaining,
+      stoppedByLimit: result.stoppedByLimit,
       errors: result.errors.length
     };
     await store.saveLastRun(run);
