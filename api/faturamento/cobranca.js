@@ -10,7 +10,8 @@ const store = require('../../server/faturamento/cobranca-store');
 const brudamContacts = require('../../server/faturamento/cobranca-brudam-contacts');
 const {
   runBillingCollection,
-  resendBillingInvoice
+  resendBillingInvoice,
+  refreshBillingPending
 } = require('../../server/faturamento/cobranca-processor');
 const { fetchInvoices } = require('../../server/faturamento/brudam');
 const { findDoccobForInvoice } = require('../../server/faturamento/r2-doccob');
@@ -207,6 +208,58 @@ const handlePending = async (req, res) => {
   });
 };
 
+const handlePendingRefresh = async (req, res) => {
+  if (!requireSession(req, res)) return;
+  if (!requireSameOrigin(req, res)) return;
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', 'POST');
+    sendJson(res, 405, { message: 'Método não permitido.' });
+    return;
+  }
+  const body = await parseJsonBody(req, 4096);
+  const runId = randomUUID();
+  if (!await store.claimProcessingRun(runId)) {
+    sendJson(res, 409, {
+      message: 'Já existe uma operação de cobrança em andamento. Aguarde a conclusão.'
+    });
+    return;
+  }
+  try {
+    const [pending, logs, dismissedIssues, categories] = await Promise.all([
+      store.listPending(),
+      store.filteredLogs(),
+      store.listDismissedIssues(),
+      store.listCategories()
+    ]);
+    const activeContactCnpjs = categories
+      .filter((category) => category.contacts.some((contact) => contact.enabled !== false))
+      .map((category) => category.cnpj);
+    const issues = buildUnifiedIssues({ pending, logs, activeContactCnpjs }).filter((issue) => (
+      dismissedIssues.get(issue.id) !== String(issue.updatedAt || '')
+    ));
+    const result = await refreshBillingPending({
+      source: 'manual',
+      runId,
+      after: body.after,
+      issueRecords: issues
+    });
+    const settledIds = new Set(result.settledInvoiceIds || []);
+    await Promise.all(issues
+      .filter((issue) => settledIds.has(String(issue.invoiceId)))
+      .map((issue) => store.dismissIssue(issue.id, issue.updatedAt)));
+    sendJson(res, 200, {
+      ...result,
+      message: `${result.processed} pendência(s) conferida(s), ${result.settledInvoices} liquidada(s) removida(s) e ${result.resolved} solucionada(s).`
+    });
+  } finally {
+    try {
+      await store.releaseProcessingRun(runId);
+    } catch (error) {
+      console.error('[faturamento:cobranca:liberacao-pendencias]', error);
+    }
+  }
+};
+
 const handleInvoiceDetail = async (req, res, query) => {
   if (!requireSession(req, res)) return;
   if (req.method !== 'GET') {
@@ -391,7 +444,12 @@ const handleProcess = async (req, res, query) => {
   }
   const source = cron ? 'automatic' : 'manual';
   const continuation = !cron && query.continuation === '1';
-  const runId = randomUUID();
+  const continuationRunId = String(query.runId || '');
+  if (continuation && !/^[0-9a-f-]{36}$/i.test(continuationRunId)) {
+    sendJson(res, 422, { message: 'Identificador da verificação inválido.' });
+    return;
+  }
+  const runId = continuation ? continuationRunId : randomUUID();
   if (!await store.claimProcessingRun(runId)) {
     sendJson(res, 409, {
       message: 'Já existe uma verificação de cobrança em andamento. Aguarde a conclusão.'
@@ -518,6 +576,7 @@ module.exports = async (req, res) => {
     if (query.route === 'contacts') return await handleContacts(req, res, query);
     if (query.route === 'contacts-sync') return await handleContactSync(req, res);
     if (query.route === 'pending') return await handlePending(req, res);
+    if (query.route === 'pending-refresh') return await handlePendingRefresh(req, res);
     if (query.route === 'invoice-detail') return await handleInvoiceDetail(req, res, query);
     if (query.route === 'invoice-block') return await handleInvoiceBlock(req, res);
     if (query.route === 'logs') return await handleLogs(req, res, query);

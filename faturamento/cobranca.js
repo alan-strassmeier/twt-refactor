@@ -880,10 +880,43 @@
   elements.emailLogClose.addEventListener('click', closeEmailLogModal);
 
   elements.refreshPendingButton.addEventListener('click', async () => {
+    const maxRounds = 25;
+    const totals = {
+      processed: 0,
+      settledInvoices: 0,
+      resolved: 0,
+      sent: 0,
+      errors: []
+    };
+    let after = '';
+    let round = 0;
+    let result = null;
     setLoading(true);
     try {
-      await loadPending();
-      setMessage('Pendências atualizadas.', 'success');
+      do {
+        round += 1;
+        setMessage(
+          round === 1
+            ? 'Conferindo primeiro o status financeiro das pendências…'
+            : `Conferindo o lote ${round} das pendências…`
+        );
+        result = await requestJson(endpoint('pending-refresh'), {
+          method: 'POST',
+          body: JSON.stringify({ after })
+        });
+        totals.processed += Number(result.processed || 0);
+        totals.settledInvoices += Number(result.settledInvoices || 0);
+        totals.resolved += Number(result.resolved || 0);
+        totals.sent += Number(result.sent || 0);
+        totals.errors.push(...(Array.isArray(result.errors) ? result.errors : []));
+        after = String(result.nextAfter || '');
+      } while (after && result.processed > 0 && round < maxRounds);
+      await Promise.all([loadPending(), loadLogs()]);
+      const incomplete = Boolean(after);
+      setMessage(
+        `Atualização concluída em ${round} lote(s): ${totals.processed} pendência(s) conferida(s), ${totals.settledInvoices} liquidada(s) removida(s), ${totals.resolved} problema(s) solucionado(s), ${totals.sent} e-mail(s) enviado(s) e ${totals.errors.length} erro(s).${incomplete ? ' As demais pendências continuarão na próxima atualização.' : ''}`,
+        totals.errors.length || incomplete ? 'warning' : 'success'
+      );
     } catch (error) {
       setMessage(error.message, 'error');
     } finally {
@@ -916,7 +949,7 @@
             : `Processando o lote ${round} da fila acumulada…`
         );
         result = await requestJson(endpoint('process', {
-          ...(round > 1 ? { continuation: '1' } : {})
+          ...(round > 1 ? { continuation: '1', runId: result?.runId } : {})
         }), { method: 'POST' });
         totals.discovered += Number(result.discovered || 0);
         totals.processed += Number(result.processed || 0);
@@ -935,7 +968,7 @@
       await Promise.all([loadPending(), loadLogs()]);
       const incomplete = Boolean(result?.stoppedByLimit && Number(result.remaining || 0) > 0);
       setMessage(
-        `Verificação concluída em ${round} lote(s): ${totals.processed} fatura(s) examinada(s), ${totals.discovered} nova(s) fatura(s) registrada(s), ${totals.sent} e-mail(s) enviado(s), ${totals.settledInvoices} liquidada(s) removida(s) das pendências, ${totals.pendingDoccob} aguardando DOCCOB, ${totals.deferredHistorical} histórica(s) adiada(s) até a janela de vencimento, ${totals.blocked} fatura(s) bloqueada(s) e ${totals.errors.length} erro(s).${incomplete ? ` ${result.remaining || 0} fatura(s) continuarão na próxima verificação.` : ''}`,
+        `Verificação concluída em ${round} lote(s): ${totals.processed} fatura(s) emitida(s) hoje, perto do vencimento ou vencida(s) examinada(s), ${totals.discovered} nova(s) fatura(s) registrada(s), ${totals.sent} e-mail(s) enviado(s), ${totals.pendingDoccob} aguardando DOCCOB, ${totals.blocked} fatura(s) bloqueada(s) e ${totals.errors.length} erro(s).${incomplete ? ` ${result.remaining || 0} fatura(s) continuarão na próxima verificação.` : ''}`,
         totals.errors.length || incomplete ? 'warning' : 'success'
       );
     } catch (error) {
