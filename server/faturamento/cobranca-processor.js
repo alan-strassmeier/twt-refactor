@@ -63,8 +63,9 @@ const EVENT_PRIORITY = Object.freeze({
 const billingEventForInvoice = (invoice, currentDate) => {
   const dueAt = String(invoice?.dueAt || '').slice(0, 10);
   if (/^\d{4}-\d{2}-\d{2}$/.test(dueAt)) {
-    if (dueAt < currentDate) return EVENT_TYPES.overdue;
-    if (dueAt <= addDays(currentDate, 2)) return EVENT_TYPES.reminder;
+    if (dueAt <= addDays(currentDate, -2)) return EVENT_TYPES.overdue;
+    if (dueAt >= currentDate && dueAt <= addDays(currentDate, 2)) return EVENT_TYPES.reminder;
+    if (dueAt < currentDate) return null;
   }
   return EVENT_TYPES.initial;
 };
@@ -80,6 +81,7 @@ const buildBillingQueue = ({
   const queue = [];
   const byInvoice = new Map();
   const enqueue = (event, invoices, fromPending = false) => invoices.forEach((invoice) => {
+    if (!event) return;
     const invoiceId = String(invoice?.id || '');
     if (!invoiceId) return;
     const current = byInvoice.get(invoiceId);
@@ -107,16 +109,20 @@ const buildBillingQueue = ({
     issuedAt: record.issuedAt,
     dueAt: record.dueAt
   }));
-  // Faturas recém-emitidas precisam entrar primeiro para não ficarem atrás de
-  // um histórico grande de pendências. O cursor abaixo garante que os demais
-  // itens continuem sendo revisitados nas execuções seguintes.
+  const actionablePending = pendingInvoices.filter((_invoice, index) => pending[index]?.reason !== 'queued');
+  const queuedPending = pendingInvoices.filter((_invoice, index) => pending[index]?.reason === 'queued');
+  // Faturas recém-emitidas e lembretes do dia entram primeiro. Logo depois,
+  // pendências já conhecidas são revalidadas antes da fila técnica acumulada.
   enqueue(EVENT_TYPES.initial, today);
   enqueue(EVENT_TYPES.reminder, reminder);
+  actionablePending.forEach((invoice) => {
+    enqueue(billingEventForInvoice(invoice, currentDate), [invoice], true);
+  });
   enqueue(EVENT_TYPES.overdue, overdue);
   reconciliation.forEach((invoice) => {
     enqueue(billingEventForInvoice(invoice, currentDate), [invoice]);
   });
-  pendingInvoices.forEach((invoice) => {
+  queuedPending.forEach((invoice) => {
     enqueue(billingEventForInvoice(invoice, currentDate), [invoice], true);
   });
   return queue;
@@ -748,6 +754,7 @@ const resendBillingInvoice = async (invoiceId, dependencies = {}) => {
 
   const nowFactory = dependencies.now || (() => new Date());
   const currentDate = saoPauloDate(dependencies.currentTime || nowFactory());
+  const event = billingEventForInvoice(invoice, currentDate) || EVENT_TYPES.initial;
   const pending = await (dependencies.listPending || store.listPending)();
   const pendingByInvoice = new Map(pending.map((record) => [String(record.invoiceId), record]));
   const summary = {
@@ -790,7 +797,7 @@ const resendBillingInvoice = async (invoiceId, dependencies = {}) => {
   let outcome = null;
   try {
     outcome = await processInvoiceEvent({
-      event: billingEventForInvoice(invoice, currentDate),
+      event,
       invoice,
       context
     });
@@ -830,7 +837,7 @@ const resendBillingInvoice = async (invoiceId, dependencies = {}) => {
   }
   return {
     invoiceId: normalizedId,
-    event: billingEventForInvoice(invoice, currentDate),
+    event,
     sent: summary.sent,
     review: summary.review,
     completedAt: summary.completedAt
@@ -859,7 +866,7 @@ const runBillingCollection = async (dependencies = {}) => {
     : await Promise.all([
       scanInvoices({ 'emissao[eq]': currentDate, status: '0' }, { maxPages: config.maxPages, fetch }),
       scanInvoices({ 'vencimento[eq]': addDays(currentDate, 2), status: '0' }, { maxPages: config.maxPages, fetch }),
-      scanInvoices({ 'vencimento[lte]': addDays(currentDate, -1), status: '0' }, {
+      scanInvoices({ 'vencimento[lte]': addDays(currentDate, -2), status: '0' }, {
         startSkip: overdueStart,
         maxPages: config.maxPages,
         fetch
@@ -897,6 +904,11 @@ const runBillingCollection = async (dependencies = {}) => {
     dependencies.getCompletedBillingEvents || store.getCompletedBillingEvents
   )(unblockedQueue.map(({ event, invoice }) => ({ event, invoiceId: invoice.id })));
   const activeQueue = unblockedQueue.filter(({ key }) => !completedEventFields.has(key));
+  const priorityInvoiceIds = new Set([
+    ...todayScan.invoices,
+    ...reminderScan.invoices,
+    ...pending.filter((record) => record.reason !== 'queued')
+  ].map((invoice) => String(invoice.id || invoice.invoiceId || '')));
   const discoveredAt = nowFactory().toISOString();
   const newlyQueued = activeQueue
     .filter(({ invoice }) => !pendingByInvoice.has(String(invoice.id)))
@@ -908,7 +920,14 @@ const runBillingCollection = async (dependencies = {}) => {
     await (dependencies.savePendingBatch || store.savePendingBatch)(newlyQueued);
     newlyQueued.forEach((record) => pendingByInvoice.set(record.invoiceId, record));
   }
-  const rotated = rotateBillingQueue(activeQueue, continuation ? 0 : queueCursor);
+  const priorityQueue = activeQueue.filter(({ invoice }) => (
+    priorityInvoiceIds.has(String(invoice.id))
+  ));
+  const backlogQueue = activeQueue.filter(({ invoice }) => (
+    !priorityInvoiceIds.has(String(invoice.id))
+  ));
+  const rotatedBacklog = rotateBillingQueue(backlogQueue, continuation ? 0 : queueCursor);
+  const processingQueue = [...priorityQueue, ...rotatedBacklog.queue];
 
   const summary = {
     source: dependencies.source === 'automatic' ? 'automatic' : 'manual',
@@ -945,13 +964,15 @@ const runBillingCollection = async (dependencies = {}) => {
   });
 
   let examined = 0;
+  let examinedBacklog = 0;
   try {
-    for (const item of rotated.queue) {
+    for (const item of processingQueue) {
       if (summary.processed >= config.maxInvoices || Date.now() >= deadline) {
         summary.stoppedByLimit = true;
         break;
       }
       examined += 1;
+      if (!priorityInvoiceIds.has(String(item.invoice.id))) examinedBacklog += 1;
       try {
         if (item.event !== EVENT_TYPES.initial && context.sentInvoiceIds.has(String(item.invoice.id))) {
           summary.processed += 1;
@@ -1020,8 +1041,8 @@ const runBillingCollection = async (dependencies = {}) => {
     summary.remaining = summary.stoppedByLimit
       ? Math.max(0, activeQueue.length - examined)
       : 0;
-    const nextCursor = summary.stoppedByLimit && activeQueue.length
-      ? (rotated.startIndex + examined) % activeQueue.length
+    const nextCursor = summary.stoppedByLimit && backlogQueue.length
+      ? (rotatedBacklog.startIndex + examinedBacklog) % backlogQueue.length
       : 0;
     if (!continuation) {
       await (dependencies.saveBillingQueueCursor || store.saveBillingQueueCursor)(nextCursor);

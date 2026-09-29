@@ -41,12 +41,14 @@ const {
   deleteContact: deleteBrudamContact
 } = require('../server/faturamento/cobranca-brudam-contacts');
 const {
+  DEFAULT_ALERT_EMAIL,
   EVENT_TYPES,
   billingSubject,
   billingText,
   billingAttachments,
   billingEmailPreview,
-  sendBillingEmail
+  sendBillingEmail,
+  zohoConfig
 } = require('../server/faturamento/cobranca-email');
 const {
   deliveryReference,
@@ -402,6 +404,23 @@ test('não inclui Adriano em cópia nas mensagens dos clientes', async () => {
   assert.equal(calls[2].priority, 'high');
 });
 
+test('usa o novo destinatário interno e migra a configuração legada', () => {
+  const base = {
+    ZOHO_SMTP_USER: 'faturamento@twt.com.br',
+    ZOHO_SMTP_PASSWORD: 'senha-de-teste',
+    ZOHO_SMTP_FROM_EMAIL: 'faturamento@twt.com.br'
+  };
+  assert.equal(zohoConfig(base).alertEmail, DEFAULT_ALERT_EMAIL);
+  assert.equal(zohoConfig({
+    ...base,
+    BILLING_ALERT_EMAIL: 'adriano@twt.com.br'
+  }).alertEmail, DEFAULT_ALERT_EMAIL);
+  assert.equal(zohoConfig({
+    ...base,
+    BILLING_ALERT_EMAIL: 'financeiro-interno@example.com'
+  }).alertEmail, 'financeiro-interno@example.com');
+});
+
 test('envia ao ZeptoMail uma referência determinística sem expor o e-mail', async () => {
   const calls = [];
   const reference = deliveryReference(EVENT_TYPES.initial, '11756', 'Maria@Example.com');
@@ -469,6 +488,18 @@ test('classifica pendências pela proximidade do vencimento', () => {
   assert.equal(
     billingEventForInvoice({ issuedAt: '2026-09-01', dueAt: '2026-09-12' }, today),
     EVENT_TYPES.reminder
+  );
+  assert.equal(
+    billingEventForInvoice({ issuedAt: '2026-09-01', dueAt: '2026-09-11' }, today),
+    EVENT_TYPES.reminder
+  );
+  assert.equal(
+    billingEventForInvoice({ issuedAt: '2026-09-01', dueAt: '2026-09-10' }, today),
+    null
+  );
+  assert.equal(
+    billingEventForInvoice({ issuedAt: '2026-09-01', dueAt: '2026-09-09' }, today),
+    EVENT_TYPES.overdue
   );
   assert.equal(
     billingEventForInvoice({ issuedAt: '2025-05-07', dueAt: '2025-07-07' }, today),
@@ -676,6 +707,45 @@ test('continuação drena somente itens ainda não examinados sem repetir a varr
   assert.equal(pendingUpdates.length, 1);
   assert.equal(pendingUpdates[0].reason, 'doccob');
   assert.notEqual(pendingUpdates[0].invoiceId, '11838');
+});
+
+test('revalida uma pendência solucionável antes da fila técnica acumulada', async () => {
+  const now = new Date();
+  const checked = [];
+  const result = await runBillingCollection({
+    source: 'manual',
+    runId: 'prioridade-pendencia',
+    currentTime: now,
+    now: () => now,
+    config: { maxInvoices: 1, maxPages: 1, deadlineMs: 55000 },
+    listPending: async () => [
+      { invoiceId: '11578', reason: 'contacts', clientCnpj: '30455661001900', issuedAt: '2026-09-28', dueAt: '2026-10-30' },
+      { invoiceId: '11840', reason: 'queued', clientCnpj: '41870054000276', issuedAt: '2026-09-28', dueAt: '2026-10-30' }
+    ],
+    getBillingQueueCursor: async () => 1,
+    getOverdueCursor: async () => 0,
+    getReconciliationCursor: async () => 0,
+    saveOverdueCursor: async () => {},
+    saveReconciliationCursor: async () => {},
+    saveBillingQueueCursor: async () => {},
+    fetchInvoices: async () => ({ invoices: [], pagination: { hasMore: false } }),
+    listBlockedInvoiceIds: async () => [],
+    getCompletedBillingEvents: async () => new Set(),
+    getInvoiceBlock: async () => null,
+    savePendingBatch: async () => {},
+    savePending: async (record) => { checked.push(record.invoiceId); },
+    removePending: async () => {},
+    addLog: async () => {},
+    markBillingEventCompleted: async () => {},
+    findDoccobForInvoice: async () => null,
+    getCategory: async () => null,
+    emailConfig: { fromName: 'TWT', fromEmail: 'faturamento@twt.com.br' },
+    transport: {}
+  });
+  assert.deepEqual(checked, ['11578']);
+  assert.equal(result.processed, 1);
+  assert.equal(result.remaining, 1);
+  assert.equal(result.stoppedByLimit, true);
 });
 
 const processorContext = (overrides = {}) => {
@@ -1140,6 +1210,45 @@ test('mantém na fila a fatura que ainda não possui destinatário', async () =>
   });
   assert.equal(saved.at(-1).reason, 'contacts');
   assert.equal(context.summary.waitingContacts, 1);
+});
+
+test('revalida contato cadastrado e remove a pendência depois do envio', async () => {
+  const removed = [];
+  const recipients = [];
+  const context = processorContext({
+    getCategory: async () => ({
+      contacts: [{
+        id: 'contato-elecnor',
+        firstName: 'Isadora',
+        lastName: 'Souza',
+        email: 'isadora.souza@elecnor.com',
+        enabled: true
+      }]
+    }),
+    fetchInvoicePdfData: async () => invoiceData({ type: 'ted_doc' }),
+    removePending: async (invoiceId) => { removed.push(String(invoiceId)); },
+    sendBillingEmail: async ({ contact }) => {
+      recipients.push(contact.email);
+      return { messageId: 'contato-resolvido', accepted: [contact.email], rejected: [] };
+    }
+  });
+  context.pendingByInvoice.set('11578', {
+    invoiceId: '11578',
+    reason: 'contacts',
+    clientCnpj: '30455661001900'
+  });
+  await processInvoiceEvent({
+    event: EVENT_TYPES.initial,
+    invoice: {
+      id: '11578',
+      clientDocument: '30455661001900',
+      client: 'ELECNOR DO BRASIL LTDA'
+    },
+    context
+  });
+  assert.deepEqual(recipients, ['isadora.souza@elecnor.com']);
+  assert.deepEqual(removed, ['11578']);
+  assert.equal(context.pendingByInvoice.has('11578'), false);
 });
 
 test('não envia cobrança para contato com envio desabilitado', async () => {
@@ -1665,6 +1774,22 @@ test('fila unificada prioriza vencidas e reúne falhas de documentos e entrega',
   assert.equal(issues[0].action, 'documents');
   assert.equal(issues[1].type, 'email');
   assert.equal(issues[1].action, 'logs');
+});
+
+test('oculta o alerta antigo de contato quando o CNPJ já possui destinatário ativo', () => {
+  const waitingLog = {
+    id: 'sem-contato-11578',
+    invoiceId: '11578',
+    clientName: 'ELECNOR DO BRASIL LTDA',
+    clientCnpj: '30455661001900',
+    status: 'waiting_contacts',
+    createdAt: '2026-09-28T19:33:00Z'
+  };
+  assert.equal(buildUnifiedIssues({ logs: [waitingLog] }).length, 1);
+  assert.equal(buildUnifiedIssues({
+    logs: [waitingLog],
+    activeContactCnpjs: ['30.455.661/0019-00']
+  }).length, 0);
 });
 
 test('fila técnica não reaparece como pendência em fatura que já possui envio', () => {

@@ -6,6 +6,9 @@ const EVENT_TYPES = Object.freeze({
   overdue: 'overdue'
 });
 
+const DEFAULT_ALERT_EMAIL = 'adrianoldepaula@gmail.com';
+const LEGACY_ALERT_EMAIL = 'adriano@twt.com.br';
+
 const htmlEscape = (value) => String(value ?? '')
   .replace(/&/g, '&amp;')
   .replace(/</g, '&lt;')
@@ -37,9 +40,12 @@ const zohoConfig = (env = process.env) => {
   const password = String(env.ZOHO_SMTP_PASSWORD || '').trim();
   const fromEmail = String(env.ZOHO_SMTP_FROM_EMAIL || user).trim();
   const fromName = String(env.ZOHO_SMTP_FROM_NAME || 'TWT LOG').trim();
-  const alertEmail = String(
-    env.BILLING_ALERT_EMAIL || env.BILLING_ALERT_COPY || 'adriano@twt.com.br'
+  const configuredAlertEmail = String(
+    env.BILLING_ALERT_EMAIL || env.BILLING_ALERT_COPY || DEFAULT_ALERT_EMAIL
   ).trim();
+  const alertEmail = configuredAlertEmail.toLocaleLowerCase('pt-BR') === LEGACY_ALERT_EMAIL
+    ? DEFAULT_ALERT_EMAIL
+    : configuredAlertEmail;
   if (!host || !Number.isInteger(port) || port < 1 || port > 65535 || !user || !password || !fromEmail) {
     throw Object.assign(new Error('Envio de cobrança pelo Zoho não configurado.'), {
       statusCode: 503,
@@ -232,6 +238,8 @@ const sendBillingEmail = async ({
 };
 
 module.exports = {
+  DEFAULT_ALERT_EMAIL,
+  LEGACY_ALERT_EMAIL,
   EVENT_TYPES,
   htmlEscape,
   formatDate,
