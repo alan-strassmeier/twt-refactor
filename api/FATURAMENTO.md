@@ -205,6 +205,13 @@ Em cada execução o servidor:
    do vencimento e vencidos, sem incluir o endereço em cópia nas mensagens dos
    clientes.
 
+Para faturas emitidas antes de **16/09/2026**, a rotina não executa envio
+inicial histórico. Essas faturas só retornam à fila automática quando entram
+no período de aviso **Perto do vencimento** ou quando passam a ser **Vencidas**.
+Registros técnicos antigos fora dessas duas janelas são removidos da fila de
+pendências e serão redescobertos pelas consultas de vencimento no momento
+correto. O reenvio manual continua disponível e mantém suas validações próprias.
+
 O nome antigo `BILLING_ALERT_COPY` continua aceito para não interromper
 ambientes que já o configuraram, mas `BILLING_ALERT_EMAIL` é o nome recomendado.
 O endereço legado `adriano@twt.com.br` é migrado automaticamente para

@@ -414,6 +414,7 @@ const handleProcess = async (req, res, query) => {
       processed: result.processed,
       sent: result.sent,
       blocked: result.blocked,
+      deferredHistorical: result.deferredHistorical,
       alreadyCompleted: result.alreadyCompleted,
       remaining: result.remaining,
       stoppedByLimit: result.stoppedByLimit,

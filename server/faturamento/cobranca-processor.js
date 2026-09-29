@@ -13,10 +13,12 @@ const { generateInvoiceBankSlip, getInvoiceBankSlipPdf } = require('./boleto');
 const { issueInvoiceNfse, getIssuedNfseXml } = require('./nfse');
 const { buildDanfsePdf } = require('./danfse');
 const {
+  AUTOMATIC_BILLING_START_DATE,
   BANK_SLIP_CREATION_START_DATE,
   BANK_SLIP_CREATION_BLOCKED_CODE,
   isDslIssuer,
-  isTwtIssuer
+  isTwtIssuer,
+  normalizedDateOnly
 } = require('./billing-rules');
 const {
   normalizeCteKeys,
@@ -81,6 +83,22 @@ const billingEventForInvoice = (invoice, currentDate) => {
   return EVENT_TYPES.initial;
 };
 
+const isHistoricalInvoiceBeforeCutoff = (invoice) => {
+  const issuedAt = normalizedDateOnly(invoice?.issuedAt);
+  return Boolean(issuedAt && issuedAt < AUTOMATIC_BILLING_START_DATE);
+};
+
+const automaticBillingEventForInvoice = (invoice, currentDate) => {
+  const event = billingEventForInvoice(invoice, currentDate);
+  if (!isHistoricalInvoiceBeforeCutoff(invoice)) return event;
+  return event === EVENT_TYPES.reminder || event === EVENT_TYPES.overdue ? event : null;
+};
+
+const shouldDeferHistoricalInvoice = (invoice, currentDate) => (
+  isHistoricalInvoiceBeforeCutoff(invoice)
+  && automaticBillingEventForInvoice(invoice, currentDate) === null
+);
+
 const buildBillingQueue = ({
   pending = [],
   today = [],
@@ -124,17 +142,19 @@ const buildBillingQueue = ({
   const queuedPending = pendingInvoices.filter((_invoice, index) => pending[index]?.reason === 'queued');
   // Faturas recém-emitidas e lembretes do dia entram primeiro. Logo depois,
   // pendências já conhecidas são revalidadas antes da fila técnica acumulada.
-  enqueue(EVENT_TYPES.initial, today);
+  today.forEach((invoice) => {
+    enqueue(automaticBillingEventForInvoice(invoice, currentDate), [invoice]);
+  });
   enqueue(EVENT_TYPES.reminder, reminder);
   actionablePending.forEach((invoice) => {
-    enqueue(billingEventForInvoice(invoice, currentDate), [invoice], true);
+    enqueue(automaticBillingEventForInvoice(invoice, currentDate), [invoice], true);
   });
   enqueue(EVENT_TYPES.overdue, overdue);
   reconciliation.forEach((invoice) => {
-    enqueue(billingEventForInvoice(invoice, currentDate), [invoice]);
+    enqueue(automaticBillingEventForInvoice(invoice, currentDate), [invoice]);
   });
   queuedPending.forEach((invoice) => {
-    enqueue(billingEventForInvoice(invoice, currentDate), [invoice], true);
+    enqueue(automaticBillingEventForInvoice(invoice, currentDate), [invoice], true);
   });
   return queue;
 };
@@ -932,7 +952,24 @@ const runBillingCollection = async (dependencies = {}) => {
     (dependencies.getOverdueCursor || store.getOverdueCursor)(),
     (dependencies.getReconciliationCursor || store.getReconciliationCursor)()
   ]);
-  const pendingByInvoice = new Map(pending.map((record) => [String(record.invoiceId), record]));
+  const deferredHistoricalPending = pending.filter((record) => shouldDeferHistoricalInvoice({
+    issuedAt: record.issuedAt,
+    dueAt: record.dueAt
+  }, currentDate));
+  const deferredHistoricalIds = new Set(
+    deferredHistoricalPending.map((record) => String(record.invoiceId))
+  );
+  if (deferredHistoricalIds.size) {
+    await (dependencies.removePendingBatch || store.removePendingBatch)(
+      [...deferredHistoricalIds]
+    );
+  }
+  const eligiblePending = pending.filter((record) => (
+    !deferredHistoricalIds.has(String(record.invoiceId))
+  ));
+  const pendingByInvoice = new Map(
+    eligiblePending.map((record) => [String(record.invoiceId), record])
+  );
   const fetch = dependencies.fetchInvoices || fetchInvoiceScanPage;
 
   const emptyScan = { invoices: [], pages: 0, hasMore: false, nextSkip: 0 };
@@ -991,8 +1028,8 @@ const runBillingCollection = async (dependencies = {}) => {
 
   const queue = buildBillingQueue({
     pending: continuation
-      ? pending.filter((record) => record.reason === 'queued')
-      : pending,
+      ? eligiblePending.filter((record) => record.reason === 'queued')
+      : eligiblePending,
     today: todayScan.invoices,
     reminder: reminderScan.invoices,
     overdue: overdueScan.invoices,
@@ -1010,7 +1047,7 @@ const runBillingCollection = async (dependencies = {}) => {
   const priorityInvoiceIds = new Set([
     ...todayScan.invoices,
     ...reminderScan.invoices,
-    ...pending.filter((record) => record.reason !== 'queued')
+    ...eligiblePending.filter((record) => record.reason !== 'queued')
   ].map((invoice) => String(invoice.id || invoice.invoiceId || '')));
   const discoveredAt = nowFactory().toISOString();
   const newlyQueued = activeQueue
@@ -1049,6 +1086,7 @@ const runBillingCollection = async (dependencies = {}) => {
     skippedBankSlipCutoff: 0,
     blocked: queue.length - unblockedQueue.length,
     alreadyCompleted: unblockedQueue.length - activeQueue.length,
+    deferredHistorical: deferredHistoricalIds.size,
     scanFailures: scanErrors.length,
     remaining: 0,
     review: 0,
@@ -1163,6 +1201,8 @@ module.exports = {
   saoPauloDate,
   addDays,
   billingEventForInvoice,
+  automaticBillingEventForInvoice,
+  shouldDeferHistoricalInvoice,
   buildBillingQueue,
   rotateBillingQueue,
   isTransientNetworkError,

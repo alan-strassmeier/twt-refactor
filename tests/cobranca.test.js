@@ -25,6 +25,7 @@ const {
   listDismissedIssues,
   dismissIssue,
   savePendingBatch,
+  removePendingBatch,
   completedEventField,
   getCompletedBillingEvents,
   markBillingEventCompleted,
@@ -60,6 +61,8 @@ const {
 const {
   addDays,
   billingEventForInvoice,
+  automaticBillingEventForInvoice,
+  shouldDeferHistoricalInvoice,
   buildBillingQueue,
   rotateBillingQueue,
   isTransientNetworkError,
@@ -532,6 +535,34 @@ test('classifica pendências pela proximidade do vencimento', () => {
   );
 });
 
+test('fatura anterior ao corte só entra no aviso próximo ou vencido', () => {
+  const today = '2026-09-29';
+  assert.equal(automaticBillingEventForInvoice({
+    issuedAt: '2026-09-15',
+    dueAt: '2026-10-20'
+  }, today), null);
+  assert.equal(automaticBillingEventForInvoice({
+    issuedAt: '2026-09-15',
+    dueAt: '2026-10-01'
+  }, today), EVENT_TYPES.reminder);
+  assert.equal(automaticBillingEventForInvoice({
+    issuedAt: '2026-09-15',
+    dueAt: '2026-09-27'
+  }, today), EVENT_TYPES.overdue);
+  assert.equal(automaticBillingEventForInvoice({
+    issuedAt: BANK_SLIP_CREATION_START_DATE,
+    dueAt: '2026-10-20'
+  }, today), EVENT_TYPES.initial);
+  assert.equal(shouldDeferHistoricalInvoice({
+    issuedAt: '15/09/2026',
+    dueAt: '2026-10-20'
+  }, today), true);
+  assert.equal(shouldDeferHistoricalInvoice({
+    issuedAt: '2026-09-15',
+    dueAt: '2026-10-01'
+  }, today), false);
+});
+
 test('mantém somente o evento mais urgente para cada fatura', () => {
   const queue = buildBillingQueue({
     currentDate: '2026-09-11',
@@ -554,11 +585,9 @@ test('mantém somente o evento mais urgente para cada fatura', () => {
     ]
   });
   assert.deepEqual(queue.map(({ invoice, event }) => [invoice.id, event]), [
-    ['11781', EVENT_TYPES.initial],
     ['11782', EVENT_TYPES.reminder],
     ['11780', EVENT_TYPES.reminder],
-    ['10630', EVENT_TYPES.overdue],
-    ['11770', EVENT_TYPES.initial]
+    ['10630', EVENT_TYPES.overdue]
   ]);
   assert.equal(queue.find((item) => item.invoice.id === '10630').fromPending, true);
 });
@@ -603,6 +632,20 @@ test('registra em um único comando todas as faturas descobertas', async () => {
   assert.equal(calls[0][4], '11840');
   assert.equal(JSON.parse(calls[0][3]).reason, 'queued');
   assert.equal(JSON.parse(calls[0][5]).attempts, 0);
+});
+
+test('remove pendências históricas adiadas em um único comando', async () => {
+  const calls = [];
+  await removePendingBatch(['11770', '11770', '11771'], async (...args) => {
+    calls.push(args);
+    return 2;
+  });
+  assert.deepEqual(calls, [[
+    'HDEL',
+    'faturamento:cobranca:doccob-pendente:v1',
+    '11770',
+    '11771'
+  ]]);
 });
 
 test('marca e consulta eventos concluídos sem misturar etapas da mesma fatura', async () => {
@@ -732,6 +775,40 @@ test('continuação drena somente itens ainda não examinados sem repetir a varr
   assert.equal(pendingUpdates.length, 1);
   assert.equal(pendingUpdates[0].reason, 'doccob');
   assert.notEqual(pendingUpdates[0].invoiceId, '11838');
+});
+
+test('retira da fila a pendência histórica até chegar a janela de vencimento', async () => {
+  const removed = [];
+  let scanCalls = 0;
+  const now = new Date();
+  const result = await runBillingCollection({
+    source: 'manual',
+    continuation: true,
+    currentTime: new Date('2026-09-29T15:00:00.000Z'),
+    now: () => now,
+    config: { maxInvoices: 5, maxPages: 1, deadlineMs: 55000 },
+    listPending: async () => [{
+      invoiceId: '11770',
+      reason: 'contacts',
+      clientCnpj: '11280282000144',
+      issuedAt: '2026-09-15',
+      dueAt: '2026-10-20'
+    }],
+    removePendingBatch: async (invoiceIds) => { removed.push(...invoiceIds); },
+    getBillingQueueCursor: async () => 0,
+    getOverdueCursor: async () => 0,
+    getReconciliationCursor: async () => 0,
+    fetchInvoices: async () => { scanCalls += 1; },
+    listBlockedInvoiceIds: async () => [],
+    getCompletedBillingEvents: async () => new Set(),
+    emailConfig: { fromName: 'TWT', fromEmail: 'faturamento@twt.com.br' },
+    transport: {}
+  });
+  assert.equal(scanCalls, 0);
+  assert.deepEqual(removed, ['11770']);
+  assert.equal(result.deferredHistorical, 1);
+  assert.equal(result.scanned, 0);
+  assert.equal(result.processed, 0);
 });
 
 test('revalida uma pendência solucionável antes da fila técnica acumulada', async () => {
