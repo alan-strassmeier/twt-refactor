@@ -232,6 +232,13 @@ const savePendingBatch = (records, command = redisCommand) => {
 const removePending = (invoiceId, command = redisCommand) =>
   command('HDEL', KEYS.pending, requiredInvoiceId(invoiceId));
 
+const removePendingBatch = (invoiceIds, command = redisCommand) => {
+  const normalizedIds = [...new Set((Array.isArray(invoiceIds) ? invoiceIds : [])
+    .map((invoiceId) => requiredInvoiceId(invoiceId)))];
+  if (!normalizedIds.length) return Promise.resolve(0);
+  return command('HDEL', KEYS.pending, ...normalizedIds);
+};
+
 const completedEventField = (event, invoiceId) => {
   const normalizedEvent = requiredText(event, 'Evento', 48)
     .toLocaleLowerCase('pt-BR')
@@ -516,6 +523,7 @@ module.exports = {
   savePending,
   savePendingBatch,
   removePending,
+  removePendingBatch,
   completedEventField,
   getCompletedBillingEvents,
   markBillingEventCompleted,
