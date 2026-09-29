@@ -153,11 +153,16 @@ const handlePending = async (req, res) => {
   if (req.method === 'DELETE') {
     if (!requireSameOrigin(req, res)) return;
     const body = await parseJsonBody(req, 4096);
-    const [pending, logs] = await Promise.all([
+    const [pending, logs, categories] = await Promise.all([
       store.listPending(),
-      store.filteredLogs()
+      store.filteredLogs(),
+      store.listCategories()
     ]);
-    const issue = buildUnifiedIssues({ pending, logs }).find((record) => record.id === body.id);
+    const activeContactCnpjs = categories
+      .filter((category) => category.contacts.some((contact) => contact.enabled !== false))
+      .map((category) => category.cnpj);
+    const issue = buildUnifiedIssues({ pending, logs, activeContactCnpjs })
+      .find((record) => record.id === body.id);
     if (!issue) {
       sendJson(res, 404, {
         deleted: false,
@@ -177,13 +182,17 @@ const handlePending = async (req, res) => {
     sendJson(res, 405, { message: 'Método não permitido.' });
     return;
   }
-  const [pending, logs, lastRun, dismissedIssues] = await Promise.all([
+  const [pending, logs, lastRun, dismissedIssues, categories] = await Promise.all([
     store.listPending(),
     store.filteredLogs(),
     store.getLastRun(),
-    store.listDismissedIssues()
+    store.listDismissedIssues(),
+    store.listCategories()
   ]);
-  const issues = buildUnifiedIssues({ pending, logs }).filter((issue) => (
+  const activeContactCnpjs = categories
+    .filter((category) => category.contacts.some((contact) => contact.enabled !== false))
+    .map((category) => category.cnpj);
+  const issues = buildUnifiedIssues({ pending, logs, activeContactCnpjs }).filter((issue) => (
     dismissedIssues.get(issue.id) !== String(issue.updatedAt || '')
   ));
   sendJson(res, 200, {
