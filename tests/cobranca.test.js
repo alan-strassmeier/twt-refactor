@@ -16,7 +16,6 @@ const {
   deliveryField,
   saoPauloDate: logDate,
   listLogs,
-  deleteLog,
   resolveLog,
   getInvoiceBlock,
   setInvoiceBlocked,
@@ -1652,24 +1651,6 @@ test('exibe somente o estado mais recente de cada envio correlacionado', async (
   assert.equal(result.total, 2);
 });
 
-test('exclui somente o envio de log selecionado e seus estados correlacionados', async () => {
-  const records = [
-    JSON.stringify({ id: 'novo', clientReference: 'ref-1', status: 'delivered' }),
-    JSON.stringify({ id: 'antigo', clientReference: 'ref-1', status: 'submitted' }),
-    JSON.stringify({ id: 'outro', clientReference: 'ref-2', status: 'delivered' })
-  ];
-  let removed = [];
-  const result = await deleteLog('novo', async (command, key, ...values) => {
-    if (command === 'ZREVRANGE') return records;
-    assert.equal(command, 'ZREM');
-    assert.match(key, /logs/);
-    removed = values;
-    return values.length;
-  });
-  assert.equal(result.deleted, 2);
-  assert.deepEqual(removed, records.slice(0, 2));
-});
-
 test('marca falha de entrega como resolvida sem apagar seu histórico', async () => {
   const original = JSON.stringify({
     id: 'falha-1',
@@ -2259,6 +2240,12 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(html, /data-collection-section="collectionContactsSection"/);
   assert.match(html, /data-collection-section="pendingDoccobSection"/);
   assert.match(html, /data-collection-section="collectionLogsSection"/);
+  assert.match(html, /data-collection-section="paymentImportSection"/);
+  assert.match(html, /id="paymentImportForm"/);
+  assert.match(html, /id="approveAllPayments"/);
+  assert.match(html, /Transferência TED\/DOC · Conta: ITAÚ-DSL/);
+  assert.doesNotMatch(html, /name="paymentMethodId"|name="bankAccountId"/);
+  assert.doesNotMatch(source, /data\.get\('paymentMethodId'\)|data\.get\('bankAccountId'\)/);
   assert.match(html, /id="pendingDoccobSection"[\s\S]*?hidden>/);
   assert.match(html, /id="collectionLogsSection"[\s\S]*?hidden>/);
   assert.match(source, /route, \.\.\.query/);
@@ -2268,7 +2255,9 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(source, /const filters = logFilters\(\);[\s\S]*setLoading\(true\)/);
   assert.doesNotMatch(source, /window\.confirm\(`Excluir \$\{category\.name\}/);
   assert.match(source, /openEmailLogModal\(record, previewButton\)/);
-  assert.match(source, /Excluir somente este registro do log/);
+  assert.doesNotMatch(source, /log-delete-button|Excluir somente este registro do log/);
+  assert.doesNotMatch(apiSource, /store\.deleteLog/);
+  assert.match(apiSource, /setHeader\('Allow', 'GET, PATCH'\)/);
   assert.match(source, /Atualizar Contatos/);
   assert.match(source, /Envio ✔️/);
   assert.match(source, /Envio ❌/);
@@ -2294,6 +2283,7 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(apiSource, /query\.route === 'pending-refresh'/);
   assert.match(apiSource, /query\.route === 'invoice-detail'/);
   assert.match(apiSource, /query\.route === 'invoice-block'/);
+  assert.match(apiSource, /query\.route === 'payment-import'/);
   assert.match(apiSource, /store\.dismissIssue\(issue\.id, issue\.updatedAt\)/);
   assert.match(apiSource, /query\.route === 'resend'/);
   assert.match(apiSource, /req\.method === 'GET' \|\| req\.method === 'HEAD'/);

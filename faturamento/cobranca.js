@@ -27,6 +27,20 @@
     previousLogPage: document.getElementById('previousLogPage'),
     nextLogPage: document.getElementById('nextLogPage'),
     logPageIndicator: document.getElementById('logPageIndicator'),
+    paymentImportForm: document.getElementById('paymentImportForm'),
+    paymentImportResult: document.getElementById('paymentImportResult'),
+    paymentImportFilename: document.getElementById('paymentImportFilename'),
+    paymentImportExpiration: document.getElementById('paymentImportExpiration'),
+    paymentRowsCount: document.getElementById('paymentRowsCount'),
+    paymentInvoicesCount: document.getElementById('paymentInvoicesCount'),
+    paymentEligibleCount: document.getElementById('paymentEligibleCount'),
+    paymentEligibleAmount: document.getElementById('paymentEligibleAmount'),
+    paymentImportRows: document.getElementById('paymentImportRows'),
+    paymentImportEmpty: document.getElementById('paymentImportEmpty'),
+    paymentRejected: document.getElementById('paymentRejected'),
+    paymentRejectedSummary: document.getElementById('paymentRejectedSummary'),
+    paymentRejectedRows: document.getElementById('paymentRejectedRows'),
+    approveAllPayments: document.getElementById('approveAllPayments'),
     categoryDeleteModal: document.getElementById('categoryDeleteModal'),
     categoryDeleteBackdrop: document.getElementById('categoryDeleteBackdrop'),
     categoryDeleteDescription: document.getElementById('categoryDeleteDescription'),
@@ -58,6 +72,7 @@
     logFilters: {},
     logPage: 1,
     logTotalPages: 1,
+    paymentImport: null,
     categoryToDelete: null,
     categoryDeleteTrigger: null,
     emailLogTrigger: null
@@ -108,6 +123,11 @@
       timeStyle: 'short'
     }).format(date);
   };
+
+  const formatMoney = (value) => new Intl.NumberFormat('pt-BR', {
+    style: 'currency',
+    currency: 'BRL'
+  }).format(Number(value) || 0);
 
   const appendCell = (row, value) => {
     const cell = document.createElement('td');
@@ -676,32 +696,8 @@
           setLoading(false);
         }
       });
-      const deleteButton = document.createElement('button');
-      deleteButton.type = 'button';
-      deleteButton.className = 'button danger-button log-delete-button';
-      deleteButton.textContent = 'Excluir';
-      deleteButton.disabled = !record.id;
-      deleteButton.addEventListener('click', async () => {
-        if (!record.id || !window.confirm('Excluir somente este registro do log?')) return;
-        deleteButton.disabled = true;
-        setLoading(true);
-        try {
-          const result = await requestJson(endpoint('logs'), {
-            method: 'DELETE',
-            body: JSON.stringify({ id: record.id })
-          });
-          await loadLogs({ page: state.logPage });
-          setMessage(result.message || 'Registro de log excluído.', 'success');
-        } catch (error) {
-          setMessage(error.message, 'error');
-          deleteButton.disabled = false;
-        } finally {
-          setLoading(false);
-        }
-      });
       actionButtons.append(previewButton);
       if (RESOLVABLE_LOG_STATUSES.has(record.status)) actionButtons.append(resolveButton);
-      actionButtons.append(deleteButton);
       action.appendChild(actionButtons);
       row.appendChild(action);
       return row;
@@ -734,6 +730,115 @@
     state.logFilters = { ...filters };
     renderLogs(payload);
   };
+
+  const paymentStatus = (candidate) => {
+    if (candidate.status === 'liquidated') return ['Liquidada', 'delivered'];
+    if (candidate.status === 'already_settled') return ['Já estava liquidada', 'delivered'];
+    if (candidate.status === 'error') return ['Falha na aprovação', 'error'];
+    if (candidate.status === 'busy') return ['Em processamento', 'review'];
+    if (candidate.eligible && candidate.status === 'ready') return ['Apta para liquidar', 'delivered'];
+    return ['Requer conferência', 'review'];
+  };
+
+  const renderPaymentImport = (record) => {
+    state.paymentImport = record;
+    elements.paymentImportResult.hidden = !record;
+    if (!record) return;
+    const summary = record.summary || {};
+    elements.paymentImportFilename.textContent = record.filename || 'Importação analisada';
+    elements.paymentImportExpiration.textContent = `Analisada em ${formatDateTime(record.createdAt)} · prévia válida por 24 horas`;
+    elements.paymentRowsCount.textContent = String(summary.spreadsheetRows || 0);
+    elements.paymentInvoicesCount.textContent = String(summary.invoices || 0);
+    elements.paymentEligibleCount.textContent = String(summary.eligibleInvoices || 0);
+    elements.paymentEligibleAmount.textContent = formatMoney(summary.eligibleAmount);
+    elements.approveAllPayments.disabled = state.loading || Number(summary.eligibleInvoices || 0) === 0;
+
+    const candidates = Array.isArray(record.candidates) ? record.candidates : [];
+    const rows = candidates.map((candidate) => {
+      const row = document.createElement('tr');
+      appendInvoiceNavigationCell(row, candidate.invoiceId);
+      const client = appendCell(row, candidate.clientName || 'Não informado');
+      const cnpj = document.createElement('small');
+      cnpj.textContent = formatCnpj(candidate.clientCnpj);
+      client.appendChild(cnpj);
+      const references = appendCell(row, (candidate.references || []).join(', ') || '—');
+      references.className = 'payment-reference-cell';
+      appendCell(row, formatMoney(candidate.importedAmount));
+      appendCell(row, candidate.balance === null || candidate.balance === undefined
+        ? '—' : formatMoney(candidate.balance));
+      const [label, kind] = paymentStatus(candidate);
+      const verification = appendCell(row, label);
+      verification.className = `collection-status status-${kind}`;
+      if (candidate.reason) {
+        const detail = document.createElement('small');
+        detail.textContent = candidate.reason;
+        verification.appendChild(detail);
+      }
+      const action = document.createElement('td');
+      if (candidate.eligible && ['ready', 'error'].includes(candidate.status)) {
+        const approve = document.createElement('button');
+        approve.type = 'button';
+        approve.className = 'button button-primary payment-approve-button';
+        approve.textContent = candidate.status === 'error' ? 'Tentar novamente' : 'Aprovar';
+        approve.addEventListener('click', () => approvePayments([candidate.invoiceId]));
+        action.appendChild(approve);
+      } else {
+        action.textContent = candidate.status === 'liquidated' || candidate.status === 'already_settled'
+          ? 'Concluída' : 'Indisponível';
+      }
+      row.appendChild(action);
+      return row;
+    });
+    elements.paymentImportRows.replaceChildren(...rows);
+    elements.paymentImportEmpty.hidden = candidates.length > 0;
+
+    const rejected = Array.isArray(record.rejectedRows) ? record.rejectedRows : [];
+    elements.paymentRejected.hidden = rejected.length === 0;
+    elements.paymentRejectedSummary.textContent = `${rejected.length} linha(s) que exigem correção`;
+    elements.paymentRejectedRows.replaceChildren(...rejected.map((item) => {
+      const row = document.createElement('li');
+      row.textContent = `Linha ${item.row || '—'}${item.reference ? ` · ${item.reference}` : ''}: ${item.message}`;
+      return row;
+    }));
+  };
+
+  const fileAsBase64 = (file) => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener('load', () => resolve(String(reader.result || '').split(',').pop() || ''));
+    reader.addEventListener('error', () => reject(new Error('Não foi possível ler o arquivo selecionado.')));
+    reader.readAsDataURL(file);
+  });
+
+  async function approvePayments(invoiceIds = null) {
+    const record = state.paymentImport;
+    if (!record?.id) return;
+    const selectedIds = invoiceIds ? new Set(invoiceIds.map(String)) : null;
+    const selected = (record.candidates || []).filter((candidate) =>
+      candidate.eligible && ['ready', 'error'].includes(candidate.status) &&
+        (!selectedIds || selectedIds.has(String(candidate.invoiceId))));
+    const count = selected.length;
+    const total = selected.reduce((amount, candidate) => amount + Number(candidate.importedAmount || 0), 0);
+    if (!count || !window.confirm(
+      `Confirmar a liquidação de ${count} fatura(s), no total de ${formatMoney(total)}, na Brudam? Esta ação altera o financeiro.`
+    )) return;
+    setLoading(true);
+    try {
+      const result = await requestJson(endpoint('payment-import'), {
+        method: 'PATCH',
+        body: JSON.stringify({ importId: record.id, ...(invoiceIds ? { invoiceIds } : {}) })
+      });
+      renderPaymentImport(result.import);
+      await loadPending();
+      setMessage(result.message || 'Aprovação concluída.', result.results?.some(
+        (item) => item.status === 'error' || item.status === 'busy'
+      ) ? 'warning' : 'success');
+    } catch (error) {
+      setMessage(error.message, 'error');
+    } finally {
+      setLoading(false);
+      renderPaymentImport(state.paymentImport);
+    }
+  }
 
   const loadCollection = async () => {
     if (state.loading) return;
@@ -801,6 +906,49 @@
     });
   });
   setCollectionSection(state.collectionSection);
+
+  if (elements.paymentImportForm) {
+    elements.paymentImportForm.elements.paymentDate.value = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/Sao_Paulo',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    }).format(new Date());
+    elements.paymentImportForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const data = new FormData(elements.paymentImportForm);
+      const file = data.get('file');
+      if (!(file instanceof File) || !file.name) {
+        setMessage('Selecione uma planilha XLSX.', 'error');
+        return;
+      }
+      if (!/\.xlsx$/i.test(file.name) || file.size > 2 * 1024 * 1024) {
+        setMessage('Selecione um arquivo .xlsx de até 2 MB.', 'error');
+        return;
+      }
+      setLoading(true);
+      setMessage('Lendo a planilha e vinculando CT-es, DOCCOBs e faturas…');
+      try {
+        const result = await requestJson(endpoint('payment-import'), {
+          method: 'POST',
+          body: JSON.stringify({
+            filename: file.name,
+            fileBase64: await fileAsBase64(file),
+            paymentDate: data.get('paymentDate')
+          })
+        });
+        renderPaymentImport(result.import);
+        setMessage(result.message || 'Planilha analisada.', 'success');
+      } catch (error) {
+        renderPaymentImport(null);
+        setMessage(error.message, 'error');
+      } finally {
+        setLoading(false);
+        renderPaymentImport(state.paymentImport);
+      }
+    });
+    elements.approveAllPayments.addEventListener('click', () => approvePayments());
+  }
 
   elements.categoryForm.addEventListener('submit', async (event) => {
     event.preventDefault();

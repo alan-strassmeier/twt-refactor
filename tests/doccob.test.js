@@ -6,7 +6,8 @@ const {
 } = require('../server/faturamento/doccob');
 const {
   r2ConfigFromEnv,
-  findDoccobForInvoice
+  findDoccobForInvoice,
+  findDoccobInvoicesByTransportReferences
 } = require('../server/faturamento/r2-doccob');
 
 const record = (length, values) => {
@@ -286,6 +287,28 @@ test('quando há dois DOCCOBs válidos da mesma fatura usa o arquivo mais recent
   assert.equal(result.objectKey, `${prefix}INCOMING-DOF_28092026113241.txt`);
 });
 
+test('importação localiza o número do CT-e somente no CNPJ White Martins informado', async () => {
+  const prefix = 'brudam/clientes/41870054000276/doccob/';
+  const result = await findDoccobInvoicesByTransportReferences({
+    references: ['15122'],
+    clientCnpjs: ['41.870.054/0002-76'],
+    config: { basePrefix: 'brudam/clientes', paymentImportScanLimit: 20 },
+    storage: {
+      async listObjects(receivedPrefix) {
+        assert.equal(receivedPrefix, prefix);
+        return [{ Key: `${prefix}pagamento.txt`, LastModified: new Date('2026-08-07T20:00:00Z') }];
+      },
+      async getObject() {
+        return cteDoccob;
+      }
+    }
+  });
+  assert.equal(result.length, 1);
+  assert.equal(result[0].reference, '15122');
+  assert.equal(result[0].invoiceId, '11532');
+  assert.equal(result[0].clientCnpj, '41870054000276');
+});
+
 test('prioriza arquivos da data de emissão mesmo fora do corte dos mais recentes', async () => {
   const invoice12840 = cteDoccob.replaceAll('11532', '12840');
   const prefix = 'brudam/clientes/41870054000276/doccob/';
@@ -339,7 +362,8 @@ test('só habilita R2 quando todas as credenciais privadas existem', () => {
     bucket: 'bucket',
     basePrefix: 'brudam/clientes',
     scanLimit: 250,
-    issuedDateScanLimit: 1000
+    issuedDateScanLimit: 1000,
+    paymentImportScanLimit: 1000
   });
 });
 

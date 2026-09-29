@@ -8,7 +8,9 @@ const { parseDoccob } = require('./doccob');
 const DOCCOB_CACHE_TTL_MS = 30 * 60 * 1000;
 const DEFAULT_SCAN_LIMIT = 250;
 const DEFAULT_ISSUED_DATE_SCAN_LIMIT = 1000;
+const DEFAULT_PAYMENT_IMPORT_SCAN_LIMIT = 1000;
 const DOWNLOAD_CONCURRENCY = 6;
+const CLIENT_SCAN_CONCURRENCY = 3;
 const doccobCache = new Map();
 
 const positiveInteger = (value, fallback, maximum) => {
@@ -36,6 +38,11 @@ const r2ConfigFromEnv = (env = process.env) => {
     issuedDateScanLimit: positiveInteger(
       env.R2_DOCCOB_ISSUED_DATE_SCAN_LIMIT,
       DEFAULT_ISSUED_DATE_SCAN_LIMIT,
+      5000
+    ),
+    paymentImportScanLimit: positiveInteger(
+      env.R2_PAYMENT_IMPORT_SCAN_LIMIT,
+      DEFAULT_PAYMENT_IMPORT_SCAN_LIMIT,
       5000
     )
   };
@@ -163,7 +170,8 @@ const findDoccobForInvoice = async ({
   const activeConfig = config || {
     basePrefix: 'brudam/clientes',
     scanLimit: DEFAULT_SCAN_LIMIT,
-    issuedDateScanLimit: DEFAULT_ISSUED_DATE_SCAN_LIMIT
+    issuedDateScanLimit: DEFAULT_ISSUED_DATE_SCAN_LIMIT,
+    paymentImportScanLimit: DEFAULT_PAYMENT_IMPORT_SCAN_LIMIT
   };
   const activeStorage = storage || createR2Storage(activeConfig);
   const prefix = [activeConfig.basePrefix, normalizedCnpj, 'doccob']
@@ -220,12 +228,93 @@ const findDoccobForInvoice = async ({
   return null;
 };
 
+const normalizedReference = (value) => String(value || '')
+  .trim()
+  .split('-')[0]
+  .replace(/\D/g, '')
+  .replace(/^0+(?=\d)/, '');
+
+const findDoccobInvoicesByTransportReferences = async ({
+  references,
+  clientCnpjs,
+  config = r2ConfigFromEnv(),
+  storage = null
+}) => {
+  if (!config && !storage) return [];
+  const wanted = new Set((Array.isArray(references) ? references : [])
+    .map(normalizedReference).filter(Boolean));
+  const clients = [...new Set((Array.isArray(clientCnpjs) ? clientCnpjs : [])
+    .map((value) => String(value || '').replace(/\D/g, ''))
+    .filter((value) => value.length === 14))];
+  if (!wanted.size || !clients.length) return [];
+
+  const activeConfig = config || {
+    basePrefix: 'brudam/clientes',
+    scanLimit: DEFAULT_SCAN_LIMIT,
+    issuedDateScanLimit: DEFAULT_ISSUED_DATE_SCAN_LIMIT
+  };
+  const activeStorage = storage || createR2Storage(activeConfig);
+  const matches = [];
+  const matchedPairs = new Set();
+
+  for (let clientOffset = 0; clientOffset < clients.length; clientOffset += CLIENT_SCAN_CONCURRENCY) {
+    const clientBatch = clients.slice(clientOffset, clientOffset + CLIENT_SCAN_CONCURRENCY);
+    await Promise.all(clientBatch.map(async (clientCnpj) => {
+      const prefix = [activeConfig.basePrefix, clientCnpj, 'doccob']
+        .map(cleanPathPart).filter(Boolean).join('/') + '/';
+      const listed = await activeStorage.listObjects(prefix);
+      const objects = sortNewestFirst(listed)
+        .filter((object) => typeof object.Key === 'string' && /\.txt$/i.test(object.Key))
+        .slice(0, activeConfig.paymentImportScanLimit || DEFAULT_PAYMENT_IMPORT_SCAN_LIMIT);
+      for (let offset = 0; offset < objects.length; offset += DOWNLOAD_CONCURRENCY) {
+        const batch = objects.slice(offset, offset + DOWNLOAD_CONCURRENCY);
+        const parsed = await Promise.all(batch.map(async (object) => {
+          try {
+            const content = await activeStorage.getObject(object.Key);
+            return { doccob: parseDoccob(content), object };
+          } catch (error) {
+            console.warn('[faturamento:pagamentos-doccob]', {
+              objectKey: object.Key,
+              error: error.message
+            });
+            return null;
+          }
+        }));
+        parsed.filter(Boolean).forEach(({ doccob, object }) => {
+          if (!doccob.invoice?.id) return;
+          const transportReferences = [...new Set((doccob.transports || [])
+            .map((transport) => normalizedReference(transport.reference || transport.cteNumber))
+            .filter(Boolean))];
+          transportReferences.filter((reference) => wanted.has(reference)).forEach((reference) => {
+            const pair = `${reference}:${doccob.invoice.id}:${clientCnpj}`;
+            if (matchedPairs.has(pair)) return;
+            matchedPairs.add(pair);
+            matches.push({
+              reference,
+              invoiceId: String(doccob.invoice.id),
+              clientCnpj,
+              invoice: doccob.invoice,
+              transportReferences,
+              objectKey: object.Key,
+              lastModified: object.LastModified || null
+            });
+          });
+        });
+      }
+    }));
+  }
+  return matches;
+};
+
 module.exports = {
   DEFAULT_SCAN_LIMIT,
   DEFAULT_ISSUED_DATE_SCAN_LIMIT,
+  DEFAULT_PAYMENT_IMPORT_SCAN_LIMIT,
   r2ConfigFromEnv,
   bodyToString,
   createR2Storage,
   scanCandidates,
-  findDoccobForInvoice
+  findDoccobForInvoice,
+  normalizedReference,
+  findDoccobInvoicesByTransportReferences
 };

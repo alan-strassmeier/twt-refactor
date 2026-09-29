@@ -17,6 +17,10 @@ const { fetchInvoices } = require('../../server/faturamento/brudam');
 const { findDoccobForInvoice } = require('../../server/faturamento/r2-doccob');
 const { getBankSlipRecord } = require('../../server/faturamento/boleto-store');
 const {
+  analyzePaymentImport,
+  approvePaymentImport
+} = require('../../server/faturamento/payment-import');
+const {
   BANK_SLIP_CREATION_START_DATE,
   isDslIssuer,
   isBankSlipCreationEligible
@@ -388,16 +392,6 @@ const handleLogs = async (req, res, query) => {
     sendJson(res, 200, result);
     return;
   }
-  if (req.method === 'DELETE') {
-    if (!requireSameOrigin(req, res)) return;
-    const body = await parseJsonBody(req, 4096);
-    const result = await store.deleteLog(body.id);
-    sendJson(res, result.deleted ? 200 : 404, {
-      ...result,
-      message: result.deleted ? 'Registro de log excluído.' : 'Registro de log não encontrado.'
-    });
-    return;
-  }
   if (req.method === 'PATCH') {
     if (!requireSameOrigin(req, res)) return;
     const body = await parseJsonBody(req, 4096);
@@ -410,7 +404,7 @@ const handleLogs = async (req, res, query) => {
     });
     return;
   }
-  res.setHeader('Allow', 'GET, PATCH, DELETE');
+  res.setHeader('Allow', 'GET, PATCH');
   sendJson(res, 405, { message: 'Método não permitido.' });
 };
 
@@ -430,6 +424,42 @@ const handleInvoiceBlock = async (req, res) => {
       ? `Envio da fatura ${result.invoiceId} bloqueado.`
       : `Envio da fatura ${result.invoiceId} liberado.`
   });
+};
+
+const handlePaymentImport = async (req, res, query) => {
+  if (!requireSession(req, res)) return;
+  if (req.method === 'GET') {
+    const record = await store.getPaymentImport(query.id);
+    sendJson(res, record ? 200 : 404, {
+      import: record,
+      message: record ? undefined : 'A importação expirou ou não foi encontrada.'
+    });
+    return;
+  }
+  if (!requireSameOrigin(req, res)) return;
+  if (req.method === 'POST') {
+    const body = await parseJsonBody(req, 3 * 1024 * 1024);
+    const record = await analyzePaymentImport(body);
+    sendJson(res, 200, {
+      import: record,
+      message: `${record.summary.eligibleInvoices} fatura(s) apta(s) aguardam aprovação.`
+    });
+    return;
+  }
+  if (req.method === 'PATCH') {
+    const body = await parseJsonBody(req, 16384);
+    const result = await approvePaymentImport(body);
+    const liquidated = result.results.filter((item) => item.status === 'liquidated').length;
+    const alreadySettled = result.results.filter((item) => item.status === 'already_settled').length;
+    const failed = result.results.length - liquidated - alreadySettled;
+    sendJson(res, 200, {
+      ...result,
+      message: `${liquidated} fatura(s) liquidada(s), ${alreadySettled} já liquidada(s) e ${failed} não concluída(s).`
+    });
+    return;
+  }
+  res.setHeader('Allow', 'GET, POST, PATCH');
+  sendJson(res, 405, { message: 'Método não permitido.' });
 };
 
 const handleProcess = async (req, res, query) => {
@@ -579,6 +609,7 @@ module.exports = async (req, res) => {
     if (query.route === 'pending-refresh') return await handlePendingRefresh(req, res);
     if (query.route === 'invoice-detail') return await handleInvoiceDetail(req, res, query);
     if (query.route === 'invoice-block') return await handleInvoiceBlock(req, res);
+    if (query.route === 'payment-import') return await handlePaymentImport(req, res, query);
     if (query.route === 'logs') return await handleLogs(req, res, query);
     if (query.route === 'resend') return await handleResend(req, res);
     if (query.route === 'process') return await handleProcess(req, res, query);
