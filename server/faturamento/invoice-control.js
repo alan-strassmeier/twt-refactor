@@ -250,14 +250,24 @@ const buildUnifiedIssues = ({
   now = new Date()
 } = {}) => {
   const activeContacts = new Set([...activeContactCnpjs].map(digits));
+  const pendingContactInvoices = new Set(pending
+    .filter((record) => record.reason === 'contacts')
+    .map((record) => digits(record.invoiceId)));
   const issues = pending
     .filter((record) => record.reason !== 'queued')
+    .filter((record) => (
+      record.reason !== 'contacts' || !activeContacts.has(digits(record.clientCnpj))
+    ))
     .filter((record) => !isTerminalBillingFailure(record))
     .map((record) => issueFromPending(record, now));
   const pendingKeys = new Set(issues.map((issue) => `${digits(issue.invoiceId)}:${issue.type}`));
   for (const log of logs) {
     if (isTerminalBillingFailure(log)) continue;
     if (!failedDeliveryStatuses.has(log.status) && log.status !== 'waiting_contacts') continue;
+    if (
+      log.status === 'waiting_contacts'
+      && !pendingContactInvoices.has(digits(log.invoiceId))
+    ) continue;
     if (log.status === 'waiting_contacts' && activeContacts.has(digits(log.clientCnpj))) continue;
     if (log.status === 'error' && !log.email && !log.clientReference) continue;
     const issue = issueFromLog(log, now);

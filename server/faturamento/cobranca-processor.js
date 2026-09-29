@@ -784,6 +784,7 @@ const createProcessorContext = ({
   issueInvoiceNfse: dependencies.issueInvoiceNfse || issueInvoiceNfse,
   getIssuedNfseXml: dependencies.getIssuedNfseXml || getIssuedNfseXml,
   buildDanfsePdf: dependencies.buildDanfsePdf || buildDanfsePdf,
+  fetchPendingInvoice: dependencies.fetchPendingInvoice || dependencies.fetchInvoices || fetchInvoices,
   generateInvoiceBankSlip: dependencies.generateInvoiceBankSlip || generateInvoiceBankSlip,
   getInvoiceBankSlipPdf: dependencies.getInvoiceBankSlipPdf || getInvoiceBankSlipPdf,
   sendBillingEmail: dependencies.sendBillingEmail || sendBillingEmail,
@@ -863,6 +864,7 @@ const resendBillingInvoice = async (invoiceId, dependencies = {}) => {
     alreadySent: 0,
     pendingDoccob: 0,
     waitingContacts: 0,
+    settledInvoices: 0,
     skippedBankSlipCutoff: 0,
     blocked: 0,
     review: 0,
@@ -1083,6 +1085,7 @@ const runBillingCollection = async (dependencies = {}) => {
     alreadySent: 0,
     pendingDoccob: 0,
     waitingContacts: 0,
+    settledInvoices: 0,
     skippedBankSlipCutoff: 0,
     blocked: queue.length - unblockedQueue.length,
     alreadyCompleted: unblockedQueue.length - activeQueue.length,
@@ -1116,6 +1119,23 @@ const runBillingCollection = async (dependencies = {}) => {
       examined += 1;
       if (!priorityInvoiceIds.has(String(item.invoice.id))) examinedBacklog += 1;
       try {
+        const pendingState = context.pendingByInvoice.get(String(item.invoice.id));
+        if (item.fromPending && pendingState?.reason !== 'queued') {
+          const refreshed = await retryTransientNetworkRequest(() => (
+            context.fetchPendingInvoice({ id: item.invoice.id, limit: 100 })
+          ));
+          const currentInvoice = (refreshed?.invoices || []).find((invoice) => (
+            String(invoice.id) === String(item.invoice.id)
+          ));
+          if (currentInvoice && !isPendingInvoice(currentInvoice)) {
+            await context.removePending(item.invoice.id);
+            context.pendingByInvoice.delete(String(item.invoice.id));
+            summary.settledInvoices += 1;
+            summary.processed += 1;
+            continue;
+          }
+          if (currentInvoice) item.invoice = { ...item.invoice, ...currentInvoice };
+        }
         if (item.event !== EVENT_TYPES.initial && context.sentInvoiceIds.has(String(item.invoice.id))) {
           summary.processed += 1;
           continue;

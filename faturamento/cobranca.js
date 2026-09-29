@@ -899,6 +899,7 @@
       sent: 0,
       pendingDoccob: 0,
       blocked: 0,
+      settledInvoices: 0,
       deferredHistorical: 0,
       errors: []
     };
@@ -922,6 +923,7 @@
         totals.sent += Number(result.sent || 0);
         totals.pendingDoccob += Number(result.pendingDoccob || 0);
         totals.blocked = Math.max(totals.blocked, Number(result.blocked || 0));
+        totals.settledInvoices += Number(result.settledInvoices || 0);
         totals.deferredHistorical += Number(result.deferredHistorical || 0);
         totals.errors.push(...(Array.isArray(result.errors) ? result.errors : []));
       } while (
@@ -933,7 +935,7 @@
       await Promise.all([loadPending(), loadLogs()]);
       const incomplete = Boolean(result?.stoppedByLimit && Number(result.remaining || 0) > 0);
       setMessage(
-        `Verificação concluída em ${round} lote(s): ${totals.processed} fatura(s) examinada(s), ${totals.discovered} nova(s) fatura(s) registrada(s), ${totals.sent} e-mail(s) enviado(s), ${totals.pendingDoccob} aguardando DOCCOB, ${totals.deferredHistorical} histórica(s) adiada(s) até a janela de vencimento, ${totals.blocked} fatura(s) bloqueada(s) e ${totals.errors.length} erro(s).${incomplete ? ` ${result.remaining || 0} fatura(s) continuarão na próxima verificação.` : ''}`,
+        `Verificação concluída em ${round} lote(s): ${totals.processed} fatura(s) examinada(s), ${totals.discovered} nova(s) fatura(s) registrada(s), ${totals.sent} e-mail(s) enviado(s), ${totals.settledInvoices} liquidada(s) removida(s) das pendências, ${totals.pendingDoccob} aguardando DOCCOB, ${totals.deferredHistorical} histórica(s) adiada(s) até a janela de vencimento, ${totals.blocked} fatura(s) bloqueada(s) e ${totals.errors.length} erro(s).${incomplete ? ` ${result.remaining || 0} fatura(s) continuarão na próxima verificação.` : ''}`,
         totals.errors.length || incomplete ? 'warning' : 'success'
       );
     } catch (error) {
