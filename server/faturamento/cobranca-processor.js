@@ -37,6 +37,17 @@ const store = require('./cobranca-store');
 
 const PAGE_SIZE = 100;
 const PLACEHOLDER_EMAIL = '__sem_contato__';
+const SCAN_REQUEST_ATTEMPTS = 2;
+const TRANSIENT_NETWORK_CODES = new Set([
+  'UND_ERR_CONNECT_TIMEOUT',
+  'UND_ERR_HEADERS_TIMEOUT',
+  'UND_ERR_SOCKET',
+  'ECONNRESET',
+  'ECONNREFUSED',
+  'EAI_AGAIN',
+  'ENETUNREACH',
+  'ETIMEDOUT'
+]);
 
 const saoPauloDate = (value = new Date()) => {
   const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
@@ -143,6 +154,41 @@ const positiveInteger = (value, fallback, maximum) => {
   return Number.isSafeInteger(number) && number > 0 ? Math.min(number, maximum) : fallback;
 };
 
+const errorChain = (error) => {
+  const chain = [];
+  let current = error;
+  while (current && chain.length < 5) {
+    chain.push(current);
+    current = current.cause;
+  }
+  return chain;
+};
+
+const isTransientNetworkError = (error) => errorChain(error).some((item) => (
+  TRANSIENT_NETWORK_CODES.has(String(item?.code || '').toUpperCase())
+  || String(item?.name || '') === 'AbortError'
+  || /fetch failed|connect timeout|network|socket hang up/i.test(String(item?.message || ''))
+));
+
+const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+const retryTransientNetworkRequest = async (
+  operation,
+  { attempts = SCAN_REQUEST_ATTEMPTS, wait: waitForRetry = wait } = {}
+) => {
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await operation(attempt);
+    } catch (error) {
+      lastError = error;
+      if (attempt >= attempts || !isTransientNetworkError(error)) throw error;
+      await waitForRetry(200 * attempt);
+    }
+  }
+  throw lastError;
+};
+
 const processorConfig = (env = process.env) => ({
   maxInvoices: positiveInteger(env.BILLING_EMAIL_MAX_INVOICES_PER_RUN, 12, 50),
   maxPages: positiveInteger(env.BILLING_EMAIL_SCAN_PAGES_PER_RUN, 2, 10),
@@ -151,7 +197,9 @@ const processorConfig = (env = process.env) => ({
 
 const fetchInvoiceScanPage = async (input) => {
   const { query, limit, skip } = buildInvoiceQuery(input);
-  const result = await authenticatedGet(`/financeiro/faturas?${query}`);
+  const result = await retryTransientNetworkRequest(
+    () => authenticatedGet(`/financeiro/faturas?${query}`)
+  );
   const rawInvoices = invoiceListFromPayload(result.payload);
   if (!result.response.ok || Number(result.payload?.status) !== 1 || rawInvoices === null) {
     const upstreamMessage = String(result.payload?.message || '').trim();
@@ -171,6 +219,33 @@ const fetchInvoiceScanPage = async (input) => {
       hasMore: rawInvoices.length === limit
     }
   };
+};
+
+const scanFailure = (scope, error) => ({
+  event: 'scan',
+  invoiceId: '',
+  stage: scope,
+  message: `Consulta ${scope} à Brudam não concluída: ${String(error?.message || error).slice(0, 220)}`
+});
+
+const scanInvoicesSafely = async (scope, filters, options) => {
+  try {
+    return {
+      scan: await scanInvoices(filters, options),
+      error: null
+    };
+  } catch (error) {
+    const failure = scanFailure(scope, error);
+    console.warn('[faturamento:cobranca:scan]', {
+      stage: scope,
+      message: failure.message,
+      code: String(error?.cause?.code || error?.code || '')
+    });
+    return {
+      scan: { invoices: [], pages: 0, hasMore: false, nextSkip: options?.startSkip || 0 },
+      error: failure
+    };
+  }
 };
 
 const scanInvoices = async (filters, {
@@ -861,29 +936,57 @@ const runBillingCollection = async (dependencies = {}) => {
   const fetch = dependencies.fetchInvoices || fetchInvoiceScanPage;
 
   const emptyScan = { invoices: [], pages: 0, hasMore: false, nextSkip: 0 };
-  const [todayScan, reminderScan, overdueScan, reconciliationScan] = continuation
-    ? [emptyScan, emptyScan, emptyScan, emptyScan]
+  const scanResults = continuation
+    ? [
+      { scan: emptyScan, error: null },
+      { scan: emptyScan, error: null },
+      { scan: emptyScan, error: null },
+      { scan: emptyScan, error: null }
+    ]
     : await Promise.all([
-      scanInvoices({ 'emissao[eq]': currentDate, status: '0' }, { maxPages: config.maxPages, fetch }),
-      scanInvoices({ 'vencimento[eq]': addDays(currentDate, 2), status: '0' }, { maxPages: config.maxPages, fetch }),
-      scanInvoices({ 'vencimento[lte]': addDays(currentDate, -2), status: '0' }, {
+      scanInvoicesSafely('faturas emitidas hoje', { 'emissao[eq]': currentDate, status: '0' }, {
+        maxPages: config.maxPages,
+        fetch
+      }),
+      scanInvoicesSafely('faturas perto do vencimento', {
+        'vencimento[eq]': addDays(currentDate, 2),
+        status: '0'
+      }, { maxPages: config.maxPages, fetch }),
+      scanInvoicesSafely('faturas vencidas', {
+        'vencimento[lte]': addDays(currentDate, -2),
+        status: '0'
+      }, {
         startSkip: overdueStart,
         maxPages: config.maxPages,
         fetch
       }),
-      scanInvoices({ status: '0' }, {
+      scanInvoicesSafely('reconciliação de faturas em aberto', { status: '0' }, {
         startSkip: reconciliationStart,
         maxPages: config.maxPages,
         fetch
       })
     ]);
+  const [todayResult, reminderResult, overdueResult, reconciliationResult] = scanResults;
+  const todayScan = todayResult.scan;
+  const reminderScan = reminderResult.scan;
+  const overdueScan = overdueResult.scan;
+  const reconciliationScan = reconciliationResult.scan;
+  const scanErrors = scanResults.map((result) => result.error).filter(Boolean);
   if (!continuation) {
-    await Promise.all([
-      (dependencies.saveOverdueCursor || store.saveOverdueCursor)(overdueScan.nextSkip),
-      (dependencies.saveReconciliationCursor || store.saveReconciliationCursor)(
-        reconciliationScan.nextSkip
-      )
-    ]);
+    const cursorUpdates = [];
+    if (!overdueResult.error) {
+      cursorUpdates.push(
+        (dependencies.saveOverdueCursor || store.saveOverdueCursor)(overdueScan.nextSkip)
+      );
+    }
+    if (!reconciliationResult.error) {
+      cursorUpdates.push(
+        (dependencies.saveReconciliationCursor || store.saveReconciliationCursor)(
+          reconciliationScan.nextSkip
+        )
+      );
+    }
+    await Promise.all(cursorUpdates);
   }
 
   const queue = buildBillingQueue({
@@ -946,9 +1049,10 @@ const runBillingCollection = async (dependencies = {}) => {
     skippedBankSlipCutoff: 0,
     blocked: queue.length - unblockedQueue.length,
     alreadyCompleted: unblockedQueue.length - activeQueue.length,
+    scanFailures: scanErrors.length,
     remaining: 0,
     review: 0,
-    errors: [],
+    errors: [...scanErrors],
     stoppedByLimit: false
   };
 
@@ -1061,6 +1165,8 @@ module.exports = {
   billingEventForInvoice,
   buildBillingQueue,
   rotateBillingQueue,
+  isTransientNetworkError,
+  retryTransientNetworkRequest,
   processorConfig,
   fetchInvoiceScanPage,
   scanInvoices,
