@@ -22,6 +22,7 @@ const KEYS = Object.freeze({
   reconciliationCursor: 'faturamento:cobranca:cursor:reconciliacao:v1',
   billingQueueCursor: 'faturamento:cobranca:cursor:fila:v1',
   processing: 'faturamento:cobranca:processamento:v1',
+  paymentImports: 'faturamento:cobranca:importacao-pagamentos:v1',
   lastRun: 'faturamento:cobranca:ultima-execucao:v1'
 });
 
@@ -479,6 +480,33 @@ const releaseProcessingRun = (runId, command = redisCommand) => command(
   String(runId)
 );
 
+const paymentImportKey = (importId) => {
+  const normalized = String(importId || '').trim().toLowerCase();
+  if (!/^[0-9a-f-]{36}$/.test(normalized)) {
+    throw Object.assign(new Error('Identificador da importação inválido.'), { statusCode: 422 });
+  }
+  return `${KEYS.paymentImports}:${normalized}`;
+};
+
+const paymentApprovalKey = (importId, invoiceId) =>
+  `${paymentImportKey(importId)}:aprovacao:${requiredInvoiceId(invoiceId)}`;
+
+const savePaymentImport = async (record, command = redisCommand) => {
+  const importId = String(record?.id || '').trim().toLowerCase();
+  await command('SET', paymentImportKey(importId), JSON.stringify(record), 'EX', '86400');
+  return record;
+};
+
+const getPaymentImport = async (importId, command = redisCommand) =>
+  parseRecord(await command('GET', paymentImportKey(importId)));
+
+const claimPaymentApproval = async (importId, invoiceId, command = redisCommand) => (
+  await command('SET', paymentApprovalKey(importId, invoiceId), new Date().toISOString(), 'NX', 'EX', '90')
+) === 'OK';
+
+const releasePaymentApproval = (importId, invoiceId, command = redisCommand) =>
+  command('DEL', paymentApprovalKey(importId, invoiceId));
+
 const saveLastRun = (record, command = redisCommand) => command(
   'SET',
   KEYS.lastRun,
@@ -539,6 +567,11 @@ module.exports = {
   saveBillingQueueCursor,
   claimProcessingRun,
   releaseProcessingRun,
+  paymentImportKey,
+  savePaymentImport,
+  getPaymentImport,
+  claimPaymentApproval,
+  releasePaymentApproval,
   saveLastRun,
   getLastRun
 };

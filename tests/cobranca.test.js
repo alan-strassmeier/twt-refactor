@@ -2240,6 +2240,9 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(html, /data-collection-section="collectionContactsSection"/);
   assert.match(html, /data-collection-section="pendingDoccobSection"/);
   assert.match(html, /data-collection-section="collectionLogsSection"/);
+  assert.match(html, /data-collection-section="paymentImportSection"/);
+  assert.match(html, /id="paymentImportForm"/);
+  assert.match(html, /id="approveAllPayments"/);
   assert.match(html, /id="pendingDoccobSection"[\s\S]*?hidden>/);
   assert.match(html, /id="collectionLogsSection"[\s\S]*?hidden>/);
   assert.match(source, /route, \.\.\.query/);
@@ -2277,6 +2280,7 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(apiSource, /query\.route === 'pending-refresh'/);
   assert.match(apiSource, /query\.route === 'invoice-detail'/);
   assert.match(apiSource, /query\.route === 'invoice-block'/);
+  assert.match(apiSource, /query\.route === 'payment-import'/);
   assert.match(apiSource, /store\.dismissIssue\(issue\.id, issue\.updatedAt\)/);
   assert.match(apiSource, /query\.route === 'resend'/);
   assert.match(apiSource, /req\.method === 'GET' \|\| req\.method === 'HEAD'/);

@@ -101,6 +101,12 @@ const authenticatedPatch = (path, body) => authenticatedRequest(path, {
   body: JSON.stringify(body)
 });
 
+const authenticatedPost = (path, body) => authenticatedRequest(path, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(body)
+});
+
 const requestInvoices = async (query) =>
   authenticatedGet(`/financeiro/faturas?${query}`);
 
@@ -989,6 +995,7 @@ module.exports = {
   STATUS_LABELS,
   authenticatedRequest,
   authenticatedGet,
+  authenticatedPost,
   authenticatedPatch,
   buildInvoiceQuery,
   normalizeInvoice,

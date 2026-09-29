@@ -298,6 +298,9 @@
             <button class="collection-section-tab" type="button" role="tab"
               data-collection-section="collectionLogsSection" aria-controls="collectionLogsSection"
               aria-selected="false" tabindex="-1">Logs de envio</button>
+            <button class="collection-section-tab" type="button" role="tab"
+              data-collection-section="paymentImportSection" aria-controls="paymentImportSection"
+              aria-selected="false" tabindex="-1">Importar pagamentos</button>
           </nav>
 
           <section class="collection-summary" aria-label="Resumo das cobranças">
@@ -327,6 +330,70 @@
             <div class="collection-empty" id="categoryEmpty" hidden>
               <strong>Nenhuma empresa cadastrada</strong>
               <p>Adicione uma empresa pelo formulário acima.</p>
+            </div>
+          </section>
+
+          <section class="collection-card collection-anchor-target" id="paymentImportSection"
+            role="tabpanel" aria-labelledby="paymentImportTitle" hidden>
+            <div class="collection-card-heading">
+              <div>
+                <h2 id="paymentImportTitle">Importar pagamentos da White Martins</h2>
+                <p>Envie a planilha XLSX, confira os vínculos entre CT-e, DOCCOB e fatura e só então aprove a liquidação na Brudam.</p>
+              </div>
+            </div>
+            <div class="payment-import-warning" role="note">
+              <strong>Nenhuma baixa é automática.</strong>
+              <span>Somente faturas abertas de CNPJs cadastrados com “White Martins” no nome podem ser aprovadas.</span>
+            </div>
+            <form class="collection-form payment-import-form" id="paymentImportForm">
+              <label class="payment-file-field">Planilha de pagamentos (.xlsx)
+                <input name="file" type="file"
+                  accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required>
+                <small>Máximo de 2 MB. A coluna Referência deve conter o número do CT-e.</small>
+              </label>
+              <label>Data do pagamento
+                <input name="paymentDate" type="date" required>
+              </label>
+              <label>Cód. forma de pagamento
+                <input name="paymentMethodId" type="number" inputmode="numeric" min="1" step="1"
+                  placeholder="Ex.: código da Brudam" required>
+              </label>
+              <label>ID da conta bancária
+                <input name="bankAccountId" type="number" inputmode="numeric" min="1" step="1"
+                  placeholder="Conta cadastrada na Brudam" required>
+              </label>
+              <button class="button button-primary" type="submit">Analisar arquivo</button>
+            </form>
+            <div id="paymentImportResult" hidden>
+              <div class="payment-import-heading">
+                <div>
+                  <strong id="paymentImportFilename">Importação analisada</strong>
+                  <span id="paymentImportExpiration"></span>
+                </div>
+                <button class="button button-primary" id="approveAllPayments" type="button">
+                  Aprovar todas as aptas
+                </button>
+              </div>
+              <section class="payment-import-summary" aria-label="Resumo da importação">
+                <article><span>Linhas lidas</span><strong id="paymentRowsCount">0</strong></article>
+                <article><span>Faturas encontradas</span><strong id="paymentInvoicesCount">0</strong></article>
+                <article><span>Aptas para liquidar</span><strong id="paymentEligibleCount">0</strong></article>
+                <article><span>Valor apto</span><strong id="paymentEligibleAmount">R$ 0,00</strong></article>
+              </section>
+              <div class="table-scroll collection-table-scroll">
+                <table class="collection-table payment-import-table">
+                  <thead><tr><th>Fatura</th><th>Cliente</th><th>CT-e(s)</th><th>Valor importado</th><th>Saldo Brudam</th><th>Verificação</th><th>Ação</th></tr></thead>
+                  <tbody id="paymentImportRows"></tbody>
+                </table>
+                <div class="collection-empty" id="paymentImportEmpty" hidden>
+                  <strong>Nenhuma fatura foi vinculada</strong>
+                  <p>Confira os números de CT-e e a disponibilidade dos DOCCOBs.</p>
+                </div>
+              </div>
+              <details class="payment-rejected" id="paymentRejected" hidden>
+                <summary id="paymentRejectedSummary">Linhas que exigem correção</summary>
+                <ul id="paymentRejectedRows"></ul>
+              </details>
             </div>
           </section>
 
