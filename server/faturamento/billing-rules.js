@@ -79,6 +79,11 @@ const DSL_TED_DOC_ACCOUNT = Object.freeze({
   account: '16666-2'
 });
 
+const DSL_TED_DOC_LIQUIDATION = Object.freeze({
+  paymentMethodId: 4,
+  bankAccountId: 16666
+});
+
 const isTwtIssuer = (value) => digits(value) === TWT_ISSUER_CNPJ;
 const isDslIssuer = (value) => digits(value) === DSL_ISSUER_CNPJ;
 
@@ -116,6 +121,7 @@ module.exports = {
   ELECNOR_TED_DOC_CNPJS,
   BILLING_BANKS,
   DSL_TED_DOC_ACCOUNT,
+  DSL_TED_DOC_LIQUIDATION,
   isTwtIssuer,
   isDslIssuer,
   normalizedDateOnly,

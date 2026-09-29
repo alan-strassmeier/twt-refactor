@@ -344,6 +344,7 @@
             <div class="payment-import-warning" role="note">
               <strong>Nenhuma baixa é automática.</strong>
               <span>Somente faturas abertas de CNPJs cadastrados com “White Martins” no nome podem ser aprovadas.</span>
+              <span>Forma fixa: Transferência TED/DOC · Conta: ITAÚ-DSL, ag. 0602-0, c/c 16666-2.</span>
             </div>
             <form class="collection-form payment-import-form" id="paymentImportForm">
               <label class="payment-file-field">Planilha de pagamentos (.xlsx)
@@ -353,14 +354,6 @@
               </label>
               <label>Data do pagamento
                 <input name="paymentDate" type="date" required>
-              </label>
-              <label>Cód. forma de pagamento
-                <input name="paymentMethodId" type="number" inputmode="numeric" min="1" step="1"
-                  placeholder="Ex.: código da Brudam" required>
-              </label>
-              <label>ID da conta bancária
-                <input name="bankAccountId" type="number" inputmode="numeric" min="1" step="1"
-                  placeholder="Conta cadastrada na Brudam" required>
               </label>
               <button class="button button-primary" type="submit">Analisar arquivo</button>
             </form>

@@ -2243,6 +2243,9 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(html, /data-collection-section="paymentImportSection"/);
   assert.match(html, /id="paymentImportForm"/);
   assert.match(html, /id="approveAllPayments"/);
+  assert.match(html, /Transferência TED\/DOC · Conta: ITAÚ-DSL/);
+  assert.doesNotMatch(html, /name="paymentMethodId"|name="bankAccountId"/);
+  assert.doesNotMatch(source, /data\.get\('paymentMethodId'\)|data\.get\('bankAccountId'\)/);
   assert.match(html, /id="pendingDoccobSection"[\s\S]*?hidden>/);
   assert.match(html, /id="collectionLogsSection"[\s\S]*?hidden>/);
   assert.match(source, /route, \.\.\.query/);

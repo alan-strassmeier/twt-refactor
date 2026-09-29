@@ -934,9 +934,7 @@
           body: JSON.stringify({
             filename: file.name,
             fileBase64: await fileAsBase64(file),
-            paymentDate: data.get('paymentDate'),
-            paymentMethodId: data.get('paymentMethodId'),
-            bankAccountId: data.get('bankAccountId')
+            paymentDate: data.get('paymentDate')
           })
         });
         renderPaymentImport(result.import);

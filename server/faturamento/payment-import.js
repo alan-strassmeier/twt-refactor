@@ -3,6 +3,7 @@ const { parsePaymentXlsx } = require('./payment-import-xlsx');
 const { findDoccobInvoicesByTransportReferences } = require('./r2-doccob');
 const { fetchInvoices, authenticatedPost } = require('./brudam');
 const store = require('./cobranca-store');
+const { DSL_TED_DOC_LIQUIDATION } = require('./billing-rules');
 
 const APPROVAL_EVENTS = ['initial', 'reminder', 'overdue'];
 const FETCH_CONCURRENCY = 4;
@@ -39,8 +40,8 @@ const paymentSettings = (input = {}) => {
   }
   return {
     paymentDate,
-    paymentMethodId: positiveInteger(input.paymentMethodId, 'A forma de pagamento da Brudam'),
-    bankAccountId: positiveInteger(input.bankAccountId, 'A conta bancária da Brudam')
+    paymentMethodId: DSL_TED_DOC_LIQUIDATION.paymentMethodId,
+    bankAccountId: DSL_TED_DOC_LIQUIDATION.bankAccountId
   };
 };
 
@@ -263,16 +264,19 @@ const approveCandidate = async (record, candidate, dependencies = {}) => {
     if (cents(current.balance) !== cents(candidate.importedAmount)) {
       throw Object.assign(new Error('O saldo da fatura mudou após a análise. Importe o arquivo novamente.'), { statusCode: 409 });
     }
+    if (!validIsoDate(record.settings?.paymentDate)) {
+      throw Object.assign(new Error('A data de pagamento da importação é inválida.'), { statusCode: 422 });
+    }
     const internalId = positiveInteger(current.internalId, 'O identificador interno do lançamento');
     const request = {
       documentos: [{
         id_lancamento: internalId,
         data_pagamento: record.settings.paymentDate,
-        forma_pagamento: record.settings.paymentMethodId,
+        forma_pagamento: DSL_TED_DOC_LIQUIDATION.paymentMethodId,
         data_credito_debito: record.settings.paymentDate,
         valor_juros: 0,
         valor_liquidado: candidate.importedAmount,
-        conta_bancaria: record.settings.bankAccountId
+        conta_bancaria: DSL_TED_DOC_LIQUIDATION.bankAccountId
       }]
     };
     const result = await (dependencies.liquidate || authenticatedPost)(

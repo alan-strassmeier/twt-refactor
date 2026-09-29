@@ -59,9 +59,7 @@ test('análise vincula CT-e, DOCCOB e fatura aberta somente quando o valor fecha
   const record = await analyzePaymentImport({
     filename: 'pagamentos.xlsx',
     fileBase64: 'ignorado',
-    paymentDate: '2026-09-29',
-    paymentMethodId: '3',
-    bankAccountId: '17'
+    paymentDate: '2026-09-29'
   }, {
     parseXlsx: () => ({
       rows: [{
@@ -97,6 +95,11 @@ test('análise vincula CT-e, DOCCOB e fatura aberta somente quando o valor fecha
   assert.equal(record.summary.eligibleInvoices, 1);
   assert.equal(record.candidates[0].invoiceId, '11840');
   assert.equal(record.candidates[0].eligible, true);
+  assert.deepEqual(record.settings, {
+    paymentDate: '2026-09-29',
+    paymentMethodId: 4,
+    bankAccountId: 16666
+  });
   assert.equal(saved.id, record.id);
 });
 
@@ -105,7 +108,7 @@ test('aprovação reconfere a fatura e envia o contrato oficial de liquidação 
   const result = await approveCandidate({
     id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
     scope: { cnpjs: ['41870054000276'] },
-    settings: { paymentDate: '2026-09-29', paymentMethodId: 3, bankAccountId: 17 }
+    settings: { paymentDate: '2026-09-29', paymentMethodId: 4, bankAccountId: 16666 }
   }, {
     invoiceId: '11840',
     clientCnpj: '41870054000276',
@@ -134,11 +137,11 @@ test('aprovação reconfere a fatura e envia o contrato oficial de liquidação 
     documentos: [{
       id_lancamento: 84583298,
       data_pagamento: '2026-09-29',
-      forma_pagamento: 3,
+      forma_pagamento: 4,
       data_credito_debito: '2026-09-29',
       valor_juros: 0,
       valor_liquidado: 1385.65,
-      conta_bancaria: 17
+      conta_bancaria: 16666
     }]
   });
   assert.equal(calls.removed, 1);
@@ -151,7 +154,7 @@ test('aprovação nunca envia liquidação quando a fatura já está liquidada',
   const result = await approveCandidate({
     id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
     scope: { cnpjs: ['41870054000276'] },
-    settings: { paymentDate: '2026-09-29', paymentMethodId: 3, bankAccountId: 17 }
+    settings: { paymentDate: '2026-09-29', paymentMethodId: 4, bankAccountId: 16666 }
   }, {
     invoiceId: '11840', clientCnpj: '41870054000276', importedAmount: 1385.65
   }, {
