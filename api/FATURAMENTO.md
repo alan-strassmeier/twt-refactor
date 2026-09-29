@@ -208,9 +208,7 @@ Em cada execução o servidor:
 Para faturas emitidas antes de **16/09/2026**, a rotina não executa envio
 inicial histórico. Essas faturas só retornam à fila automática quando entram
 no período de aviso **Perto do vencimento** ou quando passam a ser **Vencidas**.
-Registros técnicos antigos fora dessas duas janelas são removidos da fila de
-pendências e serão redescobertos pelas consultas de vencimento no momento
-correto. O reenvio manual continua disponível e mantém suas validações próprias.
+O reenvio manual continua disponível e mantém suas validações próprias.
 
 O nome antigo `BILLING_ALERT_COPY` continua aceito para não interromper
 ambientes que já o configuraram, mas `BILLING_ALERT_EMAIL` é o nome recomendado.
@@ -222,17 +220,18 @@ envio. Atualizar a página ou executar a rotina novamente não envia uma segunda
 cópia. Em caso de resposta SMTP incerta, o registro fica como **Requer
 conferência**, sem tentativa automática que possa duplicar a cobrança.
 
-Ao reprocessar uma fatura que aguardava alguma pendência, o evento é definido
-pelo estado atual: vencida tem prioridade sobre perto do vencimento, e perto do
-vencimento tem prioridade sobre o envio inicial. O contador **Verificações** da
-fila inclui tanto as quatro rotinas automáticas diárias quanto o botão
-**Verificar agora**.
+O botão **Verificar agora** e as quatro rotinas automáticas consultam somente
+três grupos: faturas emitidas no dia, faturas que entram na janela de aviso de
+vencimento e faturas vencidas. Essa rotina não percorre mais a Central de
+pendências nem realiza uma consulta geral de todas as faturas em aberto.
 
-Antes de reprocessar uma pendência operacional, o servidor consulta novamente
-a fatura pelo número na Brudam. Se ela já estiver liquidada, cancelada ou sem
-saldo, a pendência é removida sem gerar documentos, boleto ou e-mail. Falhas
-antigas de “sem destinatário” também deixam de aparecer quando não existe mais
-uma pendência ativa de contato para aquela fatura.
+O botão **Atualizar** da Central de pendências possui um fluxo separado. Para
+cada item visível ele consulta primeiro a situação financeira atual na Brudam.
+Se a fatura estiver liquidada, cancelada ou sem saldo, remove o registro
+operacional e oculta a falha antiga correspondente sem procurar DOCCOB, gerar
+boleto ou enviar e-mail. Somente faturas ainda abertas seguem para a
+revalidação de DOCCOB, contatos, documentos e envio. A atualização usa lotes e
+intervalos entre consultas para respeitar o limite da API da Brudam.
 
 O plano Hobby da Vercel não executa vários crons diários. O diretório
 `cloudflare/billing-cron` contém um Worker da Cloudflare configurado para chamar
@@ -251,9 +250,9 @@ npx wrangler deploy
 O botão **Verificar agora** usa a sessão administrativa e executa o mesmo fluxo
 sem depender do agendamento. Quando a fila ultrapassa o limite seguro de uma
 função da Vercel, o navegador continua automaticamente em novos lotes. Somente
-a primeira rodada refaz as consultas gerais na Brudam; as continuações tratam
-apenas os registros ainda marcados como **Aguardando processamento**, para não
-repetir na mesma ação as pendências de DOCCOB, contato ou pagamento.
+a primeira rodada consulta as três janelas na Brudam; as continuações tratam
+apenas os registros **Aguardando processamento** descobertos pela mesma
+execução, sem absorver pendências antigas de DOCCOB, contato ou pagamento.
 
 ## Roteamento dos boletos
 

@@ -186,8 +186,10 @@ const errorChain = (error) => {
 
 const isTransientNetworkError = (error) => errorChain(error).some((item) => (
   TRANSIENT_NETWORK_CODES.has(String(item?.code || '').toUpperCase())
+  || Number(item?.statusCode || item?.upstreamStatus) === 429
   || String(item?.name || '') === 'AbortError'
-  || /fetch failed|connect timeout|network|socket hang up/i.test(String(item?.message || ''))
+  || /fetch failed|connect timeout|network|socket hang up|limite de requisi|too many requests/i
+    .test(String(item?.message || ''))
 ));
 
 const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -203,7 +205,7 @@ const retryTransientNetworkRequest = async (
     } catch (error) {
       lastError = error;
       if (attempt >= attempts || !isTransientNetworkError(error)) throw error;
-      await waitForRetry(200 * attempt);
+      await waitForRetry(400 * attempt);
     }
   }
   throw lastError;
@@ -282,7 +284,9 @@ const scanInvoices = async (filters, {
   do {
     const result = await fetch({ ...filters, limit: PAGE_SIZE, skip });
     const page = Array.isArray(result.invoices) ? result.invoices : [];
-    invoices.push(...page.filter((invoice) => invoiceMatchesQuery(invoice, expected)));
+    invoices.push(...page
+      .filter((invoice) => invoiceMatchesQuery(invoice, expected))
+      .filter(isPendingInvoice));
     hasMore = Boolean(result.pagination?.hasMore);
     pages += 1;
     skip += PAGE_SIZE;
@@ -486,6 +490,9 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
     context.doccobPendingIds?.add(String(invoice.id));
     context.summary.pendingDoccob += 1;
     return;
+  }
+  if (typeof context.ensureEmailTransport === 'function') {
+    await context.ensureEmailTransport();
   }
   const categoryBeforeInvoiceLookup = clientCnpj ? await context.getCategory(clientCnpj) : null;
   const existingPlan = await existingDeliveryPlan({
@@ -941,6 +948,190 @@ const resendBillingInvoice = async (invoiceId, dependencies = {}) => {
   };
 };
 
+const compareInvoiceIds = (left, right) => String(left).localeCompare(String(right), 'pt-BR', {
+  numeric: true,
+  sensitivity: 'base'
+});
+
+const refreshBillingPending = async (dependencies = {}) => {
+  const config = dependencies.config || processorConfig();
+  const currentDate = saoPauloDate(dependencies.currentTime || new Date());
+  const nowFactory = dependencies.now || (() => new Date());
+  const startedAt = nowFactory();
+  const deadline = startedAt.getTime() + config.deadlineMs;
+  const pending = await (dependencies.listPending || store.listPending)();
+  const pendingByInvoice = new Map(
+    pending.map((record) => [String(record.invoiceId), record])
+  );
+  const workByInvoice = new Map();
+  pending
+    .filter((record) => record.reason !== 'queued')
+    .forEach((record) => workByInvoice.set(String(record.invoiceId), {
+      invoiceId: String(record.invoiceId),
+      pending: record
+    }));
+  (Array.isArray(dependencies.issueRecords) ? dependencies.issueRecords : []).forEach((record) => {
+    const invoiceId = String(record?.invoiceId || '').replace(/\D/g, '');
+    if (!invoiceId || workByInvoice.has(invoiceId)) return;
+    workByInvoice.set(invoiceId, { invoiceId, issue: record });
+  });
+
+  const after = String(dependencies.after || '').replace(/\D/g, '');
+  const available = [...workByInvoice.values()]
+    .sort((left, right) => compareInvoiceIds(left.invoiceId, right.invoiceId))
+    .filter((item) => !after || compareInvoiceIds(item.invoiceId, after) > 0);
+  const batch = available.slice(0, config.maxInvoices);
+  const summary = {
+    source: 'pending_refresh',
+    currentDate,
+    startedAt: startedAt.toISOString(),
+    completedAt: null,
+    scanned: workByInvoice.size,
+    processed: 0,
+    sent: 0,
+    alreadySent: 0,
+    pendingDoccob: 0,
+    waitingContacts: 0,
+    settledInvoices: 0,
+    settledInvoiceIds: [],
+    resolved: 0,
+    checkedOnly: 0,
+    skippedBankSlipCutoff: 0,
+    blocked: 0,
+    review: 0,
+    deferredHistorical: 0,
+    remaining: Math.max(0, available.length - batch.length),
+    nextAfter: available.length > batch.length && batch.length
+      ? batch[batch.length - 1].invoiceId
+      : '',
+    errors: [],
+    stoppedByLimit: available.length > batch.length
+  };
+  let emailConfig = dependencies.emailConfig || null;
+  let transport = dependencies.transport || null;
+  let ownedTransport = false;
+  const context = createProcessorContext({
+    summary,
+    pendingByInvoice,
+    emailConfig: emailConfig || {},
+    transport,
+    nowFactory,
+    dependencies: { ...dependencies, blockedInvoiceIds: new Set() }
+  });
+  context.ensureEmailTransport = async () => {
+    if (!emailConfig) emailConfig = zohoConfig();
+    if (!transport) {
+      transport = createZohoTransport(emailConfig);
+      ownedTransport = true;
+    }
+    context.emailConfig = emailConfig;
+    context.transport = transport;
+  };
+  const pause = dependencies.pendingRefreshWait || wait;
+  const intervalMs = Number.isFinite(Number(dependencies.pendingRefreshIntervalMs))
+    ? Math.max(0, Number(dependencies.pendingRefreshIntervalMs))
+    : 375;
+  let lastCheckedId = '';
+
+  try {
+    for (let index = 0; index < batch.length; index += 1) {
+      const item = batch[index];
+      if (Date.now() >= deadline) {
+        summary.stoppedByLimit = true;
+        summary.remaining += batch.length - index;
+        summary.nextAfter = lastCheckedId || after;
+        break;
+      }
+      if (index > 0 && intervalMs) await pause(intervalMs);
+      let currentInvoice = null;
+      try {
+        const refreshed = await retryTransientNetworkRequest(() => (
+          context.fetchPendingInvoice({ id: item.invoiceId, limit: 100 })
+        ));
+        currentInvoice = (refreshed?.invoices || []).find((invoice) => (
+          String(invoice.id) === item.invoiceId
+        )) || null;
+        if (!currentInvoice) {
+          throw Object.assign(new Error('Fatura não encontrada na Brudam durante a atualização.'), {
+            statusCode: 404
+          });
+        }
+
+        if (!isPendingInvoice(currentInvoice)) {
+          if (pendingByInvoice.has(item.invoiceId)) {
+            await context.removePending(item.invoiceId);
+            pendingByInvoice.delete(item.invoiceId);
+          }
+          summary.settledInvoices += 1;
+          summary.settledInvoiceIds.push(item.invoiceId);
+          summary.processed += 1;
+          lastCheckedId = item.invoiceId;
+          continue;
+        }
+
+        if (!item.pending) {
+          summary.checkedOnly += 1;
+          summary.processed += 1;
+          lastCheckedId = item.invoiceId;
+          continue;
+        }
+
+        const invoice = { ...item.pending, ...currentInvoice, id: item.invoiceId };
+        const event = automaticBillingEventForInvoice(invoice, currentDate);
+        if (!event) {
+          await context.removePending(item.invoiceId);
+          pendingByInvoice.delete(item.invoiceId);
+          summary.deferredHistorical += 1;
+          summary.processed += 1;
+          lastCheckedId = item.invoiceId;
+          continue;
+        }
+
+        if ((await context.getInvoiceBlock(item.invoiceId))?.blocked) {
+          summary.blocked += 1;
+          summary.processed += 1;
+          lastCheckedId = item.invoiceId;
+          continue;
+        }
+        if (intervalMs) await pause(intervalMs);
+        await processInvoiceEvent({ event, invoice, context });
+        if (!pendingByInvoice.has(item.invoiceId)) {
+          summary.resolved += 1;
+          await context.markBillingEventCompleted(event, item.invoiceId, {
+            completedAt: context.now().toISOString(),
+            clientCnpj: String(invoice.clientDocument || '').replace(/\D/g, ''),
+            source: 'pending_refresh'
+          });
+        }
+      } catch (error) {
+        summary.errors.push({
+          event: 'pending_refresh',
+          invoiceId: item.invoiceId,
+          message: String(error.message || error).slice(0, 300)
+        });
+        if (currentInvoice && item.pending && isPendingInvoice(currentInvoice)) {
+          const record = pendingRecord(
+            { ...item.pending, ...currentInvoice, id: item.invoiceId },
+            pendingByInvoice.get(item.invoiceId),
+            context.now().toISOString(),
+            'processing_error',
+            String(error.message || error),
+            { source: 'manual', runId: dependencies.runId }
+          );
+          await context.savePending(record);
+          pendingByInvoice.set(item.invoiceId, record);
+        }
+      }
+      summary.processed += 1;
+      lastCheckedId = item.invoiceId;
+    }
+  } finally {
+    if (ownedTransport && typeof transport?.close === 'function') transport.close();
+  }
+  summary.completedAt = nowFactory().toISOString();
+  return summary;
+};
+
 const runBillingCollection = async (dependencies = {}) => {
   const config = dependencies.config || processorConfig();
   const continuation = Boolean(dependencies.continuation);
@@ -948,36 +1139,28 @@ const runBillingCollection = async (dependencies = {}) => {
   const nowFactory = dependencies.now || (() => new Date());
   const startedAt = nowFactory();
   const deadline = startedAt.getTime() + config.deadlineMs;
-  const [pending, queueCursor, overdueStart, reconciliationStart] = await Promise.all([
+  const [pending, overdueStart] = await Promise.all([
     (dependencies.listPending || store.listPending)(),
-    (dependencies.getBillingQueueCursor || store.getBillingQueueCursor)(),
-    (dependencies.getOverdueCursor || store.getOverdueCursor)(),
-    (dependencies.getReconciliationCursor || store.getReconciliationCursor)()
+    (dependencies.getOverdueCursor || store.getOverdueCursor)()
   ]);
-  const deferredHistoricalPending = pending.filter((record) => shouldDeferHistoricalInvoice({
-    issuedAt: record.issuedAt,
-    dueAt: record.dueAt
-  }, currentDate));
-  const deferredHistoricalIds = new Set(
-    deferredHistoricalPending.map((record) => String(record.invoiceId))
-  );
-  if (deferredHistoricalIds.size) {
-    await (dependencies.removePendingBatch || store.removePendingBatch)(
-      [...deferredHistoricalIds]
-    );
+  const staleQueuedIds = continuation
+    ? []
+    : pending.filter((record) => record.reason === 'queued').map((record) => record.invoiceId);
+  if (staleQueuedIds.length) {
+    await (dependencies.removePendingBatch || store.removePendingBatch)(staleQueuedIds);
   }
-  const eligiblePending = pending.filter((record) => (
-    !deferredHistoricalIds.has(String(record.invoiceId))
+  const staleQueuedSet = new Set(staleQueuedIds.map(String));
+  const currentPending = pending.filter((record) => (
+    !staleQueuedSet.has(String(record.invoiceId))
   ));
   const pendingByInvoice = new Map(
-    eligiblePending.map((record) => [String(record.invoiceId), record])
+    currentPending.map((record) => [String(record.invoiceId), record])
   );
   const fetch = dependencies.fetchInvoices || fetchInvoiceScanPage;
 
   const emptyScan = { invoices: [], pages: 0, hasMore: false, nextSkip: 0 };
   const scanResults = continuation
     ? [
-      { scan: emptyScan, error: null },
       { scan: emptyScan, error: null },
       { scan: emptyScan, error: null },
       { scan: emptyScan, error: null }
@@ -998,44 +1181,31 @@ const runBillingCollection = async (dependencies = {}) => {
         startSkip: overdueStart,
         maxPages: config.maxPages,
         fetch
-      }),
-      scanInvoicesSafely('reconciliação de faturas em aberto', { status: '0' }, {
-        startSkip: reconciliationStart,
-        maxPages: config.maxPages,
-        fetch
       })
     ]);
-  const [todayResult, reminderResult, overdueResult, reconciliationResult] = scanResults;
+  const [todayResult, reminderResult, overdueResult] = scanResults;
   const todayScan = todayResult.scan;
   const reminderScan = reminderResult.scan;
   const overdueScan = overdueResult.scan;
-  const reconciliationScan = reconciliationResult.scan;
   const scanErrors = scanResults.map((result) => result.error).filter(Boolean);
   if (!continuation) {
-    const cursorUpdates = [];
     if (!overdueResult.error) {
-      cursorUpdates.push(
-        (dependencies.saveOverdueCursor || store.saveOverdueCursor)(overdueScan.nextSkip)
-      );
+      await (dependencies.saveOverdueCursor || store.saveOverdueCursor)(overdueScan.nextSkip);
     }
-    if (!reconciliationResult.error) {
-      cursorUpdates.push(
-        (dependencies.saveReconciliationCursor || store.saveReconciliationCursor)(
-          reconciliationScan.nextSkip
-        )
-      );
-    }
-    await Promise.all(cursorUpdates);
   }
 
+  const continuationPending = continuation
+    ? currentPending.filter((record) => (
+      record.reason === 'queued'
+      && (!dependencies.runId || String(record.lastRunId || '') === String(dependencies.runId))
+    ))
+    : [];
   const queue = buildBillingQueue({
-    pending: continuation
-      ? eligiblePending.filter((record) => record.reason === 'queued')
-      : eligiblePending,
+    pending: continuationPending,
     today: todayScan.invoices,
     reminder: reminderScan.invoices,
     overdue: overdueScan.invoices,
-    reconciliation: reconciliationScan.invoices,
+    reconciliation: [],
     currentDate
   });
   const blockedInvoiceIds = new Set(
@@ -1046,11 +1216,6 @@ const runBillingCollection = async (dependencies = {}) => {
     dependencies.getCompletedBillingEvents || store.getCompletedBillingEvents
   )(unblockedQueue.map(({ event, invoice }) => ({ event, invoiceId: invoice.id })));
   const activeQueue = unblockedQueue.filter(({ key }) => !completedEventFields.has(key));
-  const priorityInvoiceIds = new Set([
-    ...todayScan.invoices,
-    ...reminderScan.invoices,
-    ...eligiblePending.filter((record) => record.reason !== 'queued')
-  ].map((invoice) => String(invoice.id || invoice.invoiceId || '')));
   const discoveredAt = nowFactory().toISOString();
   const newlyQueued = activeQueue
     .filter(({ invoice }) => !pendingByInvoice.has(String(invoice.id)))
@@ -1062,14 +1227,7 @@ const runBillingCollection = async (dependencies = {}) => {
     await (dependencies.savePendingBatch || store.savePendingBatch)(newlyQueued);
     newlyQueued.forEach((record) => pendingByInvoice.set(record.invoiceId, record));
   }
-  const priorityQueue = activeQueue.filter(({ invoice }) => (
-    priorityInvoiceIds.has(String(invoice.id))
-  ));
-  const backlogQueue = activeQueue.filter(({ invoice }) => (
-    !priorityInvoiceIds.has(String(invoice.id))
-  ));
-  const rotatedBacklog = rotateBillingQueue(backlogQueue, continuation ? 0 : queueCursor);
-  const processingQueue = [...priorityQueue, ...rotatedBacklog.queue];
+  const processingQueue = activeQueue;
 
   const summary = {
     source: dependencies.source === 'automatic' ? 'automatic' : 'manual',
@@ -1079,7 +1237,7 @@ const runBillingCollection = async (dependencies = {}) => {
     completedAt: null,
     scanned: queue.length,
     discovered: newlyQueued.length,
-    reconciled: reconciliationScan.invoices.length,
+    reconciled: 0,
     processed: 0,
     sent: 0,
     alreadySent: 0,
@@ -1089,7 +1247,7 @@ const runBillingCollection = async (dependencies = {}) => {
     skippedBankSlipCutoff: 0,
     blocked: queue.length - unblockedQueue.length,
     alreadyCompleted: unblockedQueue.length - activeQueue.length,
-    deferredHistorical: deferredHistoricalIds.size,
+    deferredHistorical: 0,
     scanFailures: scanErrors.length,
     remaining: 0,
     review: 0,
@@ -1109,7 +1267,6 @@ const runBillingCollection = async (dependencies = {}) => {
   });
 
   let examined = 0;
-  let examinedBacklog = 0;
   try {
     for (const item of processingQueue) {
       if (summary.processed >= config.maxInvoices || Date.now() >= deadline) {
@@ -1117,25 +1274,7 @@ const runBillingCollection = async (dependencies = {}) => {
         break;
       }
       examined += 1;
-      if (!priorityInvoiceIds.has(String(item.invoice.id))) examinedBacklog += 1;
       try {
-        const pendingState = context.pendingByInvoice.get(String(item.invoice.id));
-        if (item.fromPending && pendingState?.reason !== 'queued') {
-          const refreshed = await retryTransientNetworkRequest(() => (
-            context.fetchPendingInvoice({ id: item.invoice.id, limit: 100 })
-          ));
-          const currentInvoice = (refreshed?.invoices || []).find((invoice) => (
-            String(invoice.id) === String(item.invoice.id)
-          ));
-          if (currentInvoice && !isPendingInvoice(currentInvoice)) {
-            await context.removePending(item.invoice.id);
-            context.pendingByInvoice.delete(String(item.invoice.id));
-            summary.settledInvoices += 1;
-            summary.processed += 1;
-            continue;
-          }
-          if (currentInvoice) item.invoice = { ...item.invoice, ...currentInvoice };
-        }
         if (item.event !== EVENT_TYPES.initial && context.sentInvoiceIds.has(String(item.invoice.id))) {
           summary.processed += 1;
           continue;
@@ -1203,12 +1342,6 @@ const runBillingCollection = async (dependencies = {}) => {
     summary.remaining = summary.stoppedByLimit
       ? Math.max(0, activeQueue.length - examined)
       : 0;
-    const nextCursor = summary.stoppedByLimit && backlogQueue.length
-      ? (rotatedBacklog.startIndex + examinedBacklog) % backlogQueue.length
-      : 0;
-    if (!continuation) {
-      await (dependencies.saveBillingQueueCursor || store.saveBillingQueueCursor)(nextCursor);
-    }
     if (!dependencies.transport && typeof transport.close === 'function') transport.close();
   }
   summary.completedAt = nowFactory().toISOString();
@@ -1240,5 +1373,6 @@ module.exports = {
   processInvoiceEvent,
   createProcessorContext,
   resendBillingInvoice,
+  refreshBillingPending,
   runBillingCollection
 };

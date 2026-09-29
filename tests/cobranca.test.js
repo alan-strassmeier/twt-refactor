@@ -73,6 +73,7 @@ const {
   isTerminalBillingFailure,
   processInvoiceEvent,
   resendBillingInvoice,
+  refreshBillingPending,
   runBillingCollection
 } = require('../server/faturamento/cobranca-processor');
 const {
@@ -463,14 +464,17 @@ test('monta mensagem de WhatsApp adequada para uma fatura vencida', () => {
   assert.match(message, /previsão de pagamento/);
 });
 
-test('varre páginas e calcula o dia de lembrete sem depender do fuso do servidor', async () => {
+test('varre páginas, ignora saldo zerado e calcula o lembrete sem depender do fuso', async () => {
   const calls = [];
   const result = await scanInvoices({ status: '0' }, {
     maxPages: 2,
     fetch: async (input) => {
       calls.push(input.skip);
       return {
-        invoices: [{ id: input.skip + 1, status: 0 }],
+        invoices: [
+          { id: input.skip + 1, status: 0, balance: 100 },
+          { id: input.skip + 900, status: 0, balance: 0 }
+        ],
         pagination: { hasMore: input.skip === 0 }
       };
     }
@@ -499,7 +503,7 @@ test('repete uma consulta quando a conexão externa expira', async () => {
   });
   assert.equal(result, 'ok');
   assert.equal(attempts, 2);
-  assert.deepEqual(waits, [200]);
+  assert.deepEqual(waits, [400]);
   assert.equal(isTransientNetworkError(new Error('regra de negócio inválida')), false);
 });
 
@@ -675,16 +679,17 @@ test('marca e consulta eventos concluídos sem misturar etapas da mesma fatura',
 test('persiste toda a descoberta antes de limitar o lote de processamento', async () => {
   const queued = [];
   const pendingUpdates = [];
-  let nextQueueCursor = null;
+  const now = new Date();
+  const today = logDate(now);
   const invoices = [
-    { id: '11839', status: 0, issuedAt: '2026-09-28', dueAt: '2026-11-27', clientDocument: '35820448008110' },
-    { id: '11840', status: 0, issuedAt: '2026-09-28', dueAt: '2026-10-13', clientDocument: '41870054000276' }
+    { id: '11839', status: 0, balance: 470.29, issuedAt: today, dueAt: addDays(today, 60), clientDocument: '35820448008110' },
+    { id: '11840', status: 0, balance: 1385.65, issuedAt: today, dueAt: addDays(today, 15), clientDocument: '41870054000276' }
   ];
   const result = await runBillingCollection({
     source: 'automatic',
     runId: 'execucao-lote',
-    currentTime: new Date(),
-    now: () => new Date(),
+    currentTime: now,
+    now: () => now,
     config: { maxInvoices: 1, maxPages: 1, deadlineMs: 55000 },
     listPending: async () => [],
     getBillingQueueCursor: async () => 0,
@@ -692,7 +697,7 @@ test('persiste toda a descoberta antes de limitar o lote de processamento', asyn
     getReconciliationCursor: async () => 0,
     saveOverdueCursor: async () => {},
     saveReconciliationCursor: async () => {},
-    saveBillingQueueCursor: async (cursor) => { nextQueueCursor = cursor; },
+    saveBillingQueueCursor: async () => {},
     fetchInvoices: async (filters) => ({
       invoices: filters['emissao[eq]'] || Object.keys(filters).every((key) => ['status', 'limit', 'skip'].includes(key))
         ? invoices
@@ -718,7 +723,6 @@ test('persiste toda a descoberta antes de limitar o lote de processamento', asyn
   assert.equal(result.processed, 1);
   assert.equal(result.remaining, 1);
   assert.equal(result.stoppedByLimit, true);
-  assert.equal(nextQueueCursor, 1);
 });
 
 test('continuação drena somente itens ainda não examinados sem repetir a varredura', async () => {
@@ -735,8 +739,9 @@ test('continuação drena somente itens ainda não examinados sem repetir a varr
     now: () => now,
     config: { maxInvoices: 1, maxPages: 1, deadlineMs: 55000 },
     listPending: async () => [
-      { invoiceId: '11839', reason: 'queued', clientCnpj: '35820448008110', issuedAt: '2026-09-28', dueAt: '2026-11-27' },
-      { invoiceId: '11840', reason: 'queued', clientCnpj: '41870054000276', issuedAt: '2026-09-28', dueAt: '2026-10-13' },
+      { invoiceId: '11839', reason: 'queued', lastRunId: 'continuacao-lote', clientCnpj: '35820448008110', issuedAt: '2026-09-28', dueAt: '2026-11-27' },
+      { invoiceId: '11840', reason: 'queued', lastRunId: 'continuacao-lote', clientCnpj: '41870054000276', issuedAt: '2026-09-28', dueAt: '2026-10-13' },
+      { invoiceId: '11841', reason: 'queued', lastRunId: 'execucao-antiga', clientCnpj: '41870054000276', issuedAt: '2026-09-28', dueAt: '2026-10-13' },
       { invoiceId: '11838', reason: 'doccob', clientCnpj: '35640442000187', issuedAt: '2026-09-28', dueAt: '2026-10-13' }
     ],
     getBillingQueueCursor: async () => 19,
@@ -777,138 +782,94 @@ test('continuação drena somente itens ainda não examinados sem repetir a varr
   assert.notEqual(pendingUpdates[0].invoiceId, '11838');
 });
 
-test('retira da fila a pendência histórica até chegar a janela de vencimento', async () => {
-  const removed = [];
+test('verificação normal ignora pendências acumuladas e consulta somente as três janelas', async () => {
+  const now = new Date();
   let scanCalls = 0;
-  const now = new Date();
+  let pendingLookups = 0;
+  const removedQueued = [];
   const result = await runBillingCollection({
     source: 'manual',
-    continuation: true,
-    currentTime: new Date('2026-09-29T15:00:00.000Z'),
-    now: () => now,
-    config: { maxInvoices: 5, maxPages: 1, deadlineMs: 55000 },
-    listPending: async () => [{
-      invoiceId: '11770',
-      reason: 'contacts',
-      clientCnpj: '11280282000144',
-      issuedAt: '2026-09-15',
-      dueAt: '2026-10-20'
-    }],
-    removePendingBatch: async (invoiceIds) => { removed.push(...invoiceIds); },
-    getBillingQueueCursor: async () => 0,
-    getOverdueCursor: async () => 0,
-    getReconciliationCursor: async () => 0,
-    fetchInvoices: async () => { scanCalls += 1; },
-    listBlockedInvoiceIds: async () => [],
-    getCompletedBillingEvents: async () => new Set(),
-    emailConfig: { fromName: 'TWT', fromEmail: 'faturamento@twt.com.br' },
-    transport: {}
-  });
-  assert.equal(scanCalls, 0);
-  assert.deepEqual(removed, ['11770']);
-  assert.equal(result.deferredHistorical, 1);
-  assert.equal(result.scanned, 0);
-  assert.equal(result.processed, 0);
-});
-
-test('revalida uma pendência solucionável antes da fila técnica acumulada', async () => {
-  const now = new Date();
-  const checked = [];
-  const result = await runBillingCollection({
-    source: 'manual',
-    runId: 'prioridade-pendencia',
+    runId: 'somente-janelas',
     currentTime: now,
     now: () => now,
-    config: { maxInvoices: 1, maxPages: 1, deadlineMs: 55000 },
+    config: { maxInvoices: 5, maxPages: 1, deadlineMs: 55000 },
     listPending: async () => [
-      { invoiceId: '11578', reason: 'contacts', clientCnpj: '30455661001900', issuedAt: '2026-09-28', dueAt: '2026-10-30' },
-      { invoiceId: '11840', reason: 'queued', clientCnpj: '41870054000276', issuedAt: '2026-09-28', dueAt: '2026-10-30' }
+      {
+        invoiceId: '11347',
+        reason: 'doccob',
+        clientCnpj: '35820448009516',
+        issuedAt: '2026-06-11',
+        dueAt: '2026-08-10'
+      },
+      { invoiceId: '11000', reason: 'queued', lastRunId: 'execucao-antiga' }
     ],
-    getBillingQueueCursor: async () => 1,
+    removePendingBatch: async (invoiceIds) => { removedQueued.push(...invoiceIds); },
     getOverdueCursor: async () => 0,
-    getReconciliationCursor: async () => 0,
     saveOverdueCursor: async () => {},
-    saveReconciliationCursor: async () => {},
-    saveBillingQueueCursor: async () => {},
-    fetchInvoices: async () => ({ invoices: [], pagination: { hasMore: false } }),
+    fetchInvoices: async () => {
+      scanCalls += 1;
+      return { invoices: [], pagination: { hasMore: false } };
+    },
+    fetchPendingInvoice: async () => { pendingLookups += 1; },
     listBlockedInvoiceIds: async () => [],
     getCompletedBillingEvents: async () => new Set(),
-    getInvoiceBlock: async () => null,
-    savePendingBatch: async () => {},
-    savePending: async (record) => { checked.push(record.invoiceId); },
-    removePending: async () => {},
-    addLog: async () => {},
-    markBillingEventCompleted: async () => {},
-    findDoccobForInvoice: async () => null,
-    getCategory: async () => null,
     emailConfig: { fromName: 'TWT', fromEmail: 'faturamento@twt.com.br' },
     transport: {}
   });
-  assert.deepEqual(checked, ['11578']);
-  assert.equal(result.processed, 1);
-  assert.equal(result.remaining, 1);
-  assert.equal(result.stoppedByLimit, true);
+  assert.equal(scanCalls, 3);
+  assert.equal(pendingLookups, 0);
+  assert.deepEqual(removedQueued, ['11000']);
+  assert.equal(result.processed, 0);
+  assert.equal(result.reconciled, 0);
 });
 
-test('remove pendência quando a fatura já foi liquidada na Brudam', async () => {
+test('atualização da Central remove primeiro faturas liquidadas, inclusive falhas vindas só do log', async () => {
   const now = new Date();
   const removed = [];
   let documentLookups = 0;
-  const result = await runBillingCollection({
-    source: 'manual',
+  const result = await refreshBillingPending({
+    runId: 'atualizacao-pendencias',
     currentTime: now,
     now: () => now,
     config: { maxInvoices: 5, maxPages: 1, deadlineMs: 55000 },
     listPending: async () => [{
-      invoiceId: '11850',
-      reason: 'contacts',
-      clientCnpj: '11280282000144',
-      issuedAt: '2026-09-28',
-      dueAt: '2099-10-30'
+      invoiceId: '11347',
+      reason: 'doccob',
+      clientCnpj: '35820448009516',
+      issuedAt: '2026-06-11',
+      dueAt: '2026-08-10'
     }],
-    getBillingQueueCursor: async () => 0,
-    getOverdueCursor: async () => 0,
-    getReconciliationCursor: async () => 0,
-    saveOverdueCursor: async () => {},
-    saveReconciliationCursor: async () => {},
-    saveBillingQueueCursor: async () => {},
-    fetchInvoices: async () => ({ invoices: [], pagination: { hasMore: false } }),
-    fetchPendingInvoice: async () => ({
+    issueRecords: [{ invoiceId: '11265', type: 'email' }],
+    fetchPendingInvoice: async ({ id }) => ({
       invoices: [{
-        id: '11850',
+        id: String(id),
         status: 1,
         statusLabel: 'Liquidada',
         balance: 0,
-        clientDocument: '11280282000144'
+        clientDocument: id === '11347' ? '35820448009516' : '11280282000144'
       }]
     }),
+    pendingRefreshIntervalMs: 0,
     listBlockedInvoiceIds: async () => [],
-    getCompletedBillingEvents: async () => new Set(),
     removePending: async (invoiceId) => { removed.push(String(invoiceId)); },
-    getInvoiceBlock: async () => null,
-    findDoccobForInvoice: async () => {
-      documentLookups += 1;
-      return null;
-    },
+    findDoccobForInvoice: async () => { documentLookups += 1; },
     emailConfig: { fromName: 'TWT', fromEmail: 'faturamento@twt.com.br' },
     transport: {}
   });
-  assert.deepEqual(removed, ['11850']);
+  assert.deepEqual(removed, ['11347']);
+  assert.deepEqual(result.settledInvoiceIds, ['11265', '11347']);
+  assert.equal(result.settledInvoices, 2);
+  assert.equal(result.processed, 2);
   assert.equal(documentLookups, 0);
-  assert.equal(result.settledInvoices, 1);
-  assert.equal(result.processed, 1);
-  assert.equal(result.sent, 0);
   assert.equal(result.errors.length, 0);
 });
 
-test('revalida pendência mesmo quando as consultas iniciais à Brudam falham', async () => {
+test('atualização da Central reprocessa uma pendência aberta depois de conferir o status', async () => {
   const now = new Date();
   const removed = [];
   const recipients = [];
-  let scanCalls = 0;
-  let scanCursorSaves = 0;
-  const result = await runBillingCollection({
-    source: 'manual',
+  const stages = [];
+  const result = await refreshBillingPending({
     runId: 'revalidacao-com-timeout',
     currentTime: now,
     now: () => now,
@@ -921,38 +882,24 @@ test('revalida pendência mesmo quando as consultas iniciais à Brudam falham', 
       issuedAt: '2026-09-28',
       dueAt: '2099-10-30'
     }],
-    getBillingQueueCursor: async () => 0,
-    getOverdueCursor: async () => 200,
-    getReconciliationCursor: async () => 300,
-    saveOverdueCursor: async () => { scanCursorSaves += 1; },
-    saveReconciliationCursor: async () => { scanCursorSaves += 1; },
-    saveBillingQueueCursor: async () => {},
-    fetchInvoices: async () => {
-      scanCalls += 1;
-      throw new TypeError('fetch failed', {
-        cause: Object.assign(new Error('Connect Timeout Error'), {
-          code: 'UND_ERR_CONNECT_TIMEOUT'
-        })
-      });
-    },
-    fetchPendingInvoice: async () => ({
-      invoices: [{
+    fetchPendingInvoice: async () => {
+      stages.push('status');
+      return { invoices: [{
         id: '11578',
         status: 0,
         statusLabel: 'Em aberto',
         balance: 100,
         clientDocument: '30455661001900'
-      }]
-    }),
+      }] };
+    },
+    pendingRefreshIntervalMs: 0,
     listBlockedInvoiceIds: async () => [],
-    getCompletedBillingEvents: async () => new Set(),
     getInvoiceBlock: async () => null,
-    savePendingBatch: async () => {},
     savePending: async () => {},
     removePending: async (invoiceId) => { removed.push(String(invoiceId)); },
     addLog: async () => {},
     markBillingEventCompleted: async () => {},
-    findDoccobForInvoice: async () => ({}),
+    findDoccobForInvoice: async () => { stages.push('doccob'); return {}; },
     getCategory: async () => ({
       contacts: [{
         id: 'contato-elecnor',
@@ -979,12 +926,11 @@ test('revalida pendência mesmo quando as consultas iniciais à Brudam falham', 
     },
     transport: {}
   });
-  assert.equal(scanCalls, 4);
-  assert.equal(scanCursorSaves, 0);
-  assert.equal(result.scanFailures, 4);
-  assert.equal(result.errors.length, 4);
+  assert.deepEqual(stages.slice(0, 2), ['status', 'doccob']);
+  assert.equal(result.errors.length, 0);
   assert.equal(result.processed, 1);
   assert.equal(result.sent, 1);
+  assert.equal(result.resolved, 1);
   assert.deepEqual(recipients, ['isadora.souza@elecnor.com']);
   assert.deepEqual(removed, ['11578']);
 });
@@ -2163,6 +2109,7 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(html, /id="collectionLogsSection"[\s\S]*?hidden>/);
   assert.match(source, /route, \.\.\.query/);
   assert.match(source, /continuation: '1'/);
+  assert.match(source, /endpoint\('pending-refresh'\)/);
   assert.match(apiSource, /runBillingCollection\(\{ source, runId, continuation \}\)/);
   assert.match(source, /const filters = logFilters\(\);[\s\S]*setLoading\(true\)/);
   assert.doesNotMatch(source, /window\.confirm\(`Excluir \$\{category\.name\}/);
@@ -2190,6 +2137,7 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(appSource, /navigator\.clipboard/);
   assert.match(apiSource, /query\.route === 'webhook'/);
   assert.match(apiSource, /query\.route === 'contacts-sync'/);
+  assert.match(apiSource, /query\.route === 'pending-refresh'/);
   assert.match(apiSource, /query\.route === 'invoice-detail'/);
   assert.match(apiSource, /query\.route === 'invoice-block'/);
   assert.match(apiSource, /store\.dismissIssue\(issue\.id, issue\.updatedAt\)/);
