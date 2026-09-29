@@ -850,6 +850,57 @@ test('revalida uma pendência solucionável antes da fila técnica acumulada', a
   assert.equal(result.stoppedByLimit, true);
 });
 
+test('remove pendência quando a fatura já foi liquidada na Brudam', async () => {
+  const now = new Date();
+  const removed = [];
+  let documentLookups = 0;
+  const result = await runBillingCollection({
+    source: 'manual',
+    currentTime: now,
+    now: () => now,
+    config: { maxInvoices: 5, maxPages: 1, deadlineMs: 55000 },
+    listPending: async () => [{
+      invoiceId: '11850',
+      reason: 'contacts',
+      clientCnpj: '11280282000144',
+      issuedAt: '2026-09-28',
+      dueAt: '2099-10-30'
+    }],
+    getBillingQueueCursor: async () => 0,
+    getOverdueCursor: async () => 0,
+    getReconciliationCursor: async () => 0,
+    saveOverdueCursor: async () => {},
+    saveReconciliationCursor: async () => {},
+    saveBillingQueueCursor: async () => {},
+    fetchInvoices: async () => ({ invoices: [], pagination: { hasMore: false } }),
+    fetchPendingInvoice: async () => ({
+      invoices: [{
+        id: '11850',
+        status: 1,
+        statusLabel: 'Liquidada',
+        balance: 0,
+        clientDocument: '11280282000144'
+      }]
+    }),
+    listBlockedInvoiceIds: async () => [],
+    getCompletedBillingEvents: async () => new Set(),
+    removePending: async (invoiceId) => { removed.push(String(invoiceId)); },
+    getInvoiceBlock: async () => null,
+    findDoccobForInvoice: async () => {
+      documentLookups += 1;
+      return null;
+    },
+    emailConfig: { fromName: 'TWT', fromEmail: 'faturamento@twt.com.br' },
+    transport: {}
+  });
+  assert.deepEqual(removed, ['11850']);
+  assert.equal(documentLookups, 0);
+  assert.equal(result.settledInvoices, 1);
+  assert.equal(result.processed, 1);
+  assert.equal(result.sent, 0);
+  assert.equal(result.errors.length, 0);
+});
+
 test('revalida pendência mesmo quando as consultas iniciais à Brudam falham', async () => {
   const now = new Date();
   const removed = [];
@@ -884,6 +935,15 @@ test('revalida pendência mesmo quando as consultas iniciais à Brudam falham', 
         })
       });
     },
+    fetchPendingInvoice: async () => ({
+      invoices: [{
+        id: '11578',
+        status: 0,
+        statusLabel: 'Em aberto',
+        balance: 100,
+        clientDocument: '30455661001900'
+      }]
+    }),
     listBlockedInvoiceIds: async () => [],
     getCompletedBillingEvents: async () => new Set(),
     getInvoiceBlock: async () => null,
@@ -1957,7 +2017,7 @@ test('fila unificada prioriza vencidas e reúne falhas de documentos e entrega',
   assert.equal(issues[1].action, 'logs');
 });
 
-test('oculta o alerta antigo de contato quando o CNPJ já possui destinatário ativo', () => {
+test('não recria pendência por log antigo e oculta contato que já foi corrigido', () => {
   const waitingLog = {
     id: 'sem-contato-11578',
     invoiceId: '11578',
@@ -1966,8 +2026,21 @@ test('oculta o alerta antigo de contato quando o CNPJ já possui destinatário a
     status: 'waiting_contacts',
     createdAt: '2026-09-28T19:33:00Z'
   };
-  assert.equal(buildUnifiedIssues({ logs: [waitingLog] }).length, 1);
+  assert.equal(buildUnifiedIssues({ logs: [waitingLog] }).length, 0);
   assert.equal(buildUnifiedIssues({
+    pending: [{
+      invoiceId: '11578',
+      clientCnpj: '30455661001900',
+      reason: 'contacts'
+    }],
+    logs: [waitingLog]
+  }).length, 1);
+  assert.equal(buildUnifiedIssues({
+    pending: [{
+      invoiceId: '11578',
+      clientCnpj: '30455661001900',
+      reason: 'contacts'
+    }],
     logs: [waitingLog],
     activeContactCnpjs: ['30.455.661/0019-00']
   }).length, 0);

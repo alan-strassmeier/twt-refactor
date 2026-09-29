@@ -228,6 +228,12 @@ vencimento tem prioridade sobre o envio inicial. O contador **Verificações** d
 fila inclui tanto as quatro rotinas automáticas diárias quanto o botão
 **Verificar agora**.
 
+Antes de reprocessar uma pendência operacional, o servidor consulta novamente
+a fatura pelo número na Brudam. Se ela já estiver liquidada, cancelada ou sem
+saldo, a pendência é removida sem gerar documentos, boleto ou e-mail. Falhas
+antigas de “sem destinatário” também deixam de aparecer quando não existe mais
+uma pendência ativa de contato para aquela fatura.
+
 O plano Hobby da Vercel não executa vários crons diários. O diretório
 `cloudflare/billing-cron` contém um Worker da Cloudflare configurado para chamar
 a rotina às **07:00, 12:00, 16:00 e 22:00**, no horário de São Paulo. O cron do
