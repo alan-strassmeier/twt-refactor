@@ -50,6 +50,7 @@ const TRANSIENT_NETWORK_CODES = new Set([
   'ENETUNREACH',
   'ETIMEDOUT'
 ]);
+const FINANCIAL_STATUS_UNCONFIRMED_CODE = 'BILLING_FINANCIAL_STATUS_UNCONFIRMED';
 
 const saoPauloDate = (value = new Date()) => {
   const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
@@ -396,6 +397,17 @@ const enabledContacts = (category) => Array.isArray(category?.contacts)
   ? category.contacts.filter((contact) => contact?.enabled !== false)
   : [];
 
+const closeSettledInvoiceEvents = async ({ context, invoiceId }) => {
+  if (typeof context.markBillingEventCompleted !== 'function') return;
+  const completedAt = context.now().toISOString();
+  await Promise.all(Object.values(EVENT_TYPES).map((event) => (
+    context.markBillingEventCompleted(event, invoiceId, {
+      completedAt,
+      financialStatus: 'settled'
+    })
+  )));
+};
+
 const buildTwtNfseAttachment = async ({ invoiceId, doccob, data, context }) => {
   const issuerCnpj = doccob?.invoice?.issuerCnpj || data.issuer?.document;
   if (!isTwtIssuer(issuerCnpj)) return null;
@@ -463,6 +475,60 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
     context.summary.blocked = Number(context.summary.blocked || 0) + 1;
     return { skipped: 'blocked' };
   }
+
+  const retireSettledInvoice = async () => {
+    if (context.pendingByInvoice.has(invoiceId)) {
+      await context.removePending(invoiceId);
+      context.pendingByInvoice.delete(invoiceId);
+    }
+    context.summary.settledInvoices = Number(context.summary.settledInvoices || 0) + 1;
+    if (
+      Array.isArray(context.summary.settledInvoiceIds)
+      && !context.summary.settledInvoiceIds.includes(invoiceId)
+    ) {
+      context.summary.settledInvoiceIds.push(invoiceId);
+    }
+    await closeSettledInvoiceEvents({ context, invoiceId });
+    return { skipped: 'settled' };
+  };
+
+  const confirmCurrentFinancialState = async () => {
+    let result;
+    try {
+      result = await retryTransientNetworkRequest(() => (
+        context.fetchPendingInvoice({ id: invoiceId, limit: 100 })
+      ));
+    } catch (cause) {
+      throw Object.assign(new Error(
+        'O envio foi bloqueado porque não foi possível confirmar que a fatura continua em aberto na Brudam.'
+      ), {
+        statusCode: 503,
+        expose: true,
+        code: FINANCIAL_STATUS_UNCONFIRMED_CODE,
+        cause
+      });
+    }
+    const currentInvoice = (result?.invoices || []).find((item) => (
+      String(item?.id || '').replace(/^0+(?=\d)/, '') === invoiceId.replace(/^0+(?=\d)/, '')
+    ));
+    if (!currentInvoice) {
+      throw Object.assign(new Error(
+        'O envio foi bloqueado porque a Brudam não retornou o estado financeiro atual da fatura.'
+      ), {
+        statusCode: 503,
+        expose: true,
+        code: FINANCIAL_STATUS_UNCONFIRMED_CODE
+      });
+    }
+    return isPendingInvoice(currentInvoice) ? currentInvoice : null;
+  };
+
+  // Toda rota de envio passa por esta confirmação, inclusive atualização e reenvio manual.
+  // Na dúvida ou indisponibilidade da Brudam, o comportamento é não enviar.
+  const initialFinancialState = await confirmCurrentFinancialState();
+  if (!initialFinancialState) return retireSettledInvoice();
+  invoice = { ...invoice, ...initialFinancialState, id: invoiceId };
+
   if (context.doccobPendingIds?.has(String(invoice.id))) return;
   const clientCnpj = String(invoice.clientDocument || '').replace(/\D/g, '');
   const doccob = await context.findDoccobForInvoice({
@@ -511,6 +577,12 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
   }
 
   const data = await context.fetchInvoicePdfData(invoice.id);
+  if (
+    Object.prototype.hasOwnProperty.call(data?.invoice || {}, 'balance')
+    && !isPendingInvoice(data.invoice)
+  ) {
+    return retireSettledInvoice();
+  }
   const resolvedCnpj = String(data.client?.document || clientCnpj).replace(/\D/g, '');
   const category = resolvedCnpj === clientCnpj
     ? categoryBeforeInvoiceLookup
@@ -639,6 +711,10 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
   });
 
   for (const contact of unsentContacts) {
+    // Confere cada destinatário imediatamente antes da reserva e do SMTP. Assim uma
+    // liquidação ocorrida durante a preparação (ou entre destinatários) interrompe o lote.
+    const finalFinancialState = await confirmCurrentFinancialState();
+    if (!finalFinancialState) return retireSettledInvoice();
     const internalAlert = contact.id === '__alerta_interno__';
     const contactName = [contact.firstName, contact.lastName].filter(Boolean).join(' ');
     const deliveryEvent = context.deliveryEvent ? context.deliveryEvent(event) : event;
@@ -885,6 +961,12 @@ const resendBillingInvoice = async (invoiceId, dependencies = {}) => {
     ...dependencies,
     runId: attemptId,
     manualResend: true,
+    fetchPendingInvoice: dependencies.fetchPendingInvoice || (async ({ id, limit }) => {
+      const exact = await fetch({ id, limit });
+      if ((exact?.invoices || []).some((item) => String(item.id) === normalizedId)) return exact;
+      if (clientCnpj.length === 14) return fetch({ cnpj: clientCnpj, limit });
+      return exact;
+    }),
     getDelivery: async () => null,
     claimDelivery: async () => true,
     deliveryReference: (event, id, email) => deliveryReference(event, id, email, attemptId),
@@ -917,6 +999,12 @@ const resendBillingInvoice = async (invoiceId, dependencies = {}) => {
   }
   if (outcome?.skipped === 'blocked') {
     throw Object.assign(new Error('O envio desta fatura está bloqueado manualmente.'), {
+      statusCode: 409,
+      expose: true
+    });
+  }
+  if (outcome?.skipped === 'settled') {
+    throw Object.assign(new Error('A fatura está liquidada e não pode receber cobrança.'), {
       statusCode: 409,
       expose: true
     });
@@ -1062,6 +1150,7 @@ const refreshBillingPending = async (dependencies = {}) => {
             await context.removePending(item.invoiceId);
             pendingByInvoice.delete(item.invoiceId);
           }
+          await closeSettledInvoiceEvents({ context, invoiceId: item.invoiceId });
           summary.settledInvoices += 1;
           summary.settledInvoiceIds.push(item.invoiceId);
           summary.processed += 1;

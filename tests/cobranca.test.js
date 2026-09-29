@@ -97,6 +97,10 @@ const invoiceData = (payment = null) => ({
     id: '11756',
     dueAt: '2026-11-06',
     total: 2193.61,
+    paid: 0,
+    balance: 2193.61,
+    status: 0,
+    statusLabel: 'Em aberto',
     payment
   },
   client: {
@@ -704,6 +708,9 @@ test('persiste toda a descoberta antes de limitar o lote de processamento', asyn
         : [],
       pagination: { hasMore: false }
     }),
+    fetchPendingInvoice: async ({ id }) => ({
+      invoices: invoices.filter((invoice) => String(invoice.id) === String(id))
+    }),
     listBlockedInvoiceIds: async () => [],
     getCompletedBillingEvents: async () => new Set(),
     getInvoiceBlock: async () => null,
@@ -754,6 +761,15 @@ test('continuação drena somente itens ainda não examinados sem repetir a varr
       scanCalls += 1;
       throw new Error('A continuação não deve consultar novamente a Brudam.');
     },
+    fetchPendingInvoice: async ({ id }) => ({
+      invoices: [{
+        id: String(id),
+        status: 0,
+        statusLabel: 'Em aberto',
+        balance: 100,
+        clientDocument: '41870054000276'
+      }]
+    }),
     listBlockedInvoiceIds: async () => [],
     getCompletedBillingEvents: async () => new Set(),
     getInvoiceBlock: async () => null,
@@ -826,6 +842,7 @@ test('verificação normal ignora pendências acumuladas e consulta somente as t
 test('atualização da Central remove primeiro faturas liquidadas, inclusive falhas vindas só do log', async () => {
   const now = new Date();
   const removed = [];
+  const completed = [];
   let documentLookups = 0;
   const result = await refreshBillingPending({
     runId: 'atualizacao-pendencias',
@@ -852,6 +869,9 @@ test('atualização da Central remove primeiro faturas liquidadas, inclusive fal
     pendingRefreshIntervalMs: 0,
     listBlockedInvoiceIds: async () => [],
     removePending: async (invoiceId) => { removed.push(String(invoiceId)); },
+    markBillingEventCompleted: async (event, invoiceId) => {
+      completed.push(`${event}:${invoiceId}`);
+    },
     findDoccobForInvoice: async () => { documentLookups += 1; },
     emailConfig: { fromName: 'TWT', fromEmail: 'faturamento@twt.com.br' },
     transport: {}
@@ -862,6 +882,9 @@ test('atualização da Central remove primeiro faturas liquidadas, inclusive fal
   assert.equal(result.processed, 2);
   assert.equal(documentLookups, 0);
   assert.equal(result.errors.length, 0);
+  assert.equal(completed.length, 6);
+  assert.equal(completed.includes('overdue:11347'), true);
+  assert.equal(completed.includes('initial:11265'), true);
 });
 
 test('atualização da Central reprocessa uma pendência aberta depois de conferir o status', async () => {
@@ -926,7 +949,7 @@ test('atualização da Central reprocessa uma pendência aberta depois de confer
     },
     transport: {}
   });
-  assert.deepEqual(stages.slice(0, 2), ['status', 'doccob']);
+  assert.deepEqual(stages, ['status', 'status', 'doccob', 'status']);
   assert.equal(result.errors.length, 0);
   assert.equal(result.processed, 1);
   assert.equal(result.sent, 1);
@@ -950,6 +973,15 @@ const processorContext = (overrides = {}) => {
     emailConfig: { fromName: 'TWT', fromEmail: 'faturamento@twt.com.br', alertEmail: 'adriano@twt.com.br' },
     transport: {},
     findDoccobForInvoice: async () => ({}),
+    fetchPendingInvoice: async ({ id }) => ({
+      invoices: [{
+        id: String(id),
+        status: 0,
+        statusLabel: 'Em aberto',
+        balance: 100,
+        clientDocument: '11280282000144'
+      }]
+    }),
     fetchInvoicePdfData: async () => invoiceData({ type: 'ted_doc' }),
     buildInvoicePdf: async () => Buffer.from('fatura'),
     resolveInvoiceCteKeys: async () => ({ cteKeys: [] }),
@@ -970,6 +1002,7 @@ const processorContext = (overrides = {}) => {
     saveDelivery: async () => {},
     saveDeliveryReference: async () => {},
     addLog: async () => {},
+    markBillingEventCompleted: async () => {},
     ...overrides
   };
 };
@@ -1006,6 +1039,123 @@ test('fatura bloqueada não busca DOCCOB nem inicia envio', async () => {
   assert.deepEqual(result, { skipped: 'blocked' });
   assert.deepEqual(calls, []);
   assert.equal(context.summary.blocked, 1);
+});
+
+test('fatura liquidada é barrada dentro do processamento antes de documentos e e-mail', async () => {
+  const calls = [];
+  const removed = [];
+  const completed = [];
+  const context = processorContext({
+    pendingByInvoice: new Map([['11347', { invoiceId: '11347', reason: 'doccob' }]]),
+    fetchPendingInvoice: async () => ({
+      invoices: [{
+        id: '11347',
+        status: '1',
+        statusLabel: 'Liquidada',
+        balance: 0,
+        clientDocument: '35820448009516'
+      }]
+    }),
+    removePending: async (invoiceId) => { removed.push(String(invoiceId)); },
+    markBillingEventCompleted: async (event, invoiceId) => {
+      completed.push(`${event}:${invoiceId}`);
+    },
+    findDoccobForInvoice: async () => { calls.push('doccob'); },
+    fetchInvoicePdfData: async () => { calls.push('fatura'); },
+    generateInvoiceBankSlip: async () => { calls.push('boleto'); },
+    sendBillingEmail: async () => { calls.push('email'); }
+  });
+
+  const result = await processInvoiceEvent({
+    event: EVENT_TYPES.overdue,
+    invoice: {
+      id: '11347',
+      clientDocument: '35820448009516',
+      client: 'BAU WHITE MARTINS',
+      balance: 2135.4,
+      status: 0
+    },
+    context
+  });
+
+  assert.deepEqual(result, { skipped: 'settled' });
+  assert.deepEqual(calls, []);
+  assert.deepEqual(removed, ['11347']);
+  assert.deepEqual(completed.sort(), [
+    'initial:11347',
+    'overdue:11347',
+    'reminder:11347'
+  ]);
+  assert.equal(context.pendingByInvoice.has('11347'), false);
+  assert.equal(context.summary.settledInvoices, 1);
+});
+
+test('mudança para liquidada durante a preparação bloqueia o SMTP', async () => {
+  const calls = [];
+  const removed = [];
+  let financialChecks = 0;
+  const context = processorContext({
+    pendingByInvoice: new Map([['11347', { invoiceId: '11347', reason: 'processing_error' }]]),
+    fetchPendingInvoice: async () => {
+      financialChecks += 1;
+      return {
+        invoices: [{
+          id: '11347',
+          status: financialChecks === 1 ? 0 : 1,
+          statusLabel: financialChecks === 1 ? 'Em aberto' : 'Liquidada',
+          balance: financialChecks === 1 ? 2135.4 : 0,
+          clientDocument: '35820448009516'
+        }]
+      };
+    },
+    removePending: async (invoiceId) => { removed.push(String(invoiceId)); },
+    buildInvoicePdf: async () => { calls.push('pdf'); return Buffer.from('fatura'); },
+    claimDelivery: async () => { calls.push('reserva'); return true; },
+    sendBillingEmail: async () => { calls.push('email'); }
+  });
+
+  const result = await processInvoiceEvent({
+    event: EVENT_TYPES.overdue,
+    invoice: {
+      id: '11347',
+      clientDocument: '35820448009516',
+      client: 'BAU WHITE MARTINS',
+      balance: 2135.4,
+      status: 0
+    },
+    context
+  });
+
+  assert.deepEqual(result, { skipped: 'settled' });
+  assert.equal(financialChecks, 2);
+  assert.deepEqual(calls, ['pdf']);
+  assert.deepEqual(removed, ['11347']);
+  assert.equal(context.summary.sent, 0);
+});
+
+test('falha ao confirmar estado financeiro impede qualquer envio', async () => {
+  const calls = [];
+  const context = processorContext({
+    fetchPendingInvoice: async () => {
+      throw Object.assign(new Error('timeout'), { code: 'ERRO_PERMANENTE' });
+    },
+    findDoccobForInvoice: async () => { calls.push('doccob'); },
+    sendBillingEmail: async () => { calls.push('email'); }
+  });
+
+  await assert.rejects(
+    processInvoiceEvent({
+      event: EVENT_TYPES.initial,
+      invoice: { id: '11347', clientDocument: '35820448009516' },
+      context
+    }),
+    (error) => {
+      assert.equal(error.code, 'BILLING_FINANCIAL_STATUS_UNCONFIRMED');
+      assert.equal(error.statusCode, 503);
+      return true;
+    }
+  );
+  assert.deepEqual(calls, []);
 });
 
 test('fatura anterior ao corte para antes de criar um novo boleto', async () => {
@@ -1779,6 +1929,10 @@ test('reenvio manual ignora a trava do envio anterior e cria referência exclusi
   assert.equal(result.sent, 1);
   assert.equal(sent.length, 1);
   assert.deepEqual(invoiceQueries, [
+    { id: '11756', limit: 100 },
+    { cnpj: '11280282000144', limit: 100 },
+    { id: '11756', limit: 100 },
+    { cnpj: '11280282000144', limit: 100 },
     { id: '11756', limit: 100 },
     { cnpj: '11280282000144', limit: 100 }
   ]);

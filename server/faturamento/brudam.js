@@ -671,9 +671,18 @@ const invoiceMatchesQuery = (invoice, query) => {
 const isPendingInvoice = (invoice) => {
   const balance = Number(invoice?.balance);
   if (!Number.isFinite(balance) || balance <= 0) return false;
-  if (invoice.status === 1 || invoice.status === 2) return false;
+  const status = Number(invoice?.status);
+  if (status === 1 || status === 2) return false;
   const label = normalizedName(invoice.statusLabel);
-  return !['liquid', 'pago', 'quitad', 'cancel'].some((term) => label.includes(term));
+  return ![
+    'liquid',
+    'pago',
+    'pagamento confirmado',
+    'quitad',
+    'baixad',
+    'encerrad',
+    'cancel'
+  ].some((term) => label.includes(term));
 };
 
 const AGING_BUCKETS = [
