@@ -714,6 +714,8 @@ test('resume somente saldos pendentes por empresa', () => {
   ];
   assert.equal(isPendingInvoice(invoices[0]), true);
   assert.equal(isPendingInvoice(invoices[3]), false);
+  assert.equal(isPendingInvoice({ balance: 80, status: '1', statusLabel: 'EM ABERTO' }), false);
+  assert.equal(isPendingInvoice({ balance: 80, status: 0, statusLabel: 'BAIXADA' }), false);
 
   const summary = buildDebtorSummary(invoices);
   assert.equal(summary.totalPending, 200);
