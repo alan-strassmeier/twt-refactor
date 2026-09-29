@@ -62,6 +62,8 @@ const {
   billingEventForInvoice,
   buildBillingQueue,
   rotateBillingQueue,
+  isTransientNetworkError,
+  retryTransientNetworkRequest,
   scanInvoices,
   pendingRecord,
   queuedRecord,
@@ -475,6 +477,29 @@ test('varre páginas e calcula o dia de lembrete sem depender do fuso do servido
   assert.equal(addDays('2026-09-10', 2), '2026-09-12');
 });
 
+test('repete uma consulta quando a conexão externa expira', async () => {
+  const waits = [];
+  let attempts = 0;
+  const result = await retryTransientNetworkRequest(async () => {
+    attempts += 1;
+    if (attempts === 1) {
+      throw new TypeError('fetch failed', {
+        cause: Object.assign(new Error('Connect Timeout Error'), {
+          code: 'UND_ERR_CONNECT_TIMEOUT'
+        })
+      });
+    }
+    return 'ok';
+  }, {
+    attempts: 2,
+    wait: async (milliseconds) => { waits.push(milliseconds); }
+  });
+  assert.equal(result, 'ok');
+  assert.equal(attempts, 2);
+  assert.deepEqual(waits, [200]);
+  assert.equal(isTransientNetworkError(new Error('regra de negócio inválida')), false);
+});
+
 test('classifica pendências pela proximidade do vencimento', () => {
   const today = '2026-09-11';
   assert.equal(
@@ -746,6 +771,85 @@ test('revalida uma pendência solucionável antes da fila técnica acumulada', a
   assert.equal(result.processed, 1);
   assert.equal(result.remaining, 1);
   assert.equal(result.stoppedByLimit, true);
+});
+
+test('revalida pendência mesmo quando as consultas iniciais à Brudam falham', async () => {
+  const now = new Date();
+  const removed = [];
+  const recipients = [];
+  let scanCalls = 0;
+  let scanCursorSaves = 0;
+  const result = await runBillingCollection({
+    source: 'manual',
+    runId: 'revalidacao-com-timeout',
+    currentTime: now,
+    now: () => now,
+    config: { maxInvoices: 5, maxPages: 1, deadlineMs: 55000 },
+    listPending: async () => [{
+      invoiceId: '11578',
+      reason: 'contacts',
+      clientCnpj: '30455661001900',
+      clientName: 'ELECNOR DO BRASIL LTDA',
+      issuedAt: '2026-09-28',
+      dueAt: '2099-10-30'
+    }],
+    getBillingQueueCursor: async () => 0,
+    getOverdueCursor: async () => 200,
+    getReconciliationCursor: async () => 300,
+    saveOverdueCursor: async () => { scanCursorSaves += 1; },
+    saveReconciliationCursor: async () => { scanCursorSaves += 1; },
+    saveBillingQueueCursor: async () => {},
+    fetchInvoices: async () => {
+      scanCalls += 1;
+      throw new TypeError('fetch failed', {
+        cause: Object.assign(new Error('Connect Timeout Error'), {
+          code: 'UND_ERR_CONNECT_TIMEOUT'
+        })
+      });
+    },
+    listBlockedInvoiceIds: async () => [],
+    getCompletedBillingEvents: async () => new Set(),
+    getInvoiceBlock: async () => null,
+    savePendingBatch: async () => {},
+    savePending: async () => {},
+    removePending: async (invoiceId) => { removed.push(String(invoiceId)); },
+    addLog: async () => {},
+    markBillingEventCompleted: async () => {},
+    findDoccobForInvoice: async () => ({}),
+    getCategory: async () => ({
+      contacts: [{
+        id: 'contato-elecnor',
+        firstName: 'Isadora',
+        lastName: 'Souza',
+        email: 'isadora.souza@elecnor.com',
+        enabled: true
+      }]
+    }),
+    getDelivery: async () => null,
+    claimDelivery: async () => true,
+    saveDelivery: async () => {},
+    saveDeliveryReference: async () => {},
+    fetchInvoicePdfData: async () => invoiceData({ type: 'ted_doc' }),
+    buildInvoicePdf: async () => Buffer.from('fatura'),
+    sendBillingEmail: async ({ contact }) => {
+      recipients.push(contact.email);
+      return { messageId: 'timeout-recuperado', accepted: [contact.email], rejected: [] };
+    },
+    emailConfig: {
+      fromName: 'TWT',
+      fromEmail: 'faturamento@twt.com.br',
+      alertEmail: ''
+    },
+    transport: {}
+  });
+  assert.equal(scanCalls, 4);
+  assert.equal(scanCursorSaves, 0);
+  assert.equal(result.scanFailures, 4);
+  assert.equal(result.errors.length, 4);
+  assert.equal(result.processed, 1);
+  assert.equal(result.sent, 1);
+  assert.deepEqual(recipients, ['isadora.souza@elecnor.com']);
+  assert.deepEqual(removed, ['11578']);
 });
 
 const processorContext = (overrides = {}) => {
