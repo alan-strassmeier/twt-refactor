@@ -676,32 +676,8 @@
           setLoading(false);
         }
       });
-      const deleteButton = document.createElement('button');
-      deleteButton.type = 'button';
-      deleteButton.className = 'button danger-button log-delete-button';
-      deleteButton.textContent = 'Excluir';
-      deleteButton.disabled = !record.id;
-      deleteButton.addEventListener('click', async () => {
-        if (!record.id || !window.confirm('Excluir somente este registro do log?')) return;
-        deleteButton.disabled = true;
-        setLoading(true);
-        try {
-          const result = await requestJson(endpoint('logs'), {
-            method: 'DELETE',
-            body: JSON.stringify({ id: record.id })
-          });
-          await loadLogs({ page: state.logPage });
-          setMessage(result.message || 'Registro de log excluído.', 'success');
-        } catch (error) {
-          setMessage(error.message, 'error');
-          deleteButton.disabled = false;
-        } finally {
-          setLoading(false);
-        }
-      });
       actionButtons.append(previewButton);
       if (RESOLVABLE_LOG_STATUSES.has(record.status)) actionButtons.append(resolveButton);
-      actionButtons.append(deleteButton);
       action.appendChild(actionButtons);
       row.appendChild(action);
       return row;

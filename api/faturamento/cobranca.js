@@ -388,16 +388,6 @@ const handleLogs = async (req, res, query) => {
     sendJson(res, 200, result);
     return;
   }
-  if (req.method === 'DELETE') {
-    if (!requireSameOrigin(req, res)) return;
-    const body = await parseJsonBody(req, 4096);
-    const result = await store.deleteLog(body.id);
-    sendJson(res, result.deleted ? 200 : 404, {
-      ...result,
-      message: result.deleted ? 'Registro de log excluído.' : 'Registro de log não encontrado.'
-    });
-    return;
-  }
   if (req.method === 'PATCH') {
     if (!requireSameOrigin(req, res)) return;
     const body = await parseJsonBody(req, 4096);
@@ -410,7 +400,7 @@ const handleLogs = async (req, res, query) => {
     });
     return;
   }
-  res.setHeader('Allow', 'GET, PATCH, DELETE');
+  res.setHeader('Allow', 'GET, PATCH');
   sendJson(res, 405, { message: 'Método não permitido.' });
 };
 

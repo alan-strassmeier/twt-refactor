@@ -341,20 +341,6 @@ const addLog = async (record, command = redisCommand) => {
   return log;
 };
 
-const deleteLog = async (id, command = redisCommand) => {
-  const logId = requiredText(id, 'Log', 128);
-  const values = await command('ZREVRANGE', KEYS.logs, '0', '999') || [];
-  const selected = values.find((value) => parseRecord(value)?.id === logId);
-  if (!selected) return { deleted: 0, id: logId };
-
-  const reference = String(parseRecord(selected)?.clientReference || '');
-  const members = reference
-    ? values.filter((value) => String(parseRecord(value)?.clientReference || '') === reference)
-    : [selected];
-  const deleted = Number(await command('ZREM', KEYS.logs, ...members)) || 0;
-  return { deleted, id: logId };
-};
-
 const resolveLog = async (id, note = '', command = redisCommand) => {
   const logId = requiredText(id, 'Log', 128);
   const values = await command('ZREVRANGE', KEYS.logs, '0', '999') || [];
@@ -538,7 +524,6 @@ module.exports = {
   claimWebhookEvent,
   releaseWebhookEvent,
   addLog,
-  deleteLog,
   resolveLog,
   getInvoiceBlock,
   setInvoiceBlocked,
