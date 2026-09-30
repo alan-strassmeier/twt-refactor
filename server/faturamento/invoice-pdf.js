@@ -12,7 +12,7 @@ const {
   BILLING_METHODS,
   DSL_TED_DOC_ACCOUNT,
   isDslIssuer,
-  requiresTedDocPayment
+  isTedDocPaymentMethod
 } = require('./billing-rules');
 
 const COMPANY = {
@@ -159,11 +159,7 @@ const invoicePaymentMethod = (invoice) => firstValue(invoice, [
 
 const invoiceTedDocPayment = ({ invoice, normalizedInvoice, client, issuerDocument }) => {
   const paymentMethod = invoicePaymentMethod(invoice);
-  const tedDoc = requiresTedDocPayment({
-    clientNames: [normalizedInvoice?.client, client?.name, client?.tradeName],
-    clientDocument: client?.document || normalizedInvoice?.clientDocument,
-    paymentMethod
-  });
+  const tedDoc = isTedDocPaymentMethod(paymentMethod);
   if (!tedDoc || !isDslIssuer(issuerDocument)) return null;
 
   const installment = firstValue(invoice, ['parcela', 'numero_parcela']) || 1;

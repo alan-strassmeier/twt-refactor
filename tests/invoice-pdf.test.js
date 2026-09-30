@@ -118,7 +118,12 @@ test('seleciona e normaliza o cadastro exato do cliente para o PDF', () => {
 
 test('monta o quadro TED/DOC com o lançamento e a parcela da Brudam', () => {
   const payment = invoiceTedDocPayment({
-    invoice: { id: 21283, parcela: 1, nparcela: 1 },
+    invoice: {
+      id: 21283,
+      parcela: 1,
+      nparcela: 1,
+      forma_pagamento: 'Transferência TED/DOC'
+    },
     normalizedInvoice: {
       internalId: 21283,
       client: 'BL INDUSTRIA OTICA LTDA',

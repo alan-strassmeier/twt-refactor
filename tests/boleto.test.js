@@ -18,11 +18,9 @@ const {
   BANK_SLIP_CREATION_START_DATE,
   BANK_SLIP_CREATION_BLOCKED_CODE,
   BILLING_BANKS,
-  WHITE_MARTINS_TED_DOC_CNPJS,
-  ELECNOR_TED_DOC_CNPJS,
   bankSlipBankForIssuer,
   isBankSlipCreationEligible,
-  requiresTedDocPayment
+  requiresTedDocForCategory
 } = require('../server/faturamento/billing-rules');
 const { getBankSlipRecords } = require('../server/faturamento/boleto-store');
 
@@ -114,26 +112,14 @@ test('roteia TWT para Bradesco e DSL para Itaú usando o emitente confirmado no 
   );
 });
 
-test('identifica clientes e forma de pagamento exclusivos de TED/DOC', () => {
-  assert.equal(requiresTedDocPayment({
-    clientNames: ['THE WHITE MARTINS GASES INDUSTRIAIS DO NORDESTE LTDA.']
-  }), true);
-  assert.equal(requiresTedDocPayment({
-    clientNames: ['RS WHITE MARTINS GASES INDUSTRIAIS LTDA 0063']
-  }), true);
-  assert.equal(requiresTedDocPayment({ clientNames: ['ELECNOR DO BRASIL LTDA'] }), true);
-  assert.equal(requiresTedDocPayment({ clientNames: ['BL INDUSTRIA OTICA LTDA POA'] }), true);
-  assert.equal(requiresTedDocPayment({ clientDocument: '27.011.022/0001-03' }), true);
-  for (const cnpj of [
-    ...WHITE_MARTINS_TED_DOC_CNPJS,
-    ...ELECNOR_TED_DOC_CNPJS
-  ]) {
-    assert.equal(requiresTedDocPayment({ clientDocument: cnpj }), true, cnpj);
-  }
-  assert.equal(requiresTedDocPayment({ clientDocument: '309286' }), false);
-  assert.equal(requiresTedDocPayment({ clientDocument: '309311' }), false);
-  assert.equal(requiresTedDocPayment({ paymentMethod: 'Transferência TED/DOC' }), true);
-  assert.equal(requiresTedDocPayment({ clientNames: ['OUTRO CLIENTE LTDA'] }), false);
+test('identifica TED/DOC somente pela marcação salva na empresa', () => {
+  assert.equal(requiresTedDocForCategory({ billingMethod: 'ted_doc' }), true);
+  assert.equal(requiresTedDocForCategory({ billingMethod: 'bank_slip' }), false);
+  assert.equal(requiresTedDocForCategory(null), false);
+  assert.equal(requiresTedDocForCategory({
+    name: 'WHITE MARTINS',
+    cnpj: '27011022000103'
+  }), false);
 });
 
 test('bloqueia geração de boleto para cliente com pagamento por TED/DOC', async () => {
@@ -143,7 +129,8 @@ test('bloqueia geração de boleto para cliente com pagamento por TED/DOC', asyn
       fetchCompany: async () => ({
         ...payerCompany,
         fantasia: 'THE WHITE MARTINS GASES INDUSTRIAIS DO NORDESTE LTDA.'
-      })
+      }),
+      getBillingCategory: async () => ({ billingMethod: 'ted_doc' })
     }),
     (error) => error.statusCode === 422 && /TED\/DOC/.test(error.message)
   );

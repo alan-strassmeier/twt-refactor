@@ -178,19 +178,7 @@ const resolveInvoiceBillingData = async (invoiceId, dependencies = {}, options =
       cause
     });
   }
-  const paymentMethod = firstValue(invoice, [
-    'forma_pagamento', 'forma_pgto', 'forma_pagto', 'meio_pagamento',
-    'descricao_forma_pagamento', 'tipo_pagamento'
-  ]);
-  if (requiresTedDocForCategory(billingCategory, {
-    clientNames: [
-      normalized.client,
-      firstValue(company, ['fantasia', 'xFant']),
-      firstValue(company, ['razao', 'razao_social', 'nome', 'xNome'])
-    ],
-    clientDocument: clientCnpj,
-    paymentMethod
-  })) {
+  if (requiresTedDocForCategory(billingCategory)) {
     throw validationError(
       'Esta fatura utiliza transferência TED/DOC e não deve gerar boleto.'
     );

@@ -8,13 +8,22 @@ const {
 } = require('./cobranca-contact-import');
 const {
   BILLING_METHODS,
-  isWhiteMartinsClient,
-  requiresTedDocPayment
+  normalizedRuleText
 } = require('./billing-rules');
+
+const CATEGORY_SCHEMA_VERSION = '2';
+const seedCategorySettings = new Map(seedCategories.map((category) => [
+  digits(category.cnpj),
+  {
+    billingMethod: category.billingMethod,
+    whiteMartins: category.whiteMartins === true
+  }
+]));
 
 const KEYS = Object.freeze({
   categories: 'faturamento:cobranca:categorias:v1',
   seed: 'faturamento:cobranca:categorias-seed:v1',
+  categorySchema: 'faturamento:cobranca:categorias-schema:v1',
   pending: 'faturamento:cobranca:doccob-pendente:v1',
   completedEvents: 'faturamento:cobranca:eventos-concluidos:v1',
   dismissedIssues: 'faturamento:cobranca:pendencias-ocultas:v1',
@@ -78,13 +87,8 @@ const normalizedCategory = (value) => {
   if (suppliedBillingMethod && !Object.values(BILLING_METHODS).includes(suppliedBillingMethod)) {
     throw Object.assign(new Error('Selecione uma forma de cobrança válida.'), { statusCode: 422 });
   }
-  const billingMethod = suppliedBillingMethod || (requiresTedDocPayment({
-    clientNames: [name],
-    clientDocument: cnpj
-  }) ? BILLING_METHODS.tedDoc : BILLING_METHODS.bankSlip);
-  const whiteMartins = typeof value?.whiteMartins === 'boolean'
-    ? value.whiteMartins
-    : isWhiteMartinsClient({ names: [name], document: cnpj });
+  const billingMethod = suppliedBillingMethod || BILLING_METHODS.bankSlip;
+  const whiteMartins = value?.whiteMartins === true;
   return {
     cnpj,
     name,
@@ -129,8 +133,66 @@ const ensureContactSeed = async (command = redisCommand) => {
   return command('EVAL', script, '2', KEYS.categories, KEYS.seed, ...argumentsList);
 };
 
-const listCategories = async (command = redisCommand) => {
+const historicalCategorySettings = (category) => {
+  const seeded = seedCategorySettings.get(digits(category?.cnpj));
+  if (seeded) return seeded;
+  const name = normalizedRuleText(category?.name);
+  const whiteMartins = name.includes('WHITE');
+  const tedDoc = whiteMartins || name.includes('ELECNOR') || (
+    /(?:^| )BL(?: |$)/.test(name) && name.includes('OTICA')
+  );
+  return {
+    billingMethod: tedDoc ? BILLING_METHODS.tedDoc : BILLING_METHODS.bankSlip,
+    whiteMartins
+  };
+};
+
+const ensureCategorySchema = async (command = redisCommand) => {
   await ensureContactSeed(command);
+  if (String(await command('GET', KEYS.categorySchema) || '') === CATEGORY_SCHEMA_VERSION) return 0;
+  const flat = await command('HGETALL', KEYS.categories) || [];
+  const migrations = [];
+  for (let index = 0; index < flat.length; index += 2) {
+    const cnpj = flat[index];
+    const raw = flat[index + 1];
+    const category = parseRecord(raw);
+    if (!category) continue;
+    const missingBillingMethod = !Object.values(BILLING_METHODS).includes(category.billingMethod);
+    const missingWhiteMartins = typeof category.whiteMartins !== 'boolean';
+    if (!missingBillingMethod && !missingWhiteMartins) continue;
+    const historical = historicalCategorySettings(category);
+    const migrated = {
+      ...category,
+      billingMethod: missingBillingMethod ? historical.billingMethod : category.billingMethod,
+      whiteMartins: missingWhiteMartins ? historical.whiteMartins : category.whiteMartins
+    };
+    migrations.push(cnpj, raw, JSON.stringify(migrated));
+  }
+  const script = [
+    "if redis.call('GET', KEYS[2]) == ARGV[1] then return 0 end",
+    'local updated = 0',
+    'for i = 2, #ARGV, 3 do',
+    "  if redis.call('HGET', KEYS[1], ARGV[i]) == ARGV[i + 1] then",
+    "    redis.call('HSET', KEYS[1], ARGV[i], ARGV[i + 2])",
+    '    updated = updated + 1',
+    '  end',
+    'end',
+    "redis.call('SET', KEYS[2], ARGV[1])",
+    'return updated'
+  ].join('\n');
+  return command(
+    'EVAL',
+    script,
+    '2',
+    KEYS.categories,
+    KEYS.categorySchema,
+    CATEGORY_SCHEMA_VERSION,
+    ...migrations
+  );
+};
+
+const listCategories = async (command = redisCommand) => {
+  await ensureCategorySchema(command);
   const flat = await command('HGETALL', KEYS.categories) || [];
   const categories = [];
   for (let index = 0; index < flat.length; index += 2) {
@@ -141,7 +203,7 @@ const listCategories = async (command = redisCommand) => {
 };
 
 const getCategory = async (cnpj, command = redisCommand) => {
-  await ensureContactSeed(command);
+  await ensureCategorySchema(command);
   const normalizedCnpj = requiredCnpj(cnpj);
   const category = parseRecord(await command('HGET', KEYS.categories, normalizedCnpj));
   return category ? normalizedCategory(category) : null;
@@ -547,6 +609,8 @@ module.exports = {
   normalizedCategory,
   normalizedContact,
   ensureContactSeed,
+  historicalCategorySettings,
+  ensureCategorySchema,
   listCategories,
   getCategory,
   saveCategory,

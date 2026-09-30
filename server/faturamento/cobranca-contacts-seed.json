@@ -2,6 +2,8 @@
   {
     "cnpj": "02663553000150",
     "name": "Akroz",
+    "billingMethod": "bank_slip",
+    "whiteMartins": false,
     "contacts": [
       {
         "id": "bce8705bdb880a67e0f2",
@@ -26,6 +28,8 @@
   {
     "cnpj": "35820448009516",
     "name": "Bau White Martins",
+    "billingMethod": "ted_doc",
+    "whiteMartins": true,
     "contacts": [
       {
         "id": "8d37275fdfb7bcd0a49e",
@@ -62,6 +66,8 @@
   {
     "cnpj": "11280282000144",
     "name": "BHZ Target",
+    "billingMethod": "bank_slip",
+    "whiteMartins": false,
     "contacts": [
       {
         "id": "bc209c6a4d2cea87e5a9",
@@ -80,6 +86,8 @@
   {
     "cnpj": "27011022000103",
     "name": "BL Ind Otica Ltda",
+    "billingMethod": "ted_doc",
+    "whiteMartins": false,
     "contacts": [
       {
         "id": "7274818d1579528dd1e6",
@@ -98,6 +106,8 @@
   {
     "cnpj": "35820448001884",
     "name": "BSB - WHITE MARTINS",
+    "billingMethod": "ted_doc",
+    "whiteMartins": true,
     "contacts": [
       {
         "id": "717a556a32b1b264eb3d",
@@ -122,6 +132,8 @@
   {
     "cnpj": "24380578006896",
     "name": "CE White Martins",
+    "billingMethod": "ted_doc",
+    "whiteMartins": true,
     "contacts": [
       {
         "id": "1885eaab18f774dea4a1",
@@ -140,6 +152,8 @@
   {
     "cnpj": "35820448008110",
     "name": "Diadema White Martins",
+    "billingMethod": "ted_doc",
+    "whiteMartins": true,
     "contacts": [
       {
         "id": "75da68c35db44cbb8335",
@@ -158,6 +172,8 @@
   {
     "cnpj": "62327878000193",
     "name": "DNA",
+    "billingMethod": "bank_slip",
+    "whiteMartins": false,
     "contacts": [
       {
         "id": "4b24ef7a6551ce8bc750",
@@ -176,6 +192,8 @@
   {
     "cnpj": "35820448000721",
     "name": "DUC - White Martins Duque de Caxias RJ",
+    "billingMethod": "ted_doc",
+    "whiteMartins": true,
     "contacts": [
       {
         "id": "6e81aca68bfc8526681d",
@@ -188,6 +206,8 @@
   {
     "cnpj": "30455661000920",
     "name": "Elecnor  Rio de Janeiro",
+    "billingMethod": "ted_doc",
+    "whiteMartins": false,
     "contacts": [
       {
         "id": "5863ed7aa5260080e9ee",
@@ -212,6 +232,8 @@
   {
     "cnpj": "30455661000172",
     "name": "Elecnor RJ - Rua do Passeio",
+    "billingMethod": "ted_doc",
+    "whiteMartins": false,
     "contacts": [
       {
         "id": "ac2af2e5cf6e6cfc4ef6",
@@ -236,6 +258,8 @@
   {
     "cnpj": "35640442000187",
     "name": "Figwal",
+    "billingMethod": "bank_slip",
+    "whiteMartins": false,
     "contacts": [
       {
         "id": "be373a8defa2a148ef1d",
@@ -260,6 +284,8 @@
   {
     "cnpj": "35820448002341",
     "name": "GO White Martins",
+    "billingMethod": "ted_doc",
+    "whiteMartins": true,
     "contacts": [
       {
         "id": "fca3cc0a457f8b3ed2fc",
@@ -284,6 +310,8 @@
   {
     "cnpj": "01464550000124",
     "name": "Gross Cargo",
+    "billingMethod": "bank_slip",
+    "whiteMartins": false,
     "contacts": [
       {
         "id": "2c4217563325f047a50a",
@@ -308,6 +336,8 @@
   {
     "cnpj": "41870054000195",
     "name": "Jimi Iot SP",
+    "billingMethod": "bank_slip",
+    "whiteMartins": false,
     "contacts": [
       {
         "id": "90ee4db210040de8d548",
@@ -332,6 +362,8 @@
   {
     "cnpj": "41870054000276",
     "name": "Jimi Itajai",
+    "billingMethod": "bank_slip",
+    "whiteMartins": false,
     "contacts": [
       {
         "id": "442d84b274839df70eab",
@@ -362,6 +394,8 @@
   {
     "cnpj": "35820448010794",
     "name": "JOI White Martins",
+    "billingMethod": "ted_doc",
+    "whiteMartins": true,
     "contacts": [
       {
         "id": "c920b68b7907a5655467",
@@ -386,6 +420,8 @@
   {
     "cnpj": "10629265000107",
     "name": "JTT Log",
+    "billingMethod": "bank_slip",
+    "whiteMartins": false,
     "contacts": [
       {
         "id": "8c7a3adf1daf8472fb28",
@@ -422,6 +458,8 @@
   {
     "cnpj": "04004335000139",
     "name": "Kralik",
+    "billingMethod": "bank_slip",
+    "whiteMartins": false,
     "contacts": [
       {
         "id": "f95c957c10032da6699a",
@@ -440,6 +478,8 @@
   {
     "cnpj": "35820448005448",
     "name": "LDB White Martins",
+    "billingMethod": "ted_doc",
+    "whiteMartins": true,
     "contacts": [
       {
         "id": "06a76881b5df13839018",
@@ -464,6 +504,8 @@
   {
     "cnpj": "35820448003070",
     "name": "MG White Contagem",
+    "billingMethod": "ted_doc",
+    "whiteMartins": true,
     "contacts": [
       {
         "id": "35bb216247f86447f3c0",
@@ -494,6 +536,8 @@
   {
     "cnpj": "07843144000159",
     "name": "MGF Inga",
+    "billingMethod": "bank_slip",
+    "whiteMartins": false,
     "contacts": [
       {
         "id": "4a9360604a1f00b15581",
@@ -512,6 +556,8 @@
   {
     "cnpj": "34597955000785",
     "name": "MT White Martins",
+    "billingMethod": "ted_doc",
+    "whiteMartins": true,
     "contacts": [
       {
         "id": "c6a7731e15d3989d6b34",
@@ -560,6 +606,8 @@
   {
     "cnpj": "33011601000159",
     "name": "Navegam Mao",
+    "billingMethod": "bank_slip",
+    "whiteMartins": false,
     "contacts": [
       {
         "id": "2303c1dfc764a3e46aec",
@@ -614,6 +662,8 @@
   {
     "cnpj": "35820448016482",
     "name": "PR White Martins",
+    "billingMethod": "ted_doc",
+    "whiteMartins": true,
     "contacts": [
       {
         "id": "75c94440a8229948b873",
@@ -626,6 +676,8 @@
   {
     "cnpj": "03532163000294",
     "name": "PROMOTEXTIL COMERCIO ATACADISTA LTDA",
+    "billingMethod": "bank_slip",
+    "whiteMartins": false,
     "contacts": [
       {
         "id": "34de13a816c373a99c1b",
@@ -638,6 +690,8 @@
   {
     "cnpj": "06040676000195",
     "name": "Prosperity",
+    "billingMethod": "bank_slip",
+    "whiteMartins": false,
     "contacts": [
       {
         "id": "de045e791500c25a073e",
@@ -668,6 +722,8 @@
   {
     "cnpj": "06908675000110",
     "name": "RIO LC Express",
+    "billingMethod": "bank_slip",
+    "whiteMartins": false,
     "contacts": [
       {
         "id": "5db6a1bf4f6302e4f905",
@@ -686,6 +742,8 @@
   {
     "cnpj": "28759933000186",
     "name": "Sensitive",
+    "billingMethod": "bank_slip",
+    "whiteMartins": false,
     "contacts": [
       {
         "id": "f5d69dc42f649b777bc6",
@@ -722,6 +780,8 @@
   {
     "cnpj": "35820448006339",
     "name": "SPS White Martins",
+    "billingMethod": "ted_doc",
+    "whiteMartins": true,
     "contacts": [
       {
         "id": "2984422668e1b057d712",
@@ -758,6 +818,8 @@
   {
     "cnpj": "35820448009435",
     "name": "STZ - White Martins - Sertãozinho",
+    "billingMethod": "ted_doc",
+    "whiteMartins": true,
     "contacts": [
       {
         "id": "60eb2a688933cdde899d",
@@ -782,6 +844,8 @@
   {
     "cnpj": "41870054000666",
     "name": "Teste",
+    "billingMethod": "bank_slip",
+    "whiteMartins": false,
     "contacts": [
       {
         "id": "9cabf5ddfb8175a790c8",
@@ -794,6 +858,8 @@
   {
     "cnpj": "24380578002475",
     "name": "THE White Martins",
+    "billingMethod": "ted_doc",
+    "whiteMartins": true,
     "contacts": [
       {
         "id": "157fc02271ce798cfc03",
@@ -806,6 +872,8 @@
   {
     "cnpj": "21458144000166",
     "name": "Transflecha Rio",
+    "billingMethod": "bank_slip",
+    "whiteMartins": false,
     "contacts": [
       {
         "id": "70a221d57ee5dcd17bfe",
@@ -818,6 +886,8 @@
   {
     "cnpj": "63598129000163",
     "name": "TRAXOR TECNOLOG",
+    "billingMethod": "bank_slip",
+    "whiteMartins": false,
     "contacts": [
       {
         "id": "379f2902ccaa7fe77488",
@@ -836,6 +906,8 @@
   {
     "cnpj": "35820448003909",
     "name": "UDI White Martins",
+    "billingMethod": "ted_doc",
+    "whiteMartins": true,
     "contacts": [
       {
         "id": "0dab4e6a8ab2b3987bab",
@@ -854,6 +926,8 @@
   {
     "cnpj": "35820448021303",
     "name": "Vinhedo White",
+    "billingMethod": "ted_doc",
+    "whiteMartins": true,
     "contacts": [
       {
         "id": "cac66380ef2de15845ec",
@@ -896,6 +970,8 @@
   {
     "cnpj": "35820448001965",
     "name": "VIX - White Martins - Cariacica",
+    "billingMethod": "ted_doc",
+    "whiteMartins": true,
     "contacts": [
       {
         "id": "b88cfaff270de0a5da36",
@@ -914,6 +990,8 @@
   {
     "cnpj": "24380578002556",
     "name": "White Martins Parnamirim RN",
+    "billingMethod": "ted_doc",
+    "whiteMartins": true,
     "contacts": [
       {
         "id": "5e448ceabd14ce03bdb7",

@@ -4,9 +4,9 @@ const { resolveInvoiceCteKeys } = require('../../server/faturamento/cte-document
 const {
   bankSlipBankForIssuer,
   isTwtIssuer,
-  requiresTedDocPayment
+  requiresTedDocForCategory
 } = require('../../server/faturamento/billing-rules');
-const { fetchCompany } = require('../../server/faturamento/invoice-pdf');
+const billingStore = require('../../server/faturamento/cobranca-store');
 const { getNfseRecord } = require('../../server/faturamento/nfse-store');
 const { nfseConfig } = require('../../server/faturamento/nfse-config');
 
@@ -41,31 +41,10 @@ module.exports = async (req, res) => {
       return;
     }
     const bank = bankSlipBankForIssuer(documents.issuerCnpj);
-    let company = null;
-    if (bank && documents.clientCnpj) {
-      try {
-        company = await fetchCompany(documents.clientCnpj);
-      } catch (error) {
-        console.warn('[faturamento:documentos-cliente]', {
-          invoiceId: documents.invoiceId,
-          clientCnpj: documents.clientCnpj,
-          error: error.message
-        });
-      }
-    }
-    const tedDocPayment = requiresTedDocPayment({
-      clientNames: [
-        documents.clientName,
-        company?.fantasia,
-        company?.xFant,
-        company?.razao,
-        company?.razao_social,
-        company?.nome,
-        company?.xNome
-      ],
-      clientDocument: documents.clientCnpj,
-      paymentMethod: documents.paymentMethod
-    });
+    const category = documents.clientCnpj
+      ? await billingStore.getCategory(documents.clientCnpj)
+      : null;
+    const tedDocPayment = requiresTedDocForCategory(category);
     const nfseEligible = isTwtIssuer(documents.issuerCnpj);
     let nfseRecord = null;
     let nfseCertificateMode = '';

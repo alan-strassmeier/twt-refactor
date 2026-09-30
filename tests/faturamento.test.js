@@ -213,7 +213,7 @@ test('coluna Visualizar oferece Fatura, DACTE, boleto e NFS-e conforme o emitent
   const faturaPdfApi = readFileSync(require.resolve('../api/faturamento/fatura-pdf.js'), 'utf8');
   assert.match(boletoApi, /hasSameOrigin\(req\)/);
   assert.match(boletoApi, /sessionFromRequest\(req\)/);
-  assert.match(documentosApi, /requiresTedDocPayment/);
+  assert.match(documentosApi, /requiresTedDocForCategory/);
   assert.match(documentosApi, /bankSlipEligible: Boolean\(bank\) && !tedDocPayment/);
   assert.match(documentosApi, /doccobFound: false/);
   assert.match(faturaPdfApi, /requireDoccob: true/);

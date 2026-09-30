@@ -115,10 +115,7 @@ const collectionState = (logs = []) => {
 };
 
 const paymentState = (invoice, bankRecord, category) => {
-  if (requiresTedDocForCategory(category, {
-    clientNames: [invoice?.client],
-    clientDocument: invoice?.clientDocument
-  })) {
+  if (requiresTedDocForCategory(category)) {
     return controlState('ted_doc', 'TED/DOC', 'info');
   }
   if (bankRecord?.state === 'ready' && bankRecord.bankSlipId) {

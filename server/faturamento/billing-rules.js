@@ -4,38 +4,6 @@ const BANK_SLIP_CREATION_START_DATE = '2026-09-16';
 const TWT_BILLING_START_DATE = BANK_SLIP_CREATION_START_DATE;
 const AUTOMATIC_BILLING_START_DATE = TWT_BILLING_START_DATE;
 const BANK_SLIP_CREATION_BLOCKED_CODE = 'BANK_SLIP_CREATION_BEFORE_CUTOFF';
-const BL_POA_CNPJ = '27011022000103';
-const WHITE_MARTINS_TED_DOC_CNPJS = Object.freeze([
-  '24380578002556',
-  '24380578004176',
-  '24380578000260',
-  '34597955001242',
-  '35820448015320',
-  '35820448000136',
-  '35820448013467',
-  '35820448006410'
-]);
-const ELECNOR_TED_DOC_CNPJS = Object.freeze([
-  '30455661000920',
-  '30455661002469',
-  '30455661002116',
-  '30455661002892',
-  '30455661001730',
-  '30455661001659',
-  '30455661001900',
-  '30455661001810',
-  '30455661003007',
-  '30455661002973',
-  '30455661002701',
-  '30455661003198',
-  '30455661002620',
-  '30455661000172'
-]);
-const TED_DOC_CLIENT_CNPJS = new Set([
-  BL_POA_CNPJ,
-  ...WHITE_MARTINS_TED_DOC_CNPJS,
-  ...ELECNOR_TED_DOC_CNPJS
-]);
 
 const BILLING_BANKS = Object.freeze({
   bradesco: Object.freeze({ id: 'bradesco', label: 'Bradesco', issuerCnpj: TWT_ISSUER_CNPJ }),
@@ -62,32 +30,8 @@ const isTedDocPaymentMethod = (value) => {
   return normalized.includes('TRANSFERENCIA') || /(?:^| )(?:TED|DOC)(?: |$)/.test(normalized);
 };
 
-const isWhiteMartinsClient = ({ names = [], document = '' } = {}) => {
-  if (WHITE_MARTINS_TED_DOC_CNPJS.includes(digits(document))) return true;
-  const values = (Array.isArray(names) ? names : [names]).map(normalizedRuleText);
-  return values.some((name) => name.includes('WHITE MARTINS'));
-};
-
-const isTedDocClient = ({ names = [], document = '' } = {}) => {
-  if (TED_DOC_CLIENT_CNPJS.has(digits(document))) return true;
-  const values = (Array.isArray(names) ? names : [names]).map(normalizedRuleText);
-  return values.some((name) => (
-    name.includes('WHITE MARTINS') ||
-    name.includes('ELECNOR') ||
-    name === 'BL INDUSTRIA OTICA LTDA POA'
-  ));
-};
-
-const requiresTedDocPayment = ({ clientNames = [], clientDocument = '', paymentMethod = '' } = {}) => (
-  isTedDocPaymentMethod(paymentMethod) ||
-  isTedDocClient({ names: clientNames, document: clientDocument })
-);
-
-const requiresTedDocForCategory = (category, fallback = {}) => {
-  if (category?.billingMethod === BILLING_METHODS.tedDoc) return true;
-  if (category?.billingMethod === BILLING_METHODS.bankSlip) return false;
-  return requiresTedDocPayment(fallback);
-};
+const requiresTedDocForCategory = (category) =>
+  category?.billingMethod === BILLING_METHODS.tedDoc;
 
 const DSL_TED_DOC_ACCOUNT = Object.freeze({
   method: 'TRANSFERENCIA TED/DOC',
@@ -133,9 +77,6 @@ module.exports = {
   BANK_SLIP_CREATION_BLOCKED_CODE,
   TWT_BILLING_START_DATE,
   AUTOMATIC_BILLING_START_DATE,
-  BL_POA_CNPJ,
-  WHITE_MARTINS_TED_DOC_CNPJS,
-  ELECNOR_TED_DOC_CNPJS,
   BILLING_BANKS,
   BILLING_METHODS,
   DSL_TED_DOC_ACCOUNT,
@@ -148,8 +89,5 @@ module.exports = {
   bankSlipBankForIssuer,
   normalizedRuleText,
   isTedDocPaymentMethod,
-  isWhiteMartinsClient,
-  isTedDocClient,
-  requiresTedDocPayment,
   requiresTedDocForCategory
 };

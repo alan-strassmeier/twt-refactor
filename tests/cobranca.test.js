@@ -10,8 +10,11 @@ const {
 } = require('../server/faturamento/cobranca-contact-import');
 const seed = require('../server/faturamento/cobranca-contacts-seed.json');
 const {
+  KEYS,
   normalizedContact,
   normalizedCategory,
+  historicalCategorySettings,
+  ensureCategorySchema,
   mergeContacts,
   setContactEnabled,
   deliveryField,
@@ -149,24 +152,61 @@ test('interpreta os contatos de xGrupo retornados pela Brudam', () => {
   }]);
 });
 
-test('normaliza forma de cobrança e marca White Martins preservando cadastros antigos', () => {
-  const legacy = normalizedCategory({
+test('normaliza somente a forma de cobrança e a marca explicitamente salvas', () => {
+  const unmarked = normalizedCategory({
     cnpj: '35.820.448/0095-16',
     name: 'BAU WHITE MARTINS GASES',
     contacts: []
   });
-  assert.equal(legacy.billingMethod, 'ted_doc');
-  assert.equal(legacy.whiteMartins, true);
+  assert.equal(unmarked.billingMethod, 'bank_slip');
+  assert.equal(unmarked.whiteMartins, false);
 
   const edited = normalizedCategory({
-    ...legacy,
+    ...unmarked,
     name: 'BAU EDITADA',
-    billingMethod: 'bank_slip',
-    whiteMartins: false
+    billingMethod: 'ted_doc',
+    whiteMartins: true
   });
   assert.equal(edited.name, 'BAU EDITADA');
-  assert.equal(edited.billingMethod, 'bank_slip');
-  assert.equal(edited.whiteMartins, false);
+  assert.equal(edited.billingMethod, 'ted_doc');
+  assert.equal(edited.whiteMartins, true);
+});
+
+test('migração histórica grava as marcações antigas uma única vez no Redis', async () => {
+  const categories = new Map([
+    ['35820448009516', JSON.stringify({
+      cnpj: '35820448009516', name: 'Bau White Martins', contacts: []
+    })],
+    ['41870054000276', JSON.stringify({
+      cnpj: '41870054000276', name: 'Jimi Itajai', contacts: []
+    })]
+  ]);
+  let schema = '';
+  const command = async (name, ...args) => {
+    if (name === 'GET') return args[0] === KEYS.categorySchema ? schema : null;
+    if (name === 'HGETALL') return [...categories.entries()].flat();
+    if (name === 'EVAL' && args[3] === KEYS.categorySchema) {
+      const version = args[4];
+      for (let index = 5; index < args.length; index += 3) {
+        const [cnpj, expected, replacement] = args.slice(index, index + 3);
+        if (categories.get(cnpj) === expected) categories.set(cnpj, replacement);
+      }
+      schema = version;
+      return 2;
+    }
+    if (name === 'EVAL') return 0;
+    throw new Error(`Comando inesperado: ${name}`);
+  };
+  assert.equal(await ensureCategorySchema(command), 2);
+  assert.deepEqual(historicalCategorySettings(JSON.parse(categories.get('35820448009516'))), {
+    billingMethod: 'ted_doc',
+    whiteMartins: true
+  });
+  assert.equal(JSON.parse(categories.get('35820448009516')).billingMethod, 'ted_doc');
+  assert.equal(JSON.parse(categories.get('35820448009516')).whiteMartins, true);
+  assert.equal(JSON.parse(categories.get('41870054000276')).billingMethod, 'bank_slip');
+  assert.equal(JSON.parse(categories.get('41870054000276')).whiteMartins, false);
+  assert.equal(await ensureCategorySchema(command), 0);
 });
 
 test('ao cadastrar empresa importa os contatos da Brudam pelo CNPJ', async () => {
@@ -295,6 +335,7 @@ test('Redis preserva contatos existentes e altera somente a opção de envio', a
   });
   const command = async (name, ...args) => {
     if (name === 'EVAL') return 0;
+    if (name === 'GET' && args[0] === KEYS.categorySchema) return '2';
     if (name === 'HGET') return value;
     if (name === 'HSET') {
       value = args[2];
@@ -341,6 +382,13 @@ test('semente contém apenas associações categorizadas importadas do Zoho', ()
   assert.equal(seed.reduce((total, category) => total + category.contacts.length, 0), 115);
   assert.ok(seed.every((category) => /^\d{14}$/.test(category.cnpj)));
   assert.ok(seed.every((category) => category.contacts.length > 0));
+  assert.ok(seed.every((category) => ['bank_slip', 'ted_doc'].includes(category.billingMethod)));
+  assert.ok(seed.every((category) => typeof category.whiteMartins === 'boolean'));
+  assert.equal(seed.filter((category) => category.billingMethod === 'ted_doc').length, 21);
+  assert.equal(seed.filter((category) => category.billingMethod === 'bank_slip').length, 18);
+  assert.equal(seed.filter((category) => category.whiteMartins).length, 18);
+  assert.equal(seed.find((category) => category.name === 'BL Ind Otica Ltda').billingMethod, 'ted_doc');
+  assert.equal(seed.find((category) => category.name === 'Jimi Itajai').billingMethod, 'bank_slip');
 });
 
 test('monta assuntos e textos dos três tipos de cobrança', () => {
@@ -2094,11 +2142,11 @@ test('mantém estados financeiro, documental, de cobrança e pagamento independe
   });
   assert.equal(resolved.collection.code, 'resolved');
 
-  const ted = invoiceControl({
+  const unmarked = invoiceControl({
     ...invoice,
     client: 'RS WHITE MARTINS GASES INDUSTRIAIS LTDA'
   });
-  assert.equal(ted.payment.code, 'ted_doc');
+  assert.equal(unmarked.payment.code, 'not_generated');
 
   const selectedTed = invoiceControl(invoice, {
     category: { billingMethod: 'ted_doc' }
