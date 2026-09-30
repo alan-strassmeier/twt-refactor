@@ -39,6 +39,7 @@ const {
 } = require('./cobranca-email');
 const { deliveryReference } = require('./cobranca-webhook');
 const { isTerminalBillingFailure } = require('./billing-failures');
+const { reconcileBankPayments } = require('./bank-payment-reconciliation');
 const store = require('./cobranca-store');
 
 const PAGE_SIZE = 100;
@@ -218,6 +219,7 @@ const retryTransientNetworkRequest = async (
 
 const processorConfig = (env = process.env) => ({
   maxInvoices: positiveInteger(env.BILLING_EMAIL_MAX_INVOICES_PER_RUN, 12, 50),
+  maxBankReconciliations: positiveInteger(env.BILLING_BANK_RECONCILIATION_MAX_PER_RUN, 8, 25),
   maxPages: positiveInteger(env.BILLING_EMAIL_SCAN_PAGES_PER_RUN, 2, 10),
   deadlineMs: positiveInteger(env.BILLING_EMAIL_DEADLINE_MS, 50000, 55000)
 });
@@ -1253,6 +1255,22 @@ const runBillingCollection = async (dependencies = {}) => {
   const fetch = dependencies.fetchInvoices || fetchInvoiceScanPage;
 
   const emptyScan = { invoices: [], pages: 0, hasMore: false, nextSkip: 0 };
+  const bankReconciliationPromise = continuation
+    ? Promise.resolve({ checked: 0, settled: 0, alreadySettled: 0, pending: 0, errors: [] })
+    : (dependencies.reconcileBankPayments || reconcileBankPayments)({
+      currentDate,
+      maxRecords: config.maxBankReconciliations
+    }, dependencies).catch((error) => ({
+      checked: 0,
+      settled: 0,
+      alreadySettled: 0,
+      pending: 0,
+      errors: [{
+        invoiceId: '',
+        bank: '',
+        message: String(error.message || error).slice(0, 300)
+      }]
+    }));
   const scanResults = continuation
     ? [
       { scan: emptyScan, error: null },
@@ -1277,10 +1295,17 @@ const runBillingCollection = async (dependencies = {}) => {
         fetch
       })
     ]);
+  const bankReconciliation = await bankReconciliationPromise;
   const [todayResult, reminderResult, overdueResult] = scanResults;
   const todayScan = todayResult.scan;
   const reminderScan = reminderResult.scan;
   const overdueScan = overdueResult.scan;
+  const reconciliationErrors = (bankReconciliation.errors || []).map((error) => ({
+    event: 'bank_reconciliation',
+    invoiceId: String(error.invoiceId || ''),
+    stage: error.bank ? `conciliação ${error.bank}` : 'conciliação bancária',
+    message: String(error.message || 'Falha na conciliação bancária.').slice(0, 300)
+  }));
   const scanErrors = scanResults.map((result) => result.error).filter(Boolean);
   if (!continuation) {
     if (!overdueResult.error) {
@@ -1331,13 +1356,17 @@ const runBillingCollection = async (dependencies = {}) => {
     completedAt: null,
     scanned: queue.length,
     discovered: newlyQueued.length,
-    reconciled: 0,
+    reconciled: Number(bankReconciliation.checked || 0),
+    bankSettled: Number(bankReconciliation.settled || 0),
+    bankAlreadySettled: Number(bankReconciliation.alreadySettled || 0),
+    bankPending: Number(bankReconciliation.pending || 0),
     processed: 0,
     sent: 0,
     alreadySent: 0,
     pendingDoccob: 0,
     waitingContacts: 0,
-    settledInvoices: 0,
+    settledInvoices: Number(bankReconciliation.settled || 0) +
+      Number(bankReconciliation.alreadySettled || 0),
     skippedBankSlipCutoff: 0,
     blocked: queue.length - unblockedQueue.length,
     alreadyCompleted: unblockedQueue.length - activeQueue.length,
@@ -1345,7 +1374,7 @@ const runBillingCollection = async (dependencies = {}) => {
     scanFailures: scanErrors.length,
     remaining: 0,
     review: 0,
-    errors: [...scanErrors],
+    errors: [...reconciliationErrors, ...scanErrors],
     stoppedByLimit: false
   };
 

@@ -1162,6 +1162,8 @@
       blocked: 0,
       settledInvoices: 0,
       deferredHistorical: 0,
+      reconciled: 0,
+      bankSettled: 0,
       errors: []
     };
     let result = null;
@@ -1186,6 +1188,8 @@
         totals.blocked = Math.max(totals.blocked, Number(result.blocked || 0));
         totals.settledInvoices += Number(result.settledInvoices || 0);
         totals.deferredHistorical += Number(result.deferredHistorical || 0);
+        totals.reconciled += Number(result.reconciled || 0);
+        totals.bankSettled += Number(result.bankSettled || 0);
         totals.errors.push(...(Array.isArray(result.errors) ? result.errors : []));
       } while (
         result.stoppedByLimit
@@ -1196,7 +1200,7 @@
       await Promise.all([loadPending(), loadLogs()]);
       const incomplete = Boolean(result?.stoppedByLimit && Number(result.remaining || 0) > 0);
       setMessage(
-        `Verificação concluída em ${round} lote(s): ${totals.processed} fatura(s) emitida(s) hoje, perto do vencimento ou vencida(s) examinada(s), ${totals.discovered} nova(s) fatura(s) registrada(s), ${totals.sent} e-mail(s) enviado(s), ${totals.pendingDoccob} aguardando DOCCOB, ${totals.blocked} fatura(s) bloqueada(s) e ${totals.errors.length} erro(s).${incomplete ? ` ${result.remaining || 0} fatura(s) continuarão na próxima verificação.` : ''}`,
+        `Verificação concluída em ${round} lote(s): ${totals.reconciled} boleto(s) conferido(s), ${totals.bankSettled} fatura(s) liquidada(s) automaticamente, ${totals.processed} fatura(s) emitida(s) hoje, perto do vencimento ou vencida(s) examinada(s), ${totals.discovered} nova(s) fatura(s) registrada(s), ${totals.sent} e-mail(s) enviado(s), ${totals.pendingDoccob} aguardando DOCCOB, ${totals.blocked} fatura(s) bloqueada(s) e ${totals.errors.length} erro(s).${incomplete ? ` ${result.remaining || 0} fatura(s) continuarão na próxima verificação.` : ''}`,
         totals.errors.length || incomplete ? 'warning' : 'success'
       );
     } catch (error) {

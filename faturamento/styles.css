@@ -1749,6 +1749,10 @@ body.modal-open {
   background: #f8fbfd;
 }
 
+.payment-import-form > .button {
+  align-self: center;
+}
+
 .payment-file-field small {
   margin-top: 5px;
   color: var(--muted);

@@ -10,8 +10,10 @@ const {
   authenticatedRequest,
   barCodeFromDigitableLine,
   normalizeBradescoBankSlip,
+  normalizeBradescoSettlement,
   createBradescoBankSlip,
   queryBradescoBankSlip,
+  listBradescoSettledBankSlips,
   resetTokenCache
 } = require('../server/faturamento/bradesco');
 
@@ -57,6 +59,7 @@ test('configura endpoints, negociação e encargos Bradesco por ambiente', () =>
   assert.equal(sandbox.tokenUrl, ENVIRONMENTS.sandbox.tokenUrl);
   assert.equal(sandbox.registrationUrl, ENVIRONMENTS.sandbox.registrationUrl);
   assert.equal(production.queryUrl, ENVIRONMENTS.production.queryUrl);
+  assert.equal(production.settledListUrl, ENVIRONMENTS.production.settledListUrl);
   assert.equal(sandbox.beneficiaryRoot, '09123137');
   assert.equal(sandbox.beneficiaryBranch, '0001');
   assert.equal(sandbox.beneficiaryControl, '08');
@@ -382,4 +385,74 @@ test('consulta a segunda via com o formato de negociação de 11 dígitos', asyn
     status: '0'
   });
   assert.equal(boleto.id, '00000021311');
+});
+
+test('lista títulos liquidados no Bradesco e normaliza data e valor recebidos', async () => {
+  resetTokenCache();
+  const config = bradescoConfig(configEnvironment());
+  const requests = [];
+  const request = async (options) => {
+    requests.push(options);
+    if (options.url === config.tokenUrl) {
+      return {
+        statusCode: 200,
+        headers: {},
+        body: Buffer.from(JSON.stringify({ access_token: 'token', expires_in: 3600 }))
+      };
+    }
+    return {
+      statusCode: 200,
+      headers: {},
+      body: Buffer.from(JSON.stringify({
+        status: 200,
+        pagina: 1,
+        indMaisPagina: 'N',
+        titulos: [{
+          nossoNumero: 21311,
+          dataPagamento: '29092026',
+          dataMovimento: '30092026',
+          valorTitulo: 72461,
+          valorPagamento: 73548,
+          nomePagador: 'CLIENTE TESTE'
+        }]
+      }))
+    };
+  };
+  const result = await listBradescoSettledBankSlips({
+    paymentDateFrom: '2026-09-23',
+    paymentDateTo: '2026-09-29'
+  }, { config, request });
+  assert.equal(requests[1].url, config.settledListUrl);
+  assert.deepEqual(JSON.parse(requests[1].body), {
+    cpfCnpj: { cpfCnpj: '09123137', filial: '0001', controle: '08' },
+    produto: '09',
+    negociacao: '72180000074',
+    dataMovimentoDe: 0,
+    dataMovimentoAte: 0,
+    dataPagamentoDe: '23092026',
+    dataPagamentoAte: '29092026',
+    origemPagamento: 0,
+    valorTituloDe: 0,
+    valorTituloAte: 0,
+    paginaAnterior: 0
+  });
+  assert.deepEqual(result[0], {
+    ourNumber: '00000021311',
+    paidAt: '2026-09-29',
+    paidAmount: 735.48,
+    titleAmount: 724.61,
+    movementAt: '2026-09-30',
+    payerName: 'CLIENTE TESTE',
+    channel: '',
+    creditMethod: '',
+    raw: {
+      nossoNumero: 21311,
+      dataPagamento: '29092026',
+      dataMovimento: '30092026',
+      valorTitulo: 72461,
+      valorPagamento: 73548,
+      nomePagador: 'CLIENTE TESTE'
+    }
+  });
+  assert.equal(normalizeBradescoSettlement({ nossoNumero: 0 }), null);
 });

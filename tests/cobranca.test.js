@@ -780,6 +780,7 @@ test('persiste toda a descoberta antes de limitar o lote de processamento', asyn
     saveOverdueCursor: async () => {},
     saveReconciliationCursor: async () => {},
     saveBillingQueueCursor: async () => {},
+    reconcileBankPayments: async () => ({ checked: 0, settled: 0, alreadySettled: 0, pending: 0, errors: [] }),
     fetchInvoices: async (filters) => ({
       invoices: filters['emissao[eq]'] || Object.keys(filters).every((key) => ['status', 'limit', 'skip'].includes(key))
         ? invoices
@@ -835,6 +836,7 @@ test('continuação drena somente itens ainda não examinados sem repetir a varr
     saveOverdueCursor: async () => { scanCursorSaves += 1; },
     saveReconciliationCursor: async () => { scanCursorSaves += 1; },
     saveBillingQueueCursor: async () => { queueCursorSaves += 1; },
+    reconcileBankPayments: async () => ({ checked: 0, settled: 0, alreadySettled: 0, pending: 0, errors: [] }),
     fetchInvoices: async () => {
       scanCalls += 1;
       throw new Error('A continuação não deve consultar novamente a Brudam.');
@@ -900,6 +902,7 @@ test('verificação normal ignora pendências acumuladas e consulta somente as t
     removePendingBatch: async (invoiceIds) => { removedQueued.push(...invoiceIds); },
     getOverdueCursor: async () => 0,
     saveOverdueCursor: async () => {},
+    reconcileBankPayments: async () => ({ checked: 0, settled: 0, alreadySettled: 0, pending: 0, errors: [] }),
     fetchInvoices: async () => {
       scanCalls += 1;
       return { invoices: [], pagination: { hasMore: false } };

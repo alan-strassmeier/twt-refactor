@@ -14,6 +14,10 @@ FATURAMENTO_SESSION_SECRET=
 BRUDAM_API_USER=
 BRUDAM_API_PASSWORD=
 BRUDAM_API_URL=https://twt.brudam.com.br/api/v1
+# IDs internos do cadastro da Brudam, não os números físicos das contas
+BRUDAM_BANK_SLIP_PAYMENT_METHOD_ID=
+BRUDAM_ITAU_BANK_ACCOUNT_ID=
+BRUDAM_BRADESCO_BANK_ACCOUNT_ID=
 
 R2_ACCOUNT_ID=
 R2_ACCESS_KEY_ID=
@@ -45,6 +49,8 @@ BRADESCO_PENALTY_PERCENT=3.00
 BRADESCO_DAILY_INTEREST_PERCENT=0.15
 BRADESCO_INTEREST_START_DAYS=2
 BRADESCO_PENALTY_START_DAYS=2
+# Opcional; usa o endpoint oficial do ambiente quando não informado
+BRADESCO_SETTLED_LIST_URL=
 
 ITAU_CLIENT_ID=
 ITAU_CLIENT_SECRET=
@@ -85,6 +91,8 @@ R2_NFSE_BUCKET_NAME=twt-brudam-documentos
 
 UPSTASH_REDIS_REST_URL=
 UPSTASH_REDIS_REST_TOKEN=
+
+BILLING_BANK_RECONCILIATION_MAX_PER_RUN=8
 
 ZOHO_SMTP_HOST=smtppro.zoho.com
 ZOHO_SMTP_PORT=465
@@ -253,6 +261,38 @@ função da Vercel, o navegador continua automaticamente em novos lotes. Somente
 a primeira rodada consulta as três janelas na Brudam; as continuações tratam
 apenas os registros **Aguardando processamento** descobertos pela mesma
 execução, sem absorver pendências antigas de DOCCOB, contato ou pagamento.
+
+### Conciliação bancária e liquidação na Brudam
+
+Antes de cada verificação normal, o sistema percorre em lotes os boletos
+registrados no Redis que ainda não possuem conciliação concluída. As consultas
+bancárias rodam em paralelo com as três janelas de cobrança; uma fatura é
+reconfirmada na Brudam imediatamente antes de qualquer baixa.
+
+No Itaú, a consulta usa `GET /boletos` com `view=specific`, beneficiário,
+carteira, Nosso Número e data de inclusão. A liquidação só avança quando
+`pagamentos_cobranca` possui data válida e a soma recebida cobre integralmente
+o valor do boleto. A credencial precisa ter permissão para o recurso de
+consulta de boletos.
+
+No Bradesco, a rotina usa `POST /boleto/cobranca-lista/v1/listar`, recurso
+**Cobrança - Listar boletos liquidados**. Como a documentação informa dados
+D-1 e permite até 60 dias, cada execução consulta os pagamentos dos 60 dias
+anteriores e cruza o Nosso Número com o registro persistido. Baixas e
+cancelamentos não são interpretados como pagamentos.
+
+Quando o banco confirma o recebimento, o servidor consulta novamente a fatura.
+Se ela já estiver liquidada, apenas encerra a conciliação. Se estiver aberta e
+o valor cobrir o saldo, envia `POST /financeiro/liquidar/lancamento`, usando a
+data bancária em `data_pagamento` e `data_credito_debito`, o saldo como
+`valor_liquidado` e eventual excedente como `valor_juros`. Depois remove a
+pendência de cobrança e marca os três eventos de e-mail como concluídos.
+
+`BRUDAM_BANK_SLIP_PAYMENT_METHOD_ID`, `BRUDAM_ITAU_BANK_ACCOUNT_ID` e
+`BRUDAM_BRADESCO_BANK_ACCOUNT_ID` devem receber os IDs internos retornados ou
+exibidos pela Brudam. Não utilize `ITAU_BENEFICIARY_ID`, `BRADESCO_ACCOUNT` ou
+o número bancário visível como substitutos. Sem esses IDs, a consulta bancária
+continua possível, mas a baixa é recusada com diagnóstico de configuração.
 
 ## Roteamento dos boletos
 

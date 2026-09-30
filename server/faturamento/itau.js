@@ -403,6 +403,14 @@ const itauAmount = (value) => {
   return /^\d+$/.test(text) ? Number(text) / 100 : NaN;
 };
 
+const dateOnly = (value) => {
+  const text = String(value || '').trim();
+  let match = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (match) return `${match[1]}-${match[2]}-${match[3]}`;
+  match = text.match(/^(\d{2})[/.\-](\d{2})[/.\-](\d{4})$/);
+  return match ? `${match[3]}-${match[2]}-${match[1]}` : '';
+};
+
 const normalizeItauBankSlip = (payload, requestedStage = '') => {
   const boleto = boletoFromPayload(payload);
   if (!boleto) return null;
@@ -410,6 +418,17 @@ const normalizeItauBankSlip = (payload, requestedStage = '') => {
     ? boleto.dado_boleto.dados_individuais_boleto[0]
     : null;
   const payerType = boleto?.dado_boleto?.pagador?.pessoa?.tipo_pessoa || {};
+  const payments = (Array.isArray(boleto?.dado_boleto?.pagamentos_cobranca)
+    ? boleto.dado_boleto.pagamentos_cobranca
+    : []).map((payment) => ({
+    paidAt: dateOnly(payment?.data_inclusao_pagamento || payment?.data_pagamento),
+    amount: itauAmount(
+      payment?.valor_pago_total_cobranca ?? payment?.valor_pagamento ?? payment?.valor_pago
+    ),
+    channel: String(payment?.descricao_canal_pagamento || '').trim(),
+    method: String(payment?.descricao_meio_pagamento || '').trim()
+  })).filter((payment) => payment.paidAt && Number.isFinite(payment.amount) && payment.amount > 0);
+  const paidAmount = payments.reduce((total, payment) => total + payment.amount, 0);
   const stage = String(boleto.etapa_processo_boleto || requestedStage || '').toLowerCase();
   return {
     id: String(boleto.id_boleto || '').trim(),
@@ -425,6 +444,10 @@ const normalizeItauBankSlip = (payload, requestedStage = '') => {
     ),
     amount: itauAmount(details?.valor_titulo || boleto?.dado_boleto?.valor_total_titulo),
     dueDate: String(details?.data_vencimento || '').trim(),
+    generalStatus: String(details?.situacao_geral_boleto || '').trim(),
+    payments,
+    paidAmount: Math.round(paidAmount * 100) / 100,
+    paidAt: payments.map((payment) => payment.paidAt).sort().at(-1) || '',
     digitableLine: String(details?.numero_linha_digitavel || '').trim(),
     barCode: String(details?.codigo_barras || '').trim(),
     raw: payload

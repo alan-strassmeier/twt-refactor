@@ -22,7 +22,7 @@ const {
   isBankSlipCreationEligible,
   requiresTedDocForCategory
 } = require('../server/faturamento/billing-rules');
-const { getBankSlipRecords } = require('../server/faturamento/boleto-store');
+const { getBankSlipRecords, listBankSlipRecords } = require('../server/faturamento/boleto-store');
 
 const twtInvoice = {
   fatura: 11518,
@@ -72,6 +72,25 @@ test('consulta estados de vários boletos em uma única ida ao Redis', async () 
   assert.equal(calls[0].length, 3);
   assert.equal(records.get('11518').state, 'ready');
   assert.equal(records.get('11532').state, 'review');
+});
+
+test('lista registros bancários antigos e novos por SCAN sem depender de índice prévio', async () => {
+  const calls = [];
+  const records = await listBankSlipRecords(async (...args) => {
+    calls.push(args);
+    if (args[0] === 'SCAN') return ['0', [
+      'faturamento:boleto:twt:fatura:11777',
+      'faturamento:boleto:twt:fatura:11518'
+    ]];
+    if (args[0] === 'MGET') return [
+      JSON.stringify({ state: 'ready', bank: 'itau' }),
+      JSON.stringify({ state: 'ready', bank: 'bradesco', invoiceId: '11777' })
+    ];
+    throw new Error(`Comando inesperado: ${args[0]}`);
+  });
+  assert.equal(calls[0][0], 'SCAN');
+  assert.equal(calls[1][0], 'MGET');
+  assert.deepEqual(records.map((record) => record.invoiceId), ['11518', '11777']);
 });
 
 test('normaliza o pagador conforme dados obrigatórios das APIs bancárias', () => {

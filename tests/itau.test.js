@@ -141,7 +141,14 @@ test('normaliza a resposta oficial de emissão, inclusive valores sem separador 
       beneficiario: { id_beneficiario: '150000052061' },
       dado_boleto: {
         codigo_carteira: '109',
+        pagamentos_cobranca: [{
+          data_inclusao_pagamento: '2026-09-18',
+          valor_pago_total_cobranca: '00000000000120450',
+          descricao_canal_pagamento: 'INTERNET',
+          descricao_meio_pagamento: 'PIX'
+        }],
         dados_individuais_boleto: [{
+          situacao_geral_boleto: 'Pago',
           numero_nosso_numero: '00011532',
           texto_seu_numero: 'FAT11532',
           data_vencimento: '2026-09-20',
@@ -155,6 +162,15 @@ test('normaliza a resposta oficial de emissão, inclusive valores sem separador 
   assert.equal(bankSlip.registered, true);
   assert.equal(bankSlip.amount, 1199);
   assert.equal(bankSlip.ourNumber, '00011532');
+  assert.equal(bankSlip.generalStatus, 'Pago');
+  assert.equal(bankSlip.paidAt, '2026-09-18');
+  assert.equal(bankSlip.paidAmount, 1204.5);
+  assert.deepEqual(bankSlip.payments[0], {
+    paidAt: '2026-09-18',
+    amount: 1204.5,
+    channel: 'INTERNET',
+    method: 'PIX'
+  });
   assert.equal(itauAmount('180.00'), 180);
 });
 

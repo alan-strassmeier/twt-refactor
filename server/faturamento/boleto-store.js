@@ -30,7 +30,8 @@ const redisCommand = async (...args) => {
   return payload.result;
 };
 
-const keyFor = (invoiceId) => `faturamento:boleto:twt:fatura:${invoiceId}`;
+const KEY_PREFIX = 'faturamento:boleto:twt:fatura:';
+const keyFor = (invoiceId) => `${KEY_PREFIX}${invoiceId}`;
 
 const parseRecord = (value) => {
   if (!value) return null;
@@ -54,6 +55,27 @@ const getBankSlipRecords = async (invoiceIds, command = redisCommand) => {
   return new Map(ids.map((invoiceId, index) => [invoiceId, parseRecord(values[index])]));
 };
 
+const listBankSlipRecords = async (command = redisCommand, options = {}) => {
+  const count = Math.max(10, Math.min(Number(options.count) || 100, 500));
+  const maxIterations = Math.max(1, Math.min(Number(options.maxIterations) || 20, 100));
+  const keys = [];
+  let cursor = '0';
+  let iterations = 0;
+  do {
+    const result = await command('SCAN', cursor, 'MATCH', `${KEY_PREFIX}*`, 'COUNT', String(count));
+    cursor = String(result?.[0] || '0');
+    if (Array.isArray(result?.[1])) keys.push(...result[1]);
+    iterations += 1;
+  } while (cursor !== '0' && iterations < maxIterations);
+  const uniqueKeys = [...new Set(keys)].sort();
+  if (!uniqueKeys.length) return [];
+  const values = await command('MGET', ...uniqueKeys) || [];
+  return uniqueKeys.map((key, index) => {
+    const record = parseRecord(values[index]);
+    return record ? { ...record, invoiceId: String(record.invoiceId || key.slice(KEY_PREFIX.length)) } : null;
+  }).filter(Boolean);
+};
+
 const claimBankSlip = async (invoiceId, record, command = redisCommand) => {
   const result = await command(
     'SET',
@@ -74,10 +96,12 @@ const releaseBankSlipClaim = (invoiceId, command = redisCommand) =>
 
 module.exports = {
   redisCommand,
+  KEY_PREFIX,
   keyFor,
   parseRecord,
   getBankSlipRecord,
   getBankSlipRecords,
+  listBankSlipRecords,
   claimBankSlip,
   saveBankSlipRecord,
   releaseBankSlipClaim
