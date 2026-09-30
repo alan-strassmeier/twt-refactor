@@ -30,17 +30,10 @@ const positiveInteger = (value, label) => {
 const isWhiteMartinsCategory = (category) =>
   digits(category?.cnpj).length === 14 && category?.whiteMartins === true;
 
-const paymentSettings = (input = {}) => {
-  const paymentDate = String(input.paymentDate || '').trim();
-  if (!validIsoDate(paymentDate)) {
-    throw Object.assign(new Error('Informe uma data de pagamento válida.'), { statusCode: 422 });
-  }
-  return {
-    paymentDate,
-    paymentMethodId: DSL_TED_DOC_LIQUIDATION.paymentMethodId,
-    bankAccountId: DSL_TED_DOC_LIQUIDATION.bankAccountId
-  };
-};
+const paymentSettings = () => ({
+  paymentMethodId: DSL_TED_DOC_LIQUIDATION.paymentMethodId,
+  bankAccountId: DSL_TED_DOC_LIQUIDATION.bankAccountId
+});
 
 const mapWithConcurrency = async (items, concurrency, mapper) => {
   const results = new Array(items.length);
@@ -72,14 +65,6 @@ const rowMatch = (row, matches) => {
       return { error: 'O emitente do DOCCOB diverge do CNPJ informado na planilha.' };
     }
   }
-  if (row.dueAt) {
-    const byDueDate = candidates.filter((match) =>
-      !match.invoice?.dueAt || match.invoice.dueAt === row.dueAt);
-    if (byDueDate.length) candidates = byDueDate;
-    else if (candidates.some((match) => match.invoice?.dueAt)) {
-      return { error: 'O vencimento da planilha diverge da fatura no DOCCOB.' };
-    }
-  }
   const unique = new Map(candidates.map((match) => [
     `${match.invoiceId}:${match.clientCnpj}`,
     match
@@ -94,9 +79,12 @@ const candidateFromGroup = (group, invoice) => {
   const expectedReferences = new Set(group.match.transportReferences || []);
   const missingReferences = [...expectedReferences].filter((reference) => !importedReferences.has(reference));
   const importedAmount = Math.round(group.rows.reduce((total, row) => total + row.amount, 0) * 100) / 100;
+  const paymentDates = [...new Set(group.rows.map((row) => row.paymentDate).filter(validIsoDate))];
+  const paymentDate = paymentDates.length === 1 ? paymentDates[0] : '';
   const invoiceBalance = invoice ? Number(invoice.balance) : null;
   let reason = '';
-  if (!invoice) reason = 'Fatura não encontrada na Brudam.';
+  if (!paymentDate) reason = 'Os CT-es da fatura possuem datas de pagamento diferentes ou inválidas na coluna Vencimento.';
+  else if (!invoice) reason = 'Fatura não encontrada na Brudam.';
   else if (Number(invoice.status) !== 0 || cents(invoiceBalance) <= 0) reason = 'A fatura não está em aberto na Brudam.';
   else if (digits(invoice.clientDocument) !== group.match.clientCnpj) reason = 'O CNPJ da fatura diverge do DOCCOB.';
   else if (missingReferences.length) reason = `Faltam ${missingReferences.length} CT-e(s) desta fatura na planilha.`;
@@ -110,6 +98,7 @@ const candidateFromGroup = (group, invoice) => {
     clientCnpj: group.match.clientCnpj,
     clientName: invoice?.client || 'Não informado',
     dueAt: invoice?.dueAt || group.match.invoice?.dueAt || '',
+    paymentDate,
     references: [...importedReferences].sort((left, right) => left.localeCompare(right, 'pt-BR', { numeric: true })),
     sourceRows: group.rows.map((row) => row.row),
     importedAmount,
@@ -124,7 +113,7 @@ const candidateFromGroup = (group, invoice) => {
 };
 
 const analyzePaymentImport = async (input, dependencies = {}) => {
-  const settings = paymentSettings(input);
+  const settings = paymentSettings();
   const filename = String(input.filename || '').trim().slice(0, 180);
   if (!/\.xlsx$/i.test(filename)) {
     throw Object.assign(new Error('Selecione um arquivo com extensão .xlsx.'), { statusCode: 422 });
@@ -261,16 +250,17 @@ const approveCandidate = async (record, candidate, dependencies = {}) => {
     if (cents(current.balance) !== cents(candidate.importedAmount)) {
       throw Object.assign(new Error('O saldo da fatura mudou após a análise. Importe o arquivo novamente.'), { statusCode: 409 });
     }
-    if (!validIsoDate(record.settings?.paymentDate)) {
+    const paymentDate = candidate.paymentDate || record.settings?.paymentDate;
+    if (!validIsoDate(paymentDate)) {
       throw Object.assign(new Error('A data de pagamento da importação é inválida.'), { statusCode: 422 });
     }
     const internalId = positiveInteger(current.internalId, 'O identificador interno do lançamento');
     const request = {
       documentos: [{
         id_lancamento: internalId,
-        data_pagamento: record.settings.paymentDate,
+        data_pagamento: paymentDate,
         forma_pagamento: DSL_TED_DOC_LIQUIDATION.paymentMethodId,
-        data_credito_debito: record.settings.paymentDate,
+        data_credito_debito: paymentDate,
         valor_juros: 0,
         valor_liquidado: candidate.importedAmount,
         conta_bancaria: DSL_TED_DOC_LIQUIDATION.bankAccountId

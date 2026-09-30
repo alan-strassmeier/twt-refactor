@@ -844,6 +844,7 @@
       client.appendChild(cnpj);
       const references = appendCell(row, (candidate.references || []).join(', ') || '—');
       references.className = 'payment-reference-cell';
+      appendCell(row, formatDate(candidate.paymentDate));
       appendCell(row, formatMoney(candidate.importedAmount));
       appendCell(row, candidate.balance === null || candidate.balance === undefined
         ? '—' : formatMoney(candidate.balance));
@@ -989,12 +990,6 @@
   setCollectionSection(state.collectionSection);
 
   if (elements.paymentImportForm) {
-    elements.paymentImportForm.elements.paymentDate.value = new Intl.DateTimeFormat('en-CA', {
-      timeZone: 'America/Sao_Paulo',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit'
-    }).format(new Date());
     elements.paymentImportForm.addEventListener('submit', async (event) => {
       event.preventDefault();
       const data = new FormData(elements.paymentImportForm);
@@ -1014,8 +1009,7 @@
           method: 'POST',
           body: JSON.stringify({
             filename: file.name,
-            fileBase64: await fileAsBase64(file),
-            paymentDate: data.get('paymentDate')
+            fileBase64: await fileAsBase64(file)
           })
         });
         renderPaymentImport(result.import);

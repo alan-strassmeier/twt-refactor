@@ -1744,7 +1744,7 @@ body.modal-open {
 
 .payment-import-form {
   padding: 20px 24px;
-  grid-template-columns: minmax(280px, 1.4fr) minmax(180px, .7fr) auto;
+  grid-template-columns: minmax(280px, 1fr) auto;
   border-bottom: 1px solid var(--line);
   background: #f8fbfd;
 }

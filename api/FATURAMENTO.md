@@ -543,6 +543,24 @@ e a data atual em São Paulo. Ela diferencia faturas vencidas, que vencem hoje,
 que vencem amanhã e as que ainda possuem prazo maior, sem marcar faturas
 liquidadas ou canceladas como atrasadas.
 
+## Importação de pagamentos White Martins
+
+A importação aceita uma planilha `.xlsx` de até 2 MB e restringe a busca às
+empresas marcadas como **White Martins** no cadastro de cobrança. A coluna
+**Referência** identifica o CT-e, **Montante em MI** informa o valor pago e
+**Vencimento** representa a data efetiva do pagamento.
+
+A data da coluna **Vencimento** é usada em `data_pagamento` e
+`data_credito_debito` ao liquidar a fatura na Brudam. Ela não é comparada com o
+vencimento cadastrado na fatura ou no DOCCOB, pois são informações com
+significados diferentes. Quando uma mesma fatura possui vários CT-es, todas as
+linhas precisam informar a mesma data de pagamento.
+
+Antes da aprovação, o servidor ainda exige que a fatura esteja aberta, que o
+CNPJ corresponda ao DOCCOB, que todas as referências estejam presentes e que o
+valor importado seja igual ao saldo atual. A aprovação pode ser individual ou
+em lote; nenhuma baixa acontece apenas com o envio da planilha.
+
 ## PDF da fatura
 
 A coluna `Visualizar` abre `GET /api/faturamento/fatura-pdf?id=...` em uma nova

@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const {
   excelDate,
   parseReference,
+  spreadsheetDate,
   parsePaymentWorksheet
 } = require('../server/faturamento/payment-import-xlsx');
 const {
@@ -42,10 +43,12 @@ test('leitor reconhece as colunas da planilha de pagamentos sem perder CNPJ e re
     vendor: '10021598',
     reference: '15005-0',
     cteNumber: '15005',
-    dueAt: '2026-09-21',
+    paymentDate: '2026-09-21',
     amount: 88.75
   });
   assert.equal(excelDate(46286), '2026-09-21');
+  assert.equal(spreadsheetDate('29/09/2026'), '2026-09-29');
+  assert.equal(spreadsheetDate('31/02/2026'), '');
   assert.deepEqual(parseReference('001505-0'), { source: '001505-0', cteNumber: '1505' });
 });
 
@@ -62,12 +65,11 @@ test('escopo da importação aceita apenas categoria identificada como White Mar
   }), false);
 });
 
-test('análise vincula CT-e, DOCCOB e fatura aberta somente quando o valor fecha', async () => {
+test('análise usa Vencimento como data de pagamento e ignora diferença para o vencimento da fatura', async () => {
   let saved;
   const record = await analyzePaymentImport({
     filename: 'pagamentos.xlsx',
-    fileBase64: 'ignorado',
-    paymentDate: '2026-09-29'
+    fileBase64: 'ignorado'
   }, {
     parseXlsx: () => ({
       rows: [{
@@ -75,7 +77,7 @@ test('análise vincula CT-e, DOCCOB e fatura aberta somente quando o valor fecha
         supplierTaxId: '97434690000129',
         reference: '15342-0',
         cteNumber: '15342',
-        dueAt: '2026-10-13',
+        paymentDate: '2026-09-29',
         amount: 1385.65
       }],
       errors: []
@@ -107,8 +109,8 @@ test('análise vincula CT-e, DOCCOB e fatura aberta somente quando o valor fecha
   assert.equal(record.summary.eligibleInvoices, 1);
   assert.equal(record.candidates[0].invoiceId, '11840');
   assert.equal(record.candidates[0].eligible, true);
+  assert.equal(record.candidates[0].paymentDate, '2026-09-29');
   assert.deepEqual(record.settings, {
-    paymentDate: '2026-09-29',
     paymentMethodId: 4,
     bankAccountId: 16666
   });
@@ -120,10 +122,11 @@ test('aprovação reconfere a fatura e envia o contrato oficial de liquidação 
   const result = await approveCandidate({
     id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
     scope: { cnpjs: ['41870054000276'] },
-    settings: { paymentDate: '2026-09-29', paymentMethodId: 4, bankAccountId: 16666 }
+    settings: { paymentMethodId: 4, bankAccountId: 16666 }
   }, {
     invoiceId: '11840',
     clientCnpj: '41870054000276',
+    paymentDate: '2026-09-29',
     importedAmount: 1385.65
   }, {
     claimApproval: async () => true,
@@ -166,9 +169,9 @@ test('aprovação nunca envia liquidação quando a fatura já está liquidada',
   const result = await approveCandidate({
     id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
     scope: { cnpjs: ['41870054000276'] },
-    settings: { paymentDate: '2026-09-29', paymentMethodId: 4, bankAccountId: 16666 }
+    settings: { paymentMethodId: 4, bankAccountId: 16666 }
   }, {
-    invoiceId: '11840', clientCnpj: '41870054000276', importedAmount: 1385.65
+    invoiceId: '11840', clientCnpj: '41870054000276', paymentDate: '2026-09-29', importedAmount: 1385.65
   }, {
     claimApproval: async () => true,
     releaseApproval: async () => {},

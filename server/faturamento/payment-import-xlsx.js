@@ -189,9 +189,27 @@ const headerAliases = Object.freeze({
   supplierName: ['nome 1', 'nome'],
   vendor: ['fornecedor'],
   reference: ['referencia', 'referencia 1'],
-  dueAt: ['vencim em', 'vencimento'],
+  paymentDate: ['vencim em', 'vencimento'],
   amount: ['montante em mi', 'montante', 'valor pago']
 });
+
+const spreadsheetDate = (value) => {
+  if (typeof value === 'number') return excelDate(value);
+  const text = String(value || '').trim();
+  if (!text) return '';
+  const iso = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  const brazilian = text.match(/^(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{4})$/);
+  const normalized = iso
+    ? `${iso[1]}-${iso[2]}-${iso[3]}`
+    : brazilian
+      ? `${brazilian[3]}-${brazilian[2].padStart(2, '0')}-${brazilian[1].padStart(2, '0')}`
+      : '';
+  if (!normalized) return '';
+  const date = new Date(`${normalized}T00:00:00Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === normalized
+    ? normalized
+    : '';
+};
 
 const parseReference = (value) => {
   const text = String(value ?? '').trim();
@@ -228,8 +246,9 @@ const parsePaymentWorksheet = (source, sharedStrings = [], dateStyles = new Set(
   Object.entries(headerAliases).forEach(([key, aliases]) => {
     columns[key] = headerRow.cells.findIndex((value) => aliases.includes(normalizeHeader(value)));
   });
-  for (const key of ['reference', 'amount']) {
-    if (columns[key] < 0) throw invalidFile(`A coluna obrigatória “${key === 'reference' ? 'Referência' : 'Montante em MI'}” não foi encontrada.`);
+  for (const key of ['reference', 'paymentDate', 'amount']) {
+    const label = key === 'reference' ? 'Referência' : key === 'paymentDate' ? 'Vencimento' : 'Montante em MI';
+    if (columns[key] < 0) throw invalidFile(`A coluna obrigatória “${label}” não foi encontrada.`);
   }
 
   const rows = [];
@@ -246,7 +265,15 @@ const parsePaymentWorksheet = (source, sharedStrings = [], dateStyles = new Set(
       });
       return;
     }
-    const dueValue = columns.dueAt >= 0 ? row.cells[columns.dueAt] : '';
+    const paymentDate = spreadsheetDate(row.cells[columns.paymentDate]);
+    if (!paymentDate) {
+      errors.push({
+        row: row.number,
+        reference: reference.source,
+        message: 'Data de pagamento inválida na coluna Vencimento.'
+      });
+      return;
+    }
     rows.push({
       row: row.number,
       supplierTaxId: String(columns.supplierTaxId >= 0 ? row.cells[columns.supplierTaxId] ?? '' : '').replace(/\D/g, ''),
@@ -254,7 +281,7 @@ const parsePaymentWorksheet = (source, sharedStrings = [], dateStyles = new Set(
       vendor: String(columns.vendor >= 0 ? row.cells[columns.vendor] ?? '' : '').trim(),
       reference: reference.source,
       cteNumber: reference.cteNumber,
-      dueAt: typeof dueValue === 'number' ? excelDate(dueValue) : String(dueValue || '').slice(0, 10),
+      paymentDate,
       amount: Math.round(amount * 100) / 100
     });
   });
@@ -280,6 +307,7 @@ module.exports = {
   excelDate,
   parseReference,
   parseAmount,
+  spreadsheetDate,
   parsePaymentWorksheet,
   parsePaymentXlsx
 };

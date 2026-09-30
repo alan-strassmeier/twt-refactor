@@ -354,16 +354,14 @@
             <div class="payment-import-warning" role="note">
               <strong>Nenhuma baixa é automática.</strong>
               <span>Somente faturas abertas de CNPJs com a marca “White Martins” no cadastro podem ser aprovadas.</span>
+              <span>A coluna “Vencimento” da planilha será usada como data do pagamento, independentemente do vencimento da fatura.</span>
               <span>Forma fixa: Transferência TED/DOC · Conta: ITAÚ-DSL, ag. 0602-0, c/c 16666-2.</span>
             </div>
             <form class="collection-form payment-import-form" id="paymentImportForm">
               <label class="payment-file-field">Planilha de pagamentos (.xlsx)
                 <input name="file" type="file"
                   accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required>
-                <small>Máximo de 2 MB. A coluna Referência deve conter o número do CT-e.</small>
-              </label>
-              <label>Data do pagamento
-                <input name="paymentDate" type="date" required>
+                <small>Máximo de 2 MB. “Referência” deve conter o CT-e e “Vencimento”, a data do pagamento.</small>
               </label>
               <button class="button button-primary" type="submit">Analisar arquivo</button>
             </form>
@@ -385,7 +383,7 @@
               </section>
               <div class="table-scroll collection-table-scroll">
                 <table class="collection-table payment-import-table">
-                  <thead><tr><th>Fatura</th><th>Cliente</th><th>CT-e(s)</th><th>Valor importado</th><th>Saldo Brudam</th><th>Verificação</th><th>Ação</th></tr></thead>
+                  <thead><tr><th>Fatura</th><th>Cliente</th><th>CT-e(s)</th><th>Data do pagamento</th><th>Valor importado</th><th>Saldo Brudam</th><th>Verificação</th><th>Ação</th></tr></thead>
                   <tbody id="paymentImportRows"></tbody>
                 </table>
                 <div class="collection-empty" id="paymentImportEmpty" hidden>
