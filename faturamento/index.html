@@ -324,6 +324,16 @@
               <label>Nome fantasia
                 <input name="name" type="text" autocomplete="organization" maxlength="160" required>
               </label>
+              <label>Forma de cobrança
+                <select name="billingMethod" required>
+                  <option value="bank_slip">Boleto</option>
+                  <option value="ted_doc">Transferência TED/DOC</option>
+                </select>
+              </label>
+              <label class="category-flag-field">
+                <input name="whiteMartins" type="checkbox">
+                <span>Empresa White Martins</span>
+              </label>
               <button class="button button-primary" type="submit">Adicionar empresa</button>
             </form>
             <div class="category-list" id="categoryList"></div>
@@ -343,7 +353,7 @@
             </div>
             <div class="payment-import-warning" role="note">
               <strong>Nenhuma baixa é automática.</strong>
-              <span>Somente faturas abertas de CNPJs cadastrados com “White Martins” no nome podem ser aprovadas.</span>
+              <span>Somente faturas abertas de CNPJs com a marca “White Martins” no cadastro podem ser aprovadas.</span>
               <span>Forma fixa: Transferência TED/DOC · Conta: ITAÚ-DSL, ag. 0602-0, c/c 16666-2.</span>
             </div>
             <form class="collection-form payment-import-form" id="paymentImportForm">

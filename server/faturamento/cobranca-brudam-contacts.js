@@ -83,7 +83,9 @@ const registerCompany = async (input, dependencies = {}) => {
   const company = await fetchCompany(input?.cnpj, dependencies.get);
   const category = await storage.saveCategory({
     cnpj: input?.cnpj,
-    name: String(input?.name || '').trim() || companyName(company)
+    name: String(input?.name || '').trim() || companyName(company),
+    billingMethod: input?.billingMethod,
+    whiteMartins: input?.whiteMartins
   });
   const synced = await syncCompanyContacts(category.cnpj, { ...dependencies, store: storage, company });
   return { ...synced, category: synced.category || category };

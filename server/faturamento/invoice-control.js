@@ -1,4 +1,4 @@
-const { requiresTedDocPayment } = require('./billing-rules');
+const { requiresTedDocForCategory } = require('./billing-rules');
 const boletoStore = require('./boleto-store');
 const cobrancaStore = require('./cobranca-store');
 const { isTerminalBillingFailure } = require('./billing-failures');
@@ -114,8 +114,8 @@ const collectionState = (logs = []) => {
   return controlState('not_sent', 'Não enviada', 'neutral');
 };
 
-const paymentState = (invoice, bankRecord) => {
-  if (requiresTedDocPayment({
+const paymentState = (invoice, bankRecord, category) => {
+  if (requiresTedDocForCategory(category, {
     clientNames: [invoice?.client],
     clientDocument: invoice?.clientDocument
   })) {
@@ -137,11 +137,17 @@ const paymentState = (invoice, bankRecord) => {
   return controlState('not_generated', 'Não gerado', 'neutral');
 };
 
-const invoiceControl = (invoice, { pending = null, logs = [], bankRecord = null, now = new Date() } = {}) => ({
+const invoiceControl = (invoice, {
+  pending = null,
+  logs = [],
+  bankRecord = null,
+  category = null,
+  now = new Date()
+} = {}) => ({
   financial: financialState(invoice, now),
   documents: documentState(pending, logs),
   collection: collectionState(logs),
-  payment: paymentState(invoice, bankRecord)
+  payment: paymentState(invoice, bankRecord, category)
 });
 
 const groupByInvoice = (records) => {
@@ -161,13 +167,16 @@ const enrichInvoicesWithControl = async (invoices, dependencies = {}) => {
   const listPending = dependencies.listPending || cobrancaStore.listPending;
   const listLogs = dependencies.listLogs || cobrancaStore.filteredLogs;
   const getBankSlipRecords = dependencies.getBankSlipRecords || boletoStore.getBankSlipRecords;
-  const [pending, logs, bankRecords] = await Promise.all([
+  const listCategories = dependencies.listCategories || cobrancaStore.listCategories;
+  const [pending, logs, bankRecords, categories] = await Promise.all([
     listPending(),
     listLogs(),
-    getBankSlipRecords(invoices.map((invoice) => invoice.id))
+    getBankSlipRecords(invoices.map((invoice) => invoice.id)),
+    listCategories()
   ]);
   const pendingByInvoice = new Map(pending.map((record) => [digits(record.invoiceId), record]));
   const logsByInvoice = groupByInvoice(logs);
+  const categoriesByCnpj = new Map(categories.map((category) => [digits(category.cnpj), category]));
   return invoices.map((invoice) => {
     const id = digits(invoice.id);
     return {
@@ -176,6 +185,7 @@ const enrichInvoicesWithControl = async (invoices, dependencies = {}) => {
         pending: pendingByInvoice.get(id),
         logs: logsByInvoice.get(id) || [],
         bankRecord: bankRecords.get(id),
+        category: categoriesByCnpj.get(digits(invoice.clientDocument)),
         now: dependencies.now?.() || new Date()
       })
     };

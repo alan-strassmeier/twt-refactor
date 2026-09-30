@@ -10,6 +10,7 @@ const {
   companyFromPayload,
   normalizedCompany,
   invoiceTedDocPayment,
+  applyCategoryBillingMethod,
   linkedDocumentsFromInvoice,
   linkedDocumentsFromDoccob,
   detailIdentifiers,
@@ -146,6 +147,20 @@ test('monta o quadro TED/DOC com o lançamento e a parcela da Brudam', () => {
       account: '16666-2'
     }
   });
+});
+
+test('aplica ao PDF a forma de cobrança escolhida no cadastro da empresa', () => {
+  const data = {
+    invoice: { id: '11840', dueAt: '2026-10-13', total: 1385.65, payment: null },
+    client: { document: '41870054000276' }
+  };
+  const ted = applyCategoryBillingMethod(data, { billingMethod: 'ted_doc' });
+  assert.equal(ted.invoice.payment.type, 'ted_doc');
+  assert.equal(ted.invoice.payment.account.account, '16666-2');
+
+  const boleto = applyCategoryBillingMethod(ted, { billingMethod: 'bank_slip' });
+  assert.equal(boleto.invoice.payment, null);
+  assert.equal(data.invoice.payment, null);
 });
 
 test('usa somente os documentos realmente vinculados à fatura', () => {

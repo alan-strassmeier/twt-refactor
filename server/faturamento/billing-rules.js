@@ -42,6 +42,11 @@ const BILLING_BANKS = Object.freeze({
   itau: Object.freeze({ id: 'itau', label: 'Itaú', issuerCnpj: DSL_ISSUER_CNPJ })
 });
 
+const BILLING_METHODS = Object.freeze({
+  bankSlip: 'bank_slip',
+  tedDoc: 'ted_doc'
+});
+
 const digits = (value) => String(value || '').replace(/\D/g, '');
 
 const normalizedRuleText = (value) => String(value || '')
@@ -55,6 +60,12 @@ const normalizedRuleText = (value) => String(value || '')
 const isTedDocPaymentMethod = (value) => {
   const normalized = normalizedRuleText(value);
   return normalized.includes('TRANSFERENCIA') || /(?:^| )(?:TED|DOC)(?: |$)/.test(normalized);
+};
+
+const isWhiteMartinsClient = ({ names = [], document = '' } = {}) => {
+  if (WHITE_MARTINS_TED_DOC_CNPJS.includes(digits(document))) return true;
+  const values = (Array.isArray(names) ? names : [names]).map(normalizedRuleText);
+  return values.some((name) => name.includes('WHITE MARTINS'));
 };
 
 const isTedDocClient = ({ names = [], document = '' } = {}) => {
@@ -71,6 +82,12 @@ const requiresTedDocPayment = ({ clientNames = [], clientDocument = '', paymentM
   isTedDocPaymentMethod(paymentMethod) ||
   isTedDocClient({ names: clientNames, document: clientDocument })
 );
+
+const requiresTedDocForCategory = (category, fallback = {}) => {
+  if (category?.billingMethod === BILLING_METHODS.tedDoc) return true;
+  if (category?.billingMethod === BILLING_METHODS.bankSlip) return false;
+  return requiresTedDocPayment(fallback);
+};
 
 const DSL_TED_DOC_ACCOUNT = Object.freeze({
   method: 'TRANSFERENCIA TED/DOC',
@@ -120,6 +137,7 @@ module.exports = {
   WHITE_MARTINS_TED_DOC_CNPJS,
   ELECNOR_TED_DOC_CNPJS,
   BILLING_BANKS,
+  BILLING_METHODS,
   DSL_TED_DOC_ACCOUNT,
   DSL_TED_DOC_LIQUIDATION,
   isTwtIssuer,
@@ -130,6 +148,8 @@ module.exports = {
   bankSlipBankForIssuer,
   normalizedRuleText,
   isTedDocPaymentMethod,
+  isWhiteMartinsClient,
   isTedDocClient,
-  requiresTedDocPayment
+  requiresTedDocPayment,
+  requiresTedDocForCategory
 };

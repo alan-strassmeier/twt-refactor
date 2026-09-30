@@ -6,6 +6,11 @@ const {
   digits,
   normalizeContactNames
 } = require('./cobranca-contact-import');
+const {
+  BILLING_METHODS,
+  isWhiteMartinsClient,
+  requiresTedDocPayment
+} = require('./billing-rules');
 
 const KEYS = Object.freeze({
   categories: 'faturamento:cobranca:categorias:v1',
@@ -66,13 +71,30 @@ const normalizedEmail = (value) => {
   return email;
 };
 
-const normalizedCategory = (value) => ({
-  cnpj: requiredCnpj(value?.cnpj),
-  name: requiredText(value?.name, 'Nome fantasia', 160),
-  contacts: Array.isArray(value?.contacts)
-    ? value.contacts.map((contact) => ({ ...contact, enabled: contact?.enabled !== false }))
-    : []
-});
+const normalizedCategory = (value) => {
+  const cnpj = requiredCnpj(value?.cnpj);
+  const name = requiredText(value?.name, 'Nome fantasia', 160);
+  const suppliedBillingMethod = String(value?.billingMethod || '').trim();
+  if (suppliedBillingMethod && !Object.values(BILLING_METHODS).includes(suppliedBillingMethod)) {
+    throw Object.assign(new Error('Selecione uma forma de cobrança válida.'), { statusCode: 422 });
+  }
+  const billingMethod = suppliedBillingMethod || (requiresTedDocPayment({
+    clientNames: [name],
+    clientDocument: cnpj
+  }) ? BILLING_METHODS.tedDoc : BILLING_METHODS.bankSlip);
+  const whiteMartins = typeof value?.whiteMartins === 'boolean'
+    ? value.whiteMartins
+    : isWhiteMartinsClient({ names: [name], document: cnpj });
+  return {
+    cnpj,
+    name,
+    billingMethod,
+    whiteMartins,
+    contacts: Array.isArray(value?.contacts)
+      ? value.contacts.map((contact) => ({ ...contact, enabled: contact?.enabled !== false }))
+      : []
+  };
+};
 
 const normalizedContact = (cnpj, value) => {
   const email = normalizedEmail(value?.email);

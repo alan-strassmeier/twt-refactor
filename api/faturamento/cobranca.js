@@ -92,6 +92,14 @@ const handleCategories = async (req, res, query) => {
     });
     return;
   }
+  if (req.method === 'PATCH') {
+    const category = await store.saveCategory(await parseJsonBody(req, 8192));
+    sendJson(res, 200, {
+      category,
+      message: 'Dados da empresa atualizados.'
+    });
+    return;
+  }
   if (req.method === 'DELETE') {
     const deleted = await store.deleteCategory(query.cnpj);
     sendJson(res, deleted ? 200 : 404, {
@@ -100,7 +108,7 @@ const handleCategories = async (req, res, query) => {
     });
     return;
   }
-  res.setHeader('Allow', 'GET, POST, DELETE');
+  res.setHeader('Allow', 'GET, POST, PATCH, DELETE');
   sendJson(res, 405, { message: 'Método não permitido.' });
 };
 
@@ -305,7 +313,7 @@ const handleInvoiceDetail = async (req, res, query) => {
   }
   const cteCount = (Array.isArray(doccob?.transports) ? doccob.transports : [])
     .filter((transport) => transport?.accessKey).length;
-  const controls = invoiceControl(invoice, { pending, logs, bankRecord });
+  const controls = invoiceControl(invoice, { pending, logs, bankRecord, category });
   if (doccob && isDslIssuer(doccob.invoice?.issuerCnpj) && cteCount === 0) {
     controls.documents = {
       code: 'dacte_unavailable',

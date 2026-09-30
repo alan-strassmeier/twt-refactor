@@ -10,7 +10,7 @@ const {
   BANK_SLIP_CREATION_BLOCKED_CODE,
   bankSlipBankForIssuer,
   isBankSlipCreationEligible,
-  requiresTedDocPayment
+  requiresTedDocForCategory
 } = require('./billing-rules');
 const {
   bradescoConfig,
@@ -25,6 +25,7 @@ const {
 const { renderItauBankSlipPdf } = require('./itau-boleto-pdf');
 const { renderBradescoBankSlipPdf } = require('./bradesco-boleto-pdf');
 const store = require('./boleto-store');
+const billingStore = require('./cobranca-store');
 
 const digits = (value) => String(value || '').replace(/\D/g, '');
 const firstValue = (object, keys) => {
@@ -164,11 +165,24 @@ const resolveInvoiceBillingData = async (invoiceId, dependencies = {}, options =
 
   const company = await getCompany(clientCnpj);
   if (!company) throw validationError('Cadastro do pagador não encontrado na Brudam.');
+  const getBillingCategory = dependencies.getBillingCategory || billingStore.getCategory;
+  let billingCategory;
+  try {
+    billingCategory = await getBillingCategory(clientCnpj);
+  } catch (cause) {
+    throw Object.assign(new Error(
+      'Não foi possível confirmar a forma de cobrança cadastrada para esta empresa.'
+    ), {
+      statusCode: 503,
+      expose: true,
+      cause
+    });
+  }
   const paymentMethod = firstValue(invoice, [
     'forma_pagamento', 'forma_pgto', 'forma_pagto', 'meio_pagamento',
     'descricao_forma_pagamento', 'tipo_pagamento'
   ]);
-  if (requiresTedDocPayment({
+  if (requiresTedDocForCategory(billingCategory, {
     clientNames: [
       normalized.client,
       firstValue(company, ['fantasia', 'xFant']),

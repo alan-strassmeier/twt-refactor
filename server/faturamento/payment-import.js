@@ -9,9 +9,6 @@ const APPROVAL_EVENTS = ['initial', 'reminder', 'overdue'];
 const FETCH_CONCURRENCY = 4;
 
 const digits = (value) => String(value || '').replace(/\D/g, '');
-const normalizedText = (value) => String(value || '').trim()
-  .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-  .toLowerCase();
 const cents = (value) => Math.round(Number(value || 0) * 100);
 
 const validIsoDate = (value) => {
@@ -31,7 +28,7 @@ const positiveInteger = (value, label) => {
 };
 
 const isWhiteMartinsCategory = (category) =>
-  digits(category?.cnpj).length === 14 && normalizedText(category?.name).includes('white martins');
+  digits(category?.cnpj).length === 14 && category?.whiteMartins === true;
 
 const paymentSettings = (input = {}) => {
   const paymentDate = String(input.paymentDate || '').trim();

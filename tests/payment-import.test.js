@@ -50,8 +50,16 @@ test('leitor reconhece as colunas da planilha de pagamentos sem perder CNPJ e re
 });
 
 test('escopo da importação aceita apenas categoria identificada como White Martins', () => {
-  assert.equal(isWhiteMartinsCategory({ cnpj: '35820448009516', name: 'BAU WHITE MARTINS GASES' }), true);
-  assert.equal(isWhiteMartinsCategory({ cnpj: '30455661001900', name: 'ELECNOR DO BRASIL' }), false);
+  assert.equal(isWhiteMartinsCategory({
+    cnpj: '35820448009516',
+    name: 'BAU EDITADA',
+    whiteMartins: true
+  }), true);
+  assert.equal(isWhiteMartinsCategory({
+    cnpj: '35820448009516',
+    name: 'BAU WHITE MARTINS GASES',
+    whiteMartins: false
+  }), false);
 });
 
 test('análise vincula CT-e, DOCCOB e fatura aberta somente quando o valor fecha', async () => {
@@ -72,7 +80,11 @@ test('análise vincula CT-e, DOCCOB e fatura aberta somente quando o valor fecha
       }],
       errors: []
     }),
-    listCategories: async () => [{ cnpj: '41870054000276', name: 'White Martins Cariacica' }],
+    listCategories: async () => [{
+      cnpj: '41870054000276',
+      name: 'White Martins Cariacica',
+      whiteMartins: true
+    }],
     findMatches: async () => [{
       reference: '15342',
       invoiceId: '11840',

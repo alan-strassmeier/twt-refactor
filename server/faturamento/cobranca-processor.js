@@ -8,7 +8,11 @@ const {
   isPendingInvoice
 } = require('./brudam');
 const { findDoccobForInvoice } = require('./r2-doccob');
-const { fetchInvoicePdfData, buildInvoicePdf } = require('./invoice-pdf');
+const {
+  fetchInvoicePdfData,
+  buildInvoicePdf,
+  applyCategoryBillingMethod
+} = require('./invoice-pdf');
 const { generateInvoiceBankSlip, getInvoiceBankSlipPdf } = require('./boleto');
 const { issueInvoiceNfse, getIssuedNfseXml } = require('./nfse');
 const { buildDanfsePdf } = require('./danfse');
@@ -576,7 +580,7 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
     return;
   }
 
-  const data = await context.fetchInvoicePdfData(invoice.id);
+  let data = await context.fetchInvoicePdfData(invoice.id);
   if (
     Object.prototype.hasOwnProperty.call(data?.invoice || {}, 'balance')
     && !isPendingInvoice(data.invoice)
@@ -587,6 +591,7 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
   const category = resolvedCnpj === clientCnpj
     ? categoryBeforeInvoiceLookup
     : await context.getCategory(resolvedCnpj);
+  data = applyCategoryBillingMethod(data, category);
   const contacts = enabledContacts(category);
   const missingCustomerContacts = contacts.length === 0;
   if (missingCustomerContacts) {

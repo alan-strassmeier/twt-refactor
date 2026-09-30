@@ -1494,9 +1494,33 @@ body.modal-open {
 
 .category-form {
   padding: 20px 24px;
-  grid-template-columns: minmax(190px, .7fr) minmax(240px, 1.3fr) auto;
+  grid-template-columns: minmax(180px, .65fr) minmax(220px, 1fr) minmax(190px, .75fr) auto auto;
   border-bottom: 1px solid var(--line);
   background: #f8fbfd;
+}
+
+.category-flag-field {
+  min-height: 43px;
+  padding: 0 12px;
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center;
+  gap: 8px !important;
+  border: 1px solid #cbd9e3;
+  border-radius: 9px;
+  color: var(--ink);
+  background: #fff;
+  font-size: .82rem;
+  font-weight: 700;
+}
+
+.category-flag-field input {
+  width: 17px;
+  height: 17px;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--blue-600);
 }
 
 .category-list {
@@ -1529,6 +1553,28 @@ body.modal-open {
   display: inline-grid;
   gap: 3px;
   margin-right: auto;
+}
+
+.category-company-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.category-badge {
+  padding: 3px 7px;
+  border-radius: 999px;
+  color: #1c5f91;
+  background: #eaf5fc;
+  font-size: .67rem;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.category-badge.is-white-martins {
+  color: #176b37;
+  background: #eaf8ef;
 }
 
 .category-card > summary strong,
@@ -1648,11 +1694,28 @@ body.modal-open {
   background: #f8fbfd;
 }
 
+.category-settings-form {
+  margin-top: 12px;
+  padding: 16px;
+  grid-template-columns: minmax(220px, 1fr) minmax(190px, .7fr) auto auto auto;
+  border: 1px solid #cfe0ec;
+  border-radius: 12px;
+  background: #f3f9fd;
+}
+
+.category-settings-form[hidden] { display: none; }
+
 .category-footer {
   padding-top: 14px;
   display: flex;
   justify-content: space-between;
   gap: 12px;
+}
+
+.category-footer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
 }
 
 .danger-button {
@@ -2398,7 +2461,9 @@ body.modal-open {
     max-height: 360px;
   }
 
-  .contact-form {
+  .category-form,
+  .contact-form,
+  .category-settings-form {
     grid-template-columns: repeat(2, minmax(180px, 1fr));
   }
 
@@ -2447,6 +2512,7 @@ body.modal-open {
   .collection-summary,
   .category-form,
   .contact-form,
+  .category-settings-form,
   .logs-form,
   .payment-import-form {
     grid-template-columns: 1fr;

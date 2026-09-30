@@ -55,6 +55,7 @@ const billingDependencies = (issuerCnpj = '09123137000108') => ({
     transports: []
   }),
   fetchCompany: async () => payerCompany,
+  getBillingCategory: async () => null,
   isBankSlipCreationEligible: () => true,
   now: new Date('2026-08-08T12:00:00Z')
 });
@@ -146,6 +147,26 @@ test('bloqueia geração de boleto para cliente com pagamento por TED/DOC', asyn
     }),
     (error) => error.statusCode === 422 && /TED\/DOC/.test(error.message)
   );
+});
+
+test('prioriza a forma de cobrança escolhida no cadastro da empresa', async () => {
+  await assert.rejects(
+    resolveInvoiceBillingData('11518', {
+      ...billingDependencies('97434690000129'),
+      getBillingCategory: async () => ({ billingMethod: 'ted_doc' })
+    }),
+    (error) => error.statusCode === 422 && /TED\/DOC/.test(error.message)
+  );
+
+  const boleto = await resolveInvoiceBillingData('11518', {
+    ...billingDependencies('97434690000129'),
+    fetchCompany: async () => ({
+      ...payerCompany,
+      fantasia: 'THE WHITE MARTINS GASES INDUSTRIAIS DO NORDESTE LTDA.'
+    }),
+    getBillingCategory: async () => ({ billingMethod: 'bank_slip' })
+  });
+  assert.equal(boleto.bank, BILLING_BANKS.itau);
 });
 
 test('bloqueia somente a criação de boleto para fatura anterior ao corte', async () => {

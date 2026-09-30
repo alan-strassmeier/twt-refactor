@@ -174,7 +174,7 @@
 
   const setLoading = (loading) => {
     state.loading = loading;
-    elements.collectionWorkspace.querySelectorAll('button, input').forEach((control) => {
+    elements.collectionWorkspace.querySelectorAll('button, input, select').forEach((control) => {
       control.disabled = loading;
     });
     elements.previousLogPage.disabled = loading || state.logPage <= 1;
@@ -363,6 +363,33 @@
     }
   };
 
+  const saveCategorySettings = async (category, form, card) => {
+    const data = new FormData(form);
+    setLoading(true);
+    try {
+      const result = await requestJson(endpoint('categories'), {
+        method: 'PATCH',
+        body: JSON.stringify({
+          cnpj: category.cnpj,
+          name: data.get('name'),
+          billingMethod: data.get('billingMethod'),
+          whiteMartins: data.get('whiteMartins') === 'on'
+        })
+      });
+      const updated = result.category;
+      const index = state.categories.findIndex((item) => item.cnpj === category.cnpj);
+      if (index >= 0) state.categories[index] = updated;
+      const replacement = createCategoryCard(updated);
+      replacement.open = true;
+      card.replaceWith(replacement);
+      setMessage(result.message || 'Dados da empresa atualizados.', 'success');
+    } catch (error) {
+      setMessage(error.message, 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const createCategoryCard = (category) => {
     const card = document.createElement('details');
     card.className = 'category-card';
@@ -371,9 +398,21 @@
     const company = document.createElement('span');
     const name = document.createElement('strong');
     name.textContent = category.name;
+    const metadata = document.createElement('span');
+    metadata.className = 'category-company-meta';
     const cnpj = document.createElement('small');
     cnpj.textContent = formatCnpj(category.cnpj);
-    company.append(name, cnpj);
+    const billingBadge = document.createElement('span');
+    billingBadge.className = 'category-badge';
+    billingBadge.textContent = category.billingMethod === 'ted_doc' ? 'TED/DOC' : 'Boleto';
+    metadata.append(cnpj, billingBadge);
+    if (category.whiteMartins === true) {
+      const whiteMartinsBadge = document.createElement('span');
+      whiteMartinsBadge.className = 'category-badge is-white-martins';
+      whiteMartinsBadge.textContent = 'White Martins';
+      metadata.appendChild(whiteMartinsBadge);
+    }
+    company.append(name, metadata);
     const count = document.createElement('span');
     count.className = 'category-count';
     const updateCounts = () => {
@@ -419,6 +458,37 @@
       event.preventDefault();
       saveContact(category, form);
     });
+
+    const settingsForm = document.createElement('form');
+    settingsForm.className = 'collection-form category-settings-form';
+    settingsForm.hidden = true;
+    settingsForm.innerHTML = `
+      <label>Nome fantasia
+        <input name="name" type="text" autocomplete="organization" maxlength="160" required>
+      </label>
+      <label>Forma de cobrança
+        <select name="billingMethod" required>
+          <option value="bank_slip">Boleto</option>
+          <option value="ted_doc">Transferência TED/DOC</option>
+        </select>
+      </label>
+      <label class="category-flag-field">
+        <input name="whiteMartins" type="checkbox">
+        <span>Empresa White Martins</span>
+      </label>
+      <button class="button button-primary" type="submit">Salvar alterações</button>
+      <button class="button button-quiet" type="button" data-cancel-category-edit>Cancelar</button>`;
+    settingsForm.elements.name.value = category.name;
+    settingsForm.elements.billingMethod.value = category.billingMethod || 'bank_slip';
+    settingsForm.elements.whiteMartins.checked = category.whiteMartins === true;
+    settingsForm.addEventListener('submit', (event) => {
+      event.preventDefault();
+      saveCategorySettings(category, settingsForm, card);
+    });
+    settingsForm.querySelector('[data-cancel-category-edit]').addEventListener('click', () => {
+      settingsForm.hidden = true;
+    });
+
     const removeCategory = document.createElement('button');
     removeCategory.type = 'button';
     removeCategory.className = 'button button-quiet danger-button';
@@ -429,10 +499,21 @@
     updateContacts.className = 'button button-quiet';
     updateContacts.textContent = 'Atualizar Contatos';
     updateContacts.addEventListener('click', () => syncContacts(category));
+    const editCategory = document.createElement('button');
+    editCategory.type = 'button';
+    editCategory.className = 'button button-quiet';
+    editCategory.textContent = 'Editar empresa';
+    editCategory.addEventListener('click', () => {
+      settingsForm.hidden = !settingsForm.hidden;
+      if (!settingsForm.hidden) settingsForm.elements.name.focus();
+    });
     const footer = document.createElement('div');
     footer.className = 'category-footer';
-    footer.append(updateContacts, removeCategory);
-    content.append(contacts, form, footer);
+    const footerActions = document.createElement('div');
+    footerActions.className = 'category-footer-actions';
+    footerActions.append(updateContacts, editCategory);
+    footer.append(footerActions, removeCategory);
+    content.append(contacts, form, settingsForm, footer);
     card.append(summary, content);
     return card;
   };
@@ -957,7 +1038,12 @@
     try {
       const result = await requestJson(endpoint('categories'), {
         method: 'POST',
-        body: JSON.stringify({ cnpj: data.get('cnpj'), name: data.get('name') })
+        body: JSON.stringify({
+          cnpj: data.get('cnpj'),
+          name: data.get('name'),
+          billingMethod: data.get('billingMethod'),
+          whiteMartins: data.get('whiteMartins') === 'on'
+        })
       });
       elements.categoryForm.reset();
       setMessage(result.message || 'Empresa salva.', 'success');

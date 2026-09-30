@@ -9,6 +9,7 @@ const {
 } = require('./brudam');
 const { findDoccobForInvoice } = require('./r2-doccob');
 const {
+  BILLING_METHODS,
   DSL_TED_DOC_ACCOUNT,
   isDslIssuer,
   requiresTedDocPayment
@@ -175,6 +176,34 @@ const invoiceTedDocPayment = ({ invoice, normalizedInvoice, client, issuerDocume
     value: normalizedInvoice?.total,
     method: DSL_TED_DOC_ACCOUNT.method,
     account: DSL_TED_DOC_ACCOUNT
+  };
+};
+
+const applyCategoryBillingMethod = (data, category) => {
+  const billingMethod = category?.billingMethod;
+  if (!Object.values(BILLING_METHODS).includes(billingMethod) || !data?.invoice) return data;
+  if (billingMethod === BILLING_METHODS.bankSlip) {
+    return {
+      ...data,
+      invoice: { ...data.invoice, payment: null }
+    };
+  }
+  const current = data.invoice.payment || {};
+  return {
+    ...data,
+    invoice: {
+      ...data.invoice,
+      payment: {
+        ...current,
+        type: 'ted_doc',
+        number: current.number || data.invoice.internalId || data.invoice.id || '-',
+        dueAt: current.dueAt || data.invoice.dueAt,
+        installment: current.installment || '1/1',
+        value: current.value || data.invoice.total,
+        method: DSL_TED_DOC_ACCOUNT.method,
+        account: DSL_TED_DOC_ACCOUNT
+      }
+    }
   };
 };
 
@@ -1110,6 +1139,7 @@ module.exports = {
   normalizedCompany,
   invoicePaymentMethod,
   invoiceTedDocPayment,
+  applyCategoryBillingMethod,
   fetchCompany,
   linkedDocumentsFromInvoice,
   linkedDocumentsFromDoccob,

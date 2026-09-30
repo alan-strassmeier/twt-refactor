@@ -11,6 +11,7 @@ const {
 const seed = require('../server/faturamento/cobranca-contacts-seed.json');
 const {
   normalizedContact,
+  normalizedCategory,
   mergeContacts,
   setContactEnabled,
   deliveryField,
@@ -148,6 +149,26 @@ test('interpreta os contatos de xGrupo retornados pela Brudam', () => {
   }]);
 });
 
+test('normaliza forma de cobrança e marca White Martins preservando cadastros antigos', () => {
+  const legacy = normalizedCategory({
+    cnpj: '35.820.448/0095-16',
+    name: 'BAU WHITE MARTINS GASES',
+    contacts: []
+  });
+  assert.equal(legacy.billingMethod, 'ted_doc');
+  assert.equal(legacy.whiteMartins, true);
+
+  const edited = normalizedCategory({
+    ...legacy,
+    name: 'BAU EDITADA',
+    billingMethod: 'bank_slip',
+    whiteMartins: false
+  });
+  assert.equal(edited.name, 'BAU EDITADA');
+  assert.equal(edited.billingMethod, 'bank_slip');
+  assert.equal(edited.whiteMartins, false);
+});
+
 test('ao cadastrar empresa importa os contatos da Brudam pelo CNPJ', async () => {
   const saved = [];
   const merged = [];
@@ -164,7 +185,12 @@ test('ao cadastrar empresa importa os contatos da Brudam pelo CNPJ', async () =>
       };
     }
   };
-  const result = await registerCompany({ cnpj: '11.280.282/0001-44', name: '' }, {
+  const result = await registerCompany({
+    cnpj: '11.280.282/0001-44',
+    name: '',
+    billingMethod: 'bank_slip',
+    whiteMartins: false
+  }, {
     store: storage,
     get: async (url) => {
       assert.equal(url, '/cadastro/empresas?cnpj=11280282000144');
@@ -181,7 +207,12 @@ test('ao cadastrar empresa importa os contatos da Brudam pelo CNPJ', async () =>
       };
     }
   });
-  assert.deepEqual(saved, [{ cnpj: '11.280.282/0001-44', name: 'BHZ' }]);
+  assert.deepEqual(saved, [{
+    cnpj: '11.280.282/0001-44',
+    name: 'BHZ',
+    billingMethod: 'bank_slip',
+    whiteMartins: false
+  }]);
   assert.equal(merged[0].cnpj, '11280282000144');
   assert.equal(result.imported, 1);
 });
@@ -2068,6 +2099,18 @@ test('mantém estados financeiro, documental, de cobrança e pagamento independe
     client: 'RS WHITE MARTINS GASES INDUSTRIAIS LTDA'
   });
   assert.equal(ted.payment.code, 'ted_doc');
+
+  const selectedTed = invoiceControl(invoice, {
+    category: { billingMethod: 'ted_doc' }
+  });
+  assert.equal(selectedTed.payment.code, 'ted_doc');
+  const selectedBoleto = invoiceControl({
+    ...invoice,
+    client: 'RS WHITE MARTINS GASES INDUSTRIAIS LTDA'
+  }, {
+    category: { billingMethod: 'bank_slip' }
+  });
+  assert.equal(selectedBoleto.payment.code, 'not_generated');
 });
 
 test('fila unificada prioriza vencidas e reúne falhas de documentos e entrega', () => {
@@ -2222,6 +2265,8 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   const apiSource = fs.readFileSync(path.join(root, 'api', 'faturamento', 'cobranca.js'), 'utf8');
   assert.match(html, /data-billing-area="collection"/);
   assert.match(html, /id="categoryForm"/);
+  assert.match(html, /name="billingMethod"/);
+  assert.match(html, /name="whiteMartins"/);
   assert.match(html, /id="pendingRows"/);
   assert.match(html, /id="collectionLogsForm"/);
   assert.match(html, /id="previousLogPage"/);
@@ -2259,6 +2304,9 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.doesNotMatch(apiSource, /store\.deleteLog/);
   assert.match(apiSource, /setHeader\('Allow', 'GET, PATCH'\)/);
   assert.match(source, /Atualizar Contatos/);
+  assert.match(source, /Editar empresa/);
+  assert.match(source, /method: 'PATCH'[\s\S]*whiteMartins/);
+  assert.match(apiSource, /setHeader\('Allow', 'GET, POST, PATCH, DELETE'\)/);
   assert.match(source, /Envio ✔️/);
   assert.match(source, /Envio ❌/);
   assert.match(source, /method: 'PATCH'/);
