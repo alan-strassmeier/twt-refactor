@@ -2339,6 +2339,7 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(html, /data-collection-section="paymentImportSection"/);
   assert.match(html, /id="paymentImportForm"/);
   assert.match(html, /id="approveAllPayments"/);
+  assert.match(html, /id="bankDiagnosticButton"/);
   assert.match(html, /Transferência TED\/DOC · Conta: ITAÚ-DSL/);
   assert.doesNotMatch(html, /name="paymentMethodId"|name="bankAccountId"/);
   assert.doesNotMatch(source, /data\.get\('paymentMethodId'\)|data\.get\('bankAccountId'\)/);
@@ -2365,6 +2366,9 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.doesNotMatch(source, /const setContactEnabled[\s\S]*?await loadCategories\(\);[\s\S]*?const syncContacts/);
   assert.match(source, /panel\.hidden = panel\.id !== sectionId/);
   assert.match(source, /setCollectionSection\(state\.collectionSection\)/);
+  assert.match(source, /endpoint\('bank-diagnostic'\)/);
+  assert.match(source, /describeBank\('Itaú'/);
+  assert.match(source, /describeBank\('Bradesco'/);
   assert.match(source, /billing:open-documents/);
   assert.match(source, /billing:open-invoice-detail/);
   assert.match(source, /Conferir documentos/);

@@ -1342,6 +1342,14 @@ body.modal-open {
 
 .collection-heading { margin-bottom: 0; }
 
+.collection-heading-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 .collection-quick-nav {
   position: sticky;
   top: 12px;
@@ -2509,6 +2517,11 @@ body.modal-open {
   .dashboard-heading {
     align-items: start;
     flex-direction: column;
+  }
+
+  .collection-heading-actions {
+    width: 100%;
+    justify-content: flex-start;
   }
 
   .filter-grid,

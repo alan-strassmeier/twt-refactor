@@ -9,6 +9,7 @@
     collectionSectionPanels: [...document.querySelectorAll('.collection-anchor-target')],
     message: document.getElementById('collectionMessage'),
     runButton: document.getElementById('runCollectionButton'),
+    bankDiagnosticButton: document.getElementById('bankDiagnosticButton'),
     companyCount: document.getElementById('collectionCompanyCount'),
     contactCount: document.getElementById('collectionContactCount'),
     pendingCount: document.getElementById('collectionPendingCount'),
@@ -179,6 +180,21 @@
     });
     elements.previousLogPage.disabled = loading || state.logPage <= 1;
     elements.nextLogPage.disabled = loading || state.logPage >= state.logTotalPages;
+  };
+
+  const bankDiagnosticMessage = (result) => {
+    const describeBank = (name, bank) => bank?.ok
+      ? `${name}: consulta autorizada (${Number(bank.records || 0)} registro(s), data ${formatDate(bank.queriedDate)})`
+      : `${name}: falha — ${bank?.message || 'resposta não identificada'}`;
+    const configuration = result?.brudamConfiguration || {};
+    const configured = configuration.paymentMethod
+      && configuration.itauAccount
+      && configuration.bradescoAccount;
+    return [
+      describeBank('Itaú', result?.banks?.itau),
+      describeBank('Bradesco', result?.banks?.bradesco),
+      `Brudam: ${configured ? 'IDs configurados' : 'configuração incompleta'}`
+    ].join(' · ');
   };
 
   const deleteContact = async (cnpj, id) => {
@@ -1151,6 +1167,21 @@
       setLoading(false);
     }
   });
+
+  if (elements.bankDiagnosticButton) {
+    elements.bankDiagnosticButton.addEventListener('click', async () => {
+      setLoading(true);
+      setMessage('Consultando Itaú e Bradesco em modo somente leitura…');
+      try {
+        const result = await requestJson(endpoint('bank-diagnostic'));
+        setMessage(bankDiagnosticMessage(result), result.ok ? 'success' : 'warning');
+      } catch (error) {
+        setMessage(error.message, 'error');
+      } finally {
+        setLoading(false);
+      }
+    });
+  }
 
   elements.runButton.addEventListener('click', async () => {
     const maxRounds = 25;
