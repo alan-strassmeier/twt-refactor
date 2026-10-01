@@ -220,6 +220,53 @@ const claimQueuedNfseForA1 = async ({ invoiceId, environment, now = Date.now() }
   return parseRecord(value);
 };
 
+const discardStaleNfseRecovery = async ({
+  invoiceId,
+  environment,
+  dpsId,
+  now = Date.now()
+}, command = redisCommand) => {
+  const normalizedEnvironment = normalizeEnvironment(environment);
+  const script = [
+    "local raw = redis.call('GET', KEYS[1])",
+    'if not raw then return 0 end',
+    'local ok, record = pcall(cjson.decode, raw)',
+    'if not ok then return 0 end',
+    "local state = tostring(record['state'] or '')",
+    "local leaseExpires = tonumber(record['leaseExpiresAtEpoch'] or 0)",
+    "local isEligible = state == 'queued' or (state == 'agent_processing' and leaseExpires <= tonumber(ARGV[1]))",
+    "local isRecovery = tostring(record['jobAction'] or '') == 'recover'",
+    "local sameDps = tostring(record['dpsId'] or '') == ARGV[2]",
+    'if not (isEligible and isRecovery and sameDps) then return 0 end',
+    "redis.call('DEL', KEYS[1])",
+    "redis.call('ZREM', KEYS[2], ARGV[3])",
+    "local legacyRaw = redis.call('GET', KEYS[3])",
+    'if legacyRaw then',
+    '  local legacyOk, legacy = pcall(cjson.decode, legacyRaw)',
+    "  local legacyEnvironment = legacyOk and tostring(legacy['environment'] or 'homologation') or ''",
+    "  local legacyAction = legacyOk and tostring(legacy['jobAction'] or '') or ''",
+    "  local legacyDps = legacyOk and tostring(legacy['dpsId'] or '') or ''",
+    "  if legacyOk and legacyEnvironment == ARGV[4] and legacyAction == 'recover' and legacyDps == ARGV[2] then",
+    "    redis.call('DEL', KEYS[3])",
+    '  end',
+    'end',
+    'return 1'
+  ].join('\n');
+  const result = await command(
+    'EVAL',
+    script,
+    '3',
+    recordKeyFor(invoiceId, normalizedEnvironment),
+    agentQueueKeyFor(normalizedEnvironment),
+    legacyRecordKeyFor(invoiceId),
+    String(now),
+    String(dpsId),
+    String(invoiceId),
+    normalizedEnvironment
+  );
+  return Number(result) === 1;
+};
+
 const assertNfseJobLease = async ({ invoiceId, leaseToken, agentId, environment },
   command = redisCommand) => {
   const record = await getNfseRecord(invoiceId, environment, command);
@@ -252,6 +299,7 @@ module.exports = {
   enqueueNfseJob,
   claimNextNfseJob,
   claimQueuedNfseForA1,
+  discardStaleNfseRecovery,
   assertNfseJobLease,
   removeNfseJobFromQueue
 };

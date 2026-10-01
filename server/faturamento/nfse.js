@@ -316,6 +316,7 @@ const issueInvoiceNfse = async (invoiceId, dependencies = {}) => {
   const reserveNumber = dependencies.reserveDpsNumber || store.reserveDpsNumber;
   const enqueueJob = dependencies.enqueueNfseJob || store.enqueueNfseJob;
   const claimQueuedForA1 = dependencies.claimQueuedNfseForA1 || store.claimQueuedNfseForA1;
+  const discardRecovery = dependencies.discardStaleNfseRecovery || store.discardStaleNfseRecovery;
   const submitDps = dependencies.postDps || postDps;
   const certificateMode = config.certificateMode || 'a1';
   const data = await resolveInvoiceNfseData(invoiceId, dependencies);
@@ -342,40 +343,50 @@ const issueInvoiceNfse = async (invoiceId, dependencies = {}) => {
   }
   if (certificateMode === 'a1' &&
       existing && ['queued', 'agent_processing'].includes(existing.state)) {
-    if (existing.state === 'agent_processing') {
+    const unsignedXml = existing.jobAction === 'recover' ? '' : unsignedDpsFromRecord(existing);
+    if (existing.state === 'agent_processing' || !unsignedXml) {
       const recovered = await recoverExisting(existing, config, dependencies);
       if (recovered) return publicResult(recovered, false, certificateMode);
     }
-    const unsignedXml = existing.jobAction === 'recover' ? '' : unsignedDpsFromRecord(existing);
-    if (!unsignedXml) throw generationConflict();
-    const signedXml = signDpsXml(unsignedXml, config);
-    const processingRecord = await claimQueuedForA1({
-      invoiceId: data.invoice.id,
-      environment: config.environment,
-      now: Date.now()
-    });
-    if (!processingRecord) throw generationConflict();
-    try {
-      const response = await submitDps(signedXml, { config });
-      const issued = await finalizeAuthorizedDocument({
-        record: processingRecord,
-        response,
-        xml: response.xml
-      }, dependencies);
-      return publicResult(issued, true, certificateMode);
-    } catch (error) {
-      if (error.ambiguousNfseState) {
-        const reviewRecord = {
-          ...processingRecord,
-          state: 'review',
-          reviewReason: 'upstream',
-          reviewedAt: new Date().toISOString()
-        };
-        try { await saveRecord(data.invoice.id, reviewRecord); } catch { /* mantém processing */ }
-      } else if (error.receivedResponse === true) {
-        try { await release(data.invoice.id, config.environment); } catch { /* mantém registro */ }
+    if (!unsignedXml) {
+      if (!existing.dpsId) throw generationConflict();
+      const discarded = await discardRecovery({
+        invoiceId: data.invoice.id,
+        environment: config.environment,
+        dpsId: existing.dpsId,
+        now: Date.now()
+      });
+      if (!discarded) throw generationConflict();
+    } else {
+      const signedXml = signDpsXml(unsignedXml, config);
+      const processingRecord = await claimQueuedForA1({
+        invoiceId: data.invoice.id,
+        environment: config.environment,
+        now: Date.now()
+      });
+      if (!processingRecord) throw generationConflict();
+      try {
+        const response = await submitDps(signedXml, { config });
+        const issued = await finalizeAuthorizedDocument({
+          record: processingRecord,
+          response,
+          xml: response.xml
+        }, dependencies);
+        return publicResult(issued, true, certificateMode);
+      } catch (error) {
+        if (error.ambiguousNfseState) {
+          const reviewRecord = {
+            ...processingRecord,
+            state: 'review',
+            reviewReason: 'upstream',
+            reviewedAt: new Date().toISOString()
+          };
+          try { await saveRecord(data.invoice.id, reviewRecord); } catch { /* mantém processing */ }
+        } else if (error.receivedResponse === true) {
+          try { await release(data.invoice.id, config.environment); } catch { /* mantém registro */ }
+        }
+        throw error;
       }
-      throw error;
     }
   }
   if (existing && ['processing', 'review'].includes(existing.state)) {
