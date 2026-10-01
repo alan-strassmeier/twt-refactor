@@ -2383,6 +2383,7 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(apiSource, /query\.route === 'invoice-detail'/);
   assert.match(apiSource, /query\.route === 'invoice-block'/);
   assert.match(apiSource, /query\.route === 'payment-import'/);
+  assert.match(apiSource, /query\.route === 'bank-diagnostic'/);
   assert.match(apiSource, /store\.dismissIssue\(issue\.id, issue\.updatedAt\)/);
   assert.match(apiSource, /query\.route === 'resend'/);
   assert.match(apiSource, /req\.method === 'GET' \|\| req\.method === 'HEAD'/);

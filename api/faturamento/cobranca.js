@@ -21,6 +21,9 @@ const {
   approvePaymentImport
 } = require('../../server/faturamento/payment-import');
 const {
+  runBankQueryDiagnostic
+} = require('../../server/faturamento/bank-query-diagnostic');
+const {
   BANK_SLIP_CREATION_START_DATE,
   isDslIssuer,
   isBankSlipCreationEligible
@@ -470,6 +473,17 @@ const handlePaymentImport = async (req, res, query) => {
   sendJson(res, 405, { message: 'Método não permitido.' });
 };
 
+const handleBankDiagnostic = async (req, res) => {
+  if (!requireSession(req, res)) return;
+  if (req.method !== 'GET') {
+    res.setHeader('Allow', 'GET');
+    sendJson(res, 405, { message: 'Método não permitido.' });
+    return;
+  }
+  const result = await runBankQueryDiagnostic();
+  sendJson(res, 200, result);
+};
+
 const handleProcess = async (req, res, query) => {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
@@ -621,6 +635,7 @@ module.exports = async (req, res) => {
     if (query.route === 'invoice-detail') return await handleInvoiceDetail(req, res, query);
     if (query.route === 'invoice-block') return await handleInvoiceBlock(req, res);
     if (query.route === 'payment-import') return await handlePaymentImport(req, res, query);
+    if (query.route === 'bank-diagnostic') return await handleBankDiagnostic(req, res);
     if (query.route === 'logs') return await handleLogs(req, res, query);
     if (query.route === 'resend') return await handleResend(req, res);
     if (query.route === 'process') return await handleProcess(req, res, query);

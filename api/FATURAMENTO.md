@@ -294,6 +294,13 @@ exibidos pela Brudam. Não utilize `ITAU_BENEFICIARY_ID`, `BRADESCO_ACCOUNT` ou
 o número bancário visível como substitutos. Sem esses IDs, a consulta bancária
 continua possível, mas a baixa é recusada com diagnóstico de configuração.
 
+Administradores autenticados podem validar exclusivamente a permissão de
+consulta com `GET /api/faturamento/cobranca?route=bank-diagnostic`. A rota usa
+`GET /boletos` no Itaú e a listagem de títulos liquidados de D-1 no Bradesco,
+retornando somente o sucesso, a quantidade de registros e o estado de
+configuração dos IDs da Brudam. Ela não emite boleto, não liquida fatura, não
+envia e-mail e não grava estado no Redis.
+
 ## Roteamento dos boletos
 
 O banco é definido no servidor pelo emitente confirmado nos dados da
