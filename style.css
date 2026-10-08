@@ -987,6 +987,15 @@ textarea:focus:not(:focus-visible) {
   color: var(--color-form-success);
 }
 
+.contact .form-feedback {
+  width: 48%;
+}
+
+#cotationForm > .form-feedback {
+  width: 48%;
+  margin: 12px auto 0;
+}
+
 footer {
   padding: 0 7%;
   background-color: var(--color-footer);
@@ -1568,6 +1577,9 @@ footer .contact-social {
   }
   .contact .form-button {
     font-size: 18px;
+    width: 100%;
+  }
+  .contact .form-feedback {
     width: 100%;
   }
   footer .contact-social p {

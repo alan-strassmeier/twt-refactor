@@ -44,6 +44,8 @@ import { APP_EVENTS, createElement } from './dom-utils.js';
   ];
 
   const FORM_ENDPOINT = '/api/public-form';
+  const SUCCESS_FEEDBACK_TIMEOUT_MS = 5_000;
+  const feedbackTimers = new WeakMap();
   const COOKIE_NAME = 'twtAcceptCookies';
 
   class StateDropdown {
@@ -438,6 +440,8 @@ import { APP_EVENTS, createElement } from './dom-utils.js';
 
   const submitForm = async (form, submitButton) => {
     const feedback = form?.querySelector('.form-feedback');
+    clearTimeout(feedbackTimers.get(form));
+    feedbackTimers.delete(form);
     if (feedback) {
       feedback.textContent = '';
       feedback.classList.remove('is-error', 'is-success');
@@ -482,6 +486,11 @@ import { APP_EVENTS, createElement } from './dom-utils.js';
       if (feedback) {
         feedback.textContent = 'E-mail enviado com sucesso!';
         feedback.classList.add('is-success');
+        feedbackTimers.set(form, setTimeout(() => {
+          feedback.textContent = '';
+          feedback.classList.remove('is-success');
+          feedbackTimers.delete(form);
+        }, SUCCESS_FEEDBACK_TIMEOUT_MS));
       }
       form.reset();
       form.querySelectorAll('.verify-field').forEach((field) => {
