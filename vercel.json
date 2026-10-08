@@ -53,6 +53,9 @@
     }
   ],
   "functions": {
+    "api/public-form.js": {
+      "maxDuration": 30
+    },
     "api/faturamento/fatura-pdf.js": {
       "maxDuration": 60,
       "includeFiles": "assets/twtlogo.png"

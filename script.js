@@ -43,7 +43,7 @@ import { APP_EVENTS, createElement } from './dom-utils.js';
     }
   ];
 
-  const FORM_ENDPOINT = 'https://formmail.kinghost.net/formmail.cgi';
+  const FORM_ENDPOINT = '/api/public-form';
   const COOKIE_NAME = 'twtAcceptCookies';
 
   class StateDropdown {
@@ -106,6 +106,15 @@ import { APP_EVENTS, createElement } from './dom-utils.js';
         this.trigger.focus();
       });
       this.trigger.addEventListener('keydown', (event) => this.handleKeydown(event));
+      this.root.closest('form')?.addEventListener('reset', () => {
+        this.input.value = '';
+        this.trigger.textContent = 'Estado';
+        this.trigger.classList.remove('active-dropdown-value');
+        this.list.querySelectorAll('[role="option"]').forEach((item) => {
+          item.setAttribute('aria-selected', 'false');
+        });
+        this.close();
+      });
       document.addEventListener('click', (event) => {
         if (!this.root.contains(event.target)) this.close();
       });
@@ -428,6 +437,11 @@ import { APP_EVENTS, createElement } from './dom-utils.js';
   };
 
   const submitForm = async (form, submitButton) => {
+    const feedback = form?.querySelector('.form-feedback');
+    if (feedback) {
+      feedback.textContent = '';
+      feedback.classList.remove('is-error', 'is-success');
+    }
     const checkedFields = [...(form?.querySelectorAll('.js-email, .js-phone, .js-document') ?? [])];
     const customFieldsAreValid = checkedFields
       .map((input) => validateInteractiveField(input))
@@ -437,6 +451,14 @@ import { APP_EVENTS, createElement } from './dom-utils.js';
       return;
     }
     if (!form?.reportValidity()) return;
+    if (form.id === 'messageForm' && !form.elements.Estado?.value) {
+      if (feedback) {
+        feedback.textContent = 'Selecione um estado para enviar a mensagem.';
+        feedback.classList.add('is-error');
+      }
+      form.querySelector('.dropdown-value')?.focus();
+      return;
+    }
 
     const button = submitButton ?? form.querySelector('button[type="submit"], button');
     if (!button) return;
@@ -447,13 +469,20 @@ import { APP_EVENTS, createElement } from './dom-utils.js';
     try {
       const response = await fetch(FORM_ENDPOINT, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
-        body: new URLSearchParams(new FormData(form)).toString()
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          kind: form.id === 'messageForm' ? 'contact' : 'quotation',
+          fields: Object.fromEntries(new FormData(form)),
+          website: form.elements.website?.value || ''
+        })
       });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.message || `Falha no envio: HTTP ${response.status}`);
 
-      if (!response.ok) throw new Error(`Falha no envio: HTTP ${response.status}`);
-
-      window.alert('E-mail enviado com sucesso!');
+      if (feedback) {
+        feedback.textContent = 'E-mail enviado com sucesso!';
+        feedback.classList.add('is-success');
+      }
       form.reset();
       form.querySelectorAll('.verify-field').forEach((field) => {
         field.classList.remove('is-visible');
@@ -470,7 +499,10 @@ import { APP_EVENTS, createElement } from './dom-utils.js';
       });
     } catch (error) {
       console.error(error);
-      window.alert('Não foi possível enviar o e-mail. Tente novamente mais tarde.');
+      if (feedback) {
+        feedback.textContent = error.message || 'Não foi possível enviar o e-mail. Tente novamente mais tarde.';
+        feedback.classList.add('is-error');
+      }
     } finally {
       button.disabled = false;
       button.removeAttribute('aria-busy');
