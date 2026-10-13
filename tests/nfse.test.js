@@ -39,7 +39,8 @@ const {
   claimNfse,
   saveNfseRecord,
   claimNextNfseJob,
-  claimQueuedNfseForA1
+  claimQueuedNfseForA1,
+  discardStaleNfseRecovery
 } = require('../server/faturamento/nfse-store');
 const {
   agentConfigFromEnv,
@@ -432,6 +433,30 @@ test('A1 assume de forma atômica somente uma emissão antiga apta na fila do ag
   assert.equal(invocation[4], 'faturamento:nfse:agent:production:fila');
 });
 
+test('A1 descarta uma recuperação órfã de forma atômica e vinculada à mesma DPS', async () => {
+  let invocation = null;
+  const result = await discardStaleNfseRecovery({
+    invoiceId: '11518',
+    environment: 'production',
+    dpsId: 'DPS431490220912313700010881001000000000000063',
+    now: 1_789_400_000_000
+  }, async (...args) => {
+    invocation = args;
+    return 1;
+  });
+
+  assert.equal(result, true);
+  assert.equal(invocation[0], 'EVAL');
+  assert.match(invocation[1], /state == 'queued'/);
+  assert.match(invocation[1], /leaseExpires <= tonumber\(ARGV\[1\]\)/);
+  assert.match(invocation[1], /sameDps/);
+  assert.match(invocation[1], /legacyDps == ARGV\[2\]/);
+  assert.equal(invocation[2], '3');
+  assert.equal(invocation[3], recordKeyFor('11518', 'production'));
+  assert.equal(invocation[4], 'faturamento:nfse:agent:production:fila');
+  assert.equal(invocation[5], legacyRecordKeyFor('11518'));
+});
+
 test('emite uma vez, guarda o XML autorizado e reaproveita o vínculo da fatura', async () => {
   const material = createCertificate();
   let record = null;
@@ -590,6 +615,101 @@ test('modo A1 retoma a DPS que ficou na fila A3 sem reservar outro número', asy
   assert.equal(result.status, 'issued');
   assert.equal(result.certificateMode, 'a1');
   assert.equal(takeovers, 1);
+  assert.equal(transmissions, 1);
+  assert.equal(record.state, 'issued');
+});
+
+test('modo A1 descarta recuperação A3 somente após confirmar que a DPS não existe', async () => {
+  const material = createCertificate();
+  const staleDpsId = 'DPS431490220912313700010881001000000000000063';
+  let record = {
+    state: 'queued',
+    jobAction: 'recover',
+    invoiceId: '11518',
+    environment: 'homologation',
+    issuerCnpj: '09123137000108',
+    competence: '2026-07-16',
+    amount: 143.59,
+    dpsId: staleDpsId,
+    dpsNumber: 63,
+    dpsSeries: '81001'
+  };
+  let queries = 0;
+  let discards = 0;
+  let reservations = 0;
+  let transmissions = 0;
+  const dependencies = {
+    config: {
+      certificateMode: 'a1',
+      environment: 'homologation',
+      environmentType: '2',
+      baseUrl: 'https://example.test',
+      series: '81001',
+      initialNumber: 0,
+      applicationVersion: 'TWT_1.0.0',
+      providerPhone: '5133424425',
+      providerEmail: 'faturamento@twt.com.br',
+      ...material
+    },
+    requestExactInvoice: async () => ({ invoice: {
+      fatura: 11518,
+      cnpj_cliente: client.document,
+      status: '0',
+      valor: '143.59',
+      emissao: '2026-07-16'
+    } }),
+    findDoccobForInvoice: async () => ({ invoice: { issuerCnpj: '09123137000108' } }),
+    fetchCompany: async () => ({
+      cnpj: client.document,
+      razao: client.name,
+      codigo_ibge: client.municipalityCode,
+      cep: client.zipCode,
+      endereco: client.street,
+      numero: client.number,
+      complemento: client.complement,
+      bairro: client.district
+    }),
+    getNfseRecord: async () => record,
+    getDps: async (dpsId) => {
+      queries += 1;
+      assert.equal(dpsId, staleDpsId);
+      return null;
+    },
+    discardStaleNfseRecovery: async ({ invoiceId, environment, dpsId }) => {
+      discards += 1;
+      assert.equal(invoiceId, '11518');
+      assert.equal(environment, 'homologation');
+      assert.equal(dpsId, staleDpsId);
+      record = null;
+      return true;
+    },
+    claimNfse: async (_invoiceId, value) => {
+      assert.equal(record, null);
+      record = value;
+      return true;
+    },
+    reserveDpsNumber: async () => {
+      reservations += 1;
+      return 64;
+    },
+    saveNfseRecord: async (_invoiceId, value) => { record = value; },
+    postDps: async (signedXml) => {
+      transmissions += 1;
+      assert.match(signedXml, /<Signature/);
+      assert.match(signedXml, /<nDPS>64<\/nDPS>/);
+      return { chaveAcesso: ACCESS_KEY, xml: HOMOLOGATION_XML };
+    },
+    saveNfseXml: async () => 'nfse/homologation/2026/11518/documento.xml',
+    now: new Date('2026-08-11T15:00:00Z')
+  };
+
+  const result = await issueInvoiceNfse('11518', dependencies);
+
+  assert.equal(result.status, 'issued');
+  assert.equal(result.certificateMode, 'a1');
+  assert.equal(queries, 1);
+  assert.equal(discards, 1);
+  assert.equal(reservations, 1);
   assert.equal(transmissions, 1);
   assert.equal(record.state, 'issued');
 });

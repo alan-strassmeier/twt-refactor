@@ -181,7 +181,7 @@ test('coluna Visualizar oferece Fatura, DACTE, boleto e NFS-e conforme o emitent
   assert.match(source, /\/api\/faturamento\/documentos\?id=/);
   assert.match(source, /\/api\/faturamento\/dacte-pdf\?id=/);
   assert.match(source, /\/api\/faturamento\/boleto-pdf\?id=/);
-  assert.match(source, /if \(payload\.hasCte \|\| payload\.bankSlipEligible \|\| payload\.nfseEligible\)/);
+  assert.match(source, /if \(payload\.hasCte \|\| payload\.bankSlipEligible \|\| payload\.bankSlipReady \|\| payload\.nfseEligible\)/);
   assert.match(source, /if \(payload\.doccobFound === false\)/);
   assert.match(source, /method: 'POST'/);
   assert.match(source, /\/api\/faturamento\/boleto/);
@@ -198,6 +198,7 @@ test('coluna Visualizar oferece Fatura, DACTE, boleto e NFS-e conforme o emitent
   assert.match(html, /id="invoicePdfChoice"[^>]*target="_blank"/);
   assert.match(html, /id="dactePdfChoice"[^>]*target="_blank"/);
   assert.match(html, /id="bankSlipChoice"[^>]*hidden/);
+  assert.match(html, /id="bankSlipChoiceTitle"/);
   assert.match(html, /id="nfseChoice"[^>]*hidden/);
   assert.match(html, /id="nfseConfirmModal"[^>]*hidden/);
   assert.match(html, /id="doccobMissingModal"[^>]*hidden/);
@@ -213,10 +214,25 @@ test('coluna Visualizar oferece Fatura, DACTE, boleto e NFS-e conforme o emitent
   const faturaPdfApi = readFileSync(require.resolve('../api/faturamento/fatura-pdf.js'), 'utf8');
   assert.match(boletoApi, /hasSameOrigin\(req\)/);
   assert.match(boletoApi, /sessionFromRequest\(req\)/);
-  assert.match(documentosApi, /requiresTedDocPayment/);
+  assert.match(documentosApi, /requiresTedDocForCategory/);
   assert.match(documentosApi, /bankSlipEligible: Boolean\(bank\) && !tedDocPayment/);
+  assert.match(documentosApi, /bankSlipReady,/);
   assert.match(documentosApi, /doccobFound: false/);
   assert.match(faturaPdfApi, /requireDoccob: true/);
+});
+
+test('boleto já registrado é aberto sem pedir confirmação nem iniciar nova emissão', () => {
+  const source = readFileSync(require.resolve('../faturamento/app.js'), 'utf8');
+  const action = source.slice(
+    source.indexOf('const generateBankSlip = async () => {'),
+    source.indexOf('const showNfsePreview =')
+  );
+  const openExisting = action.indexOf("if (elements.bankSlipChoice.dataset.ready === 'true')");
+  const confirmCreation = action.indexOf('window.confirm(');
+  const postCreation = action.indexOf("requestJson('/api/faturamento/boleto'");
+  assert.ok(openExisting >= 0 && openExisting < confirmCreation && confirmCreation < postCreation);
+  assert.match(action.slice(openExisting, confirmCreation), /openPdfAfterCheck\(bankSlipPdfUrl\(invoiceId\)\)/);
+  assert.match(source, /bankSlipChoiceTitle\.textContent = options\.bankSlipReady \? 'Abrir boleto' : 'Gerar boleto'/);
 });
 
 test('centraliza o X dentro do botão de fechar o modal', () => {

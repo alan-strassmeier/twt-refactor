@@ -9,6 +9,7 @@
     collectionSectionPanels: [...document.querySelectorAll('.collection-anchor-target')],
     message: document.getElementById('collectionMessage'),
     runButton: document.getElementById('runCollectionButton'),
+    bankDiagnosticButton: document.getElementById('bankDiagnosticButton'),
     companyCount: document.getElementById('collectionCompanyCount'),
     contactCount: document.getElementById('collectionContactCount'),
     pendingCount: document.getElementById('collectionPendingCount'),
@@ -174,11 +175,26 @@
 
   const setLoading = (loading) => {
     state.loading = loading;
-    elements.collectionWorkspace.querySelectorAll('button, input').forEach((control) => {
+    elements.collectionWorkspace.querySelectorAll('button, input, select').forEach((control) => {
       control.disabled = loading;
     });
     elements.previousLogPage.disabled = loading || state.logPage <= 1;
     elements.nextLogPage.disabled = loading || state.logPage >= state.logTotalPages;
+  };
+
+  const bankDiagnosticMessage = (result) => {
+    const describeBank = (name, bank) => bank?.ok
+      ? `${name}: consulta autorizada (${Number(bank.records || 0)} registro(s), data ${formatDate(bank.queriedDate)})`
+      : `${name}: falha — ${bank?.message || 'resposta não identificada'}`;
+    const configuration = result?.brudamConfiguration || {};
+    const configured = configuration.paymentMethod
+      && configuration.itauAccount
+      && configuration.bradescoAccount;
+    return [
+      describeBank('Itaú', result?.banks?.itau),
+      describeBank('Bradesco', result?.banks?.bradesco),
+      `Brudam: ${configured ? 'IDs configurados' : 'configuração incompleta'}`
+    ].join(' · ');
   };
 
   const deleteContact = async (cnpj, id) => {
@@ -363,6 +379,33 @@
     }
   };
 
+  const saveCategorySettings = async (category, form, card) => {
+    const data = new FormData(form);
+    setLoading(true);
+    try {
+      const result = await requestJson(endpoint('categories'), {
+        method: 'PATCH',
+        body: JSON.stringify({
+          cnpj: category.cnpj,
+          name: data.get('name'),
+          billingMethod: data.get('billingMethod'),
+          whiteMartins: data.get('whiteMartins') === 'on'
+        })
+      });
+      const updated = result.category;
+      const index = state.categories.findIndex((item) => item.cnpj === category.cnpj);
+      if (index >= 0) state.categories[index] = updated;
+      const replacement = createCategoryCard(updated);
+      replacement.open = true;
+      card.replaceWith(replacement);
+      setMessage(result.message || 'Dados da empresa atualizados.', 'success');
+    } catch (error) {
+      setMessage(error.message, 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const createCategoryCard = (category) => {
     const card = document.createElement('details');
     card.className = 'category-card';
@@ -371,9 +414,21 @@
     const company = document.createElement('span');
     const name = document.createElement('strong');
     name.textContent = category.name;
+    const metadata = document.createElement('span');
+    metadata.className = 'category-company-meta';
     const cnpj = document.createElement('small');
     cnpj.textContent = formatCnpj(category.cnpj);
-    company.append(name, cnpj);
+    const billingBadge = document.createElement('span');
+    billingBadge.className = 'category-badge';
+    billingBadge.textContent = category.billingMethod === 'ted_doc' ? 'TED/DOC' : 'Boleto';
+    metadata.append(cnpj, billingBadge);
+    if (category.whiteMartins === true) {
+      const whiteMartinsBadge = document.createElement('span');
+      whiteMartinsBadge.className = 'category-badge is-white-martins';
+      whiteMartinsBadge.textContent = 'White Martins';
+      metadata.appendChild(whiteMartinsBadge);
+    }
+    company.append(name, metadata);
     const count = document.createElement('span');
     count.className = 'category-count';
     const updateCounts = () => {
@@ -419,6 +474,37 @@
       event.preventDefault();
       saveContact(category, form);
     });
+
+    const settingsForm = document.createElement('form');
+    settingsForm.className = 'collection-form category-settings-form';
+    settingsForm.hidden = true;
+    settingsForm.innerHTML = `
+      <label>Nome fantasia
+        <input name="name" type="text" autocomplete="organization" maxlength="160" required>
+      </label>
+      <label>Forma de cobrança
+        <select name="billingMethod" required>
+          <option value="bank_slip">Boleto</option>
+          <option value="ted_doc">Transferência TED/DOC</option>
+        </select>
+      </label>
+      <label class="category-flag-field">
+        <input name="whiteMartins" type="checkbox">
+        <span>Empresa White Martins</span>
+      </label>
+      <button class="button button-primary" type="submit">Salvar alterações</button>
+      <button class="button button-quiet" type="button" data-cancel-category-edit>Cancelar</button>`;
+    settingsForm.elements.name.value = category.name;
+    settingsForm.elements.billingMethod.value = category.billingMethod || 'bank_slip';
+    settingsForm.elements.whiteMartins.checked = category.whiteMartins === true;
+    settingsForm.addEventListener('submit', (event) => {
+      event.preventDefault();
+      saveCategorySettings(category, settingsForm, card);
+    });
+    settingsForm.querySelector('[data-cancel-category-edit]').addEventListener('click', () => {
+      settingsForm.hidden = true;
+    });
+
     const removeCategory = document.createElement('button');
     removeCategory.type = 'button';
     removeCategory.className = 'button button-quiet danger-button';
@@ -429,10 +515,21 @@
     updateContacts.className = 'button button-quiet';
     updateContacts.textContent = 'Atualizar Contatos';
     updateContacts.addEventListener('click', () => syncContacts(category));
+    const editCategory = document.createElement('button');
+    editCategory.type = 'button';
+    editCategory.className = 'button button-quiet';
+    editCategory.textContent = 'Editar empresa';
+    editCategory.addEventListener('click', () => {
+      settingsForm.hidden = !settingsForm.hidden;
+      if (!settingsForm.hidden) settingsForm.elements.name.focus();
+    });
     const footer = document.createElement('div');
     footer.className = 'category-footer';
-    footer.append(updateContacts, removeCategory);
-    content.append(contacts, form, footer);
+    const footerActions = document.createElement('div');
+    footerActions.className = 'category-footer-actions';
+    footerActions.append(updateContacts, editCategory);
+    footer.append(footerActions, removeCategory);
+    content.append(contacts, form, settingsForm, footer);
     card.append(summary, content);
     return card;
   };
@@ -657,9 +754,17 @@
       appendCell(row, record.manualResend
         ? 'Reenvio manual'
         : EVENT_LABELS[record.event] || record.event || '—');
-      const status = appendCell(row, STATUS_LABELS[record.status] || record.status || '—');
+      const retryable = record.status === 'error' && record.retryable === true;
+      const status = appendCell(row, retryable
+        ? 'Não enviado — nova tentativa pendente'
+        : STATUS_LABELS[record.status] || record.status || '—');
       status.className = `collection-status status-${record.status || 'unknown'}`;
       if (record.message) status.title = record.message;
+      if ((retryable || record.status === 'review' || record.legacyReview) && record.message) {
+        const detail = document.createElement('small');
+        detail.textContent = record.message;
+        status.appendChild(detail);
+      }
       const action = document.createElement('td');
       const actionButtons = document.createElement('div');
       actionButtons.className = 'collection-log-actions';
@@ -675,7 +780,7 @@
       resolveButton.disabled = !record.id;
       resolveButton.addEventListener('click', async () => {
         if (!record.id || !window.confirm(
-          'Marcar esta ocorrência como resolvida? O histórico será preservado e ela sairá das pendências.'
+          'Marcar esta ocorrência como resolvida? Isso apenas encerra o alerta: não reenvia o e-mail nem libera uma tentativa bloqueada.'
         )) return;
         resolveButton.disabled = true;
         setLoading(true);
@@ -697,7 +802,7 @@
         }
       });
       actionButtons.append(previewButton);
-      if (RESOLVABLE_LOG_STATUSES.has(record.status)) actionButtons.append(resolveButton);
+      if (RESOLVABLE_LOG_STATUSES.has(record.status) && !retryable) actionButtons.append(resolveButton);
       action.appendChild(actionButtons);
       row.appendChild(action);
       return row;
@@ -763,6 +868,7 @@
       client.appendChild(cnpj);
       const references = appendCell(row, (candidate.references || []).join(', ') || '—');
       references.className = 'payment-reference-cell';
+      appendCell(row, formatDate(candidate.paymentDate));
       appendCell(row, formatMoney(candidate.importedAmount));
       appendCell(row, candidate.balance === null || candidate.balance === undefined
         ? '—' : formatMoney(candidate.balance));
@@ -908,12 +1014,6 @@
   setCollectionSection(state.collectionSection);
 
   if (elements.paymentImportForm) {
-    elements.paymentImportForm.elements.paymentDate.value = new Intl.DateTimeFormat('en-CA', {
-      timeZone: 'America/Sao_Paulo',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit'
-    }).format(new Date());
     elements.paymentImportForm.addEventListener('submit', async (event) => {
       event.preventDefault();
       const data = new FormData(elements.paymentImportForm);
@@ -933,8 +1033,7 @@
           method: 'POST',
           body: JSON.stringify({
             filename: file.name,
-            fileBase64: await fileAsBase64(file),
-            paymentDate: data.get('paymentDate')
+            fileBase64: await fileAsBase64(file)
           })
         });
         renderPaymentImport(result.import);
@@ -957,7 +1056,12 @@
     try {
       const result = await requestJson(endpoint('categories'), {
         method: 'POST',
-        body: JSON.stringify({ cnpj: data.get('cnpj'), name: data.get('name') })
+        body: JSON.stringify({
+          cnpj: data.get('cnpj'),
+          name: data.get('name'),
+          billingMethod: data.get('billingMethod'),
+          whiteMartins: data.get('whiteMartins') === 'on'
+        })
       });
       elements.categoryForm.reset();
       setMessage(result.message || 'Empresa salva.', 'success');
@@ -1034,6 +1138,8 @@
       settledInvoices: 0,
       resolved: 0,
       sent: 0,
+      retryable: 0,
+      review: 0,
       errors: []
     };
     let after = '';
@@ -1056,14 +1162,16 @@
         totals.settledInvoices += Number(result.settledInvoices || 0);
         totals.resolved += Number(result.resolved || 0);
         totals.sent += Number(result.sent || 0);
+        totals.retryable += Number(result.retryable || 0);
+        totals.review += Number(result.review || 0);
         totals.errors.push(...(Array.isArray(result.errors) ? result.errors : []));
         after = String(result.nextAfter || '');
       } while (after && result.processed > 0 && round < maxRounds);
       await Promise.all([loadPending(), loadLogs()]);
       const incomplete = Boolean(after);
       setMessage(
-        `Atualização concluída em ${round} lote(s): ${totals.processed} pendência(s) conferida(s), ${totals.settledInvoices} liquidada(s) removida(s), ${totals.resolved} problema(s) solucionado(s), ${totals.sent} e-mail(s) enviado(s) e ${totals.errors.length} erro(s).${incomplete ? ' As demais pendências continuarão na próxima atualização.' : ''}`,
-        totals.errors.length || incomplete ? 'warning' : 'success'
+        `Atualização concluída em ${round} lote(s): ${totals.processed} pendência(s) conferida(s), ${totals.settledInvoices} liquidada(s) removida(s), ${totals.resolved} problema(s) solucionado(s), ${totals.sent} e-mail(s) enviado(s), ${totals.retryable} envio(s) não aceito(s) para nova tentativa, ${totals.review} resultado(s) em conferência e ${totals.errors.length} outro(s) erro(s).${incomplete ? ' As demais pendências continuarão na próxima atualização.' : ''}`,
+        totals.errors.length || totals.retryable || totals.review || incomplete ? 'warning' : 'success'
       );
     } catch (error) {
       setMessage(error.message, 'error');
@@ -1072,16 +1180,35 @@
     }
   });
 
+  if (elements.bankDiagnosticButton) {
+    elements.bankDiagnosticButton.addEventListener('click', async () => {
+      setLoading(true);
+      setMessage('Consultando Itaú e Bradesco em modo somente leitura…');
+      try {
+        const result = await requestJson(endpoint('bank-diagnostic'));
+        setMessage(bankDiagnosticMessage(result), result.ok ? 'success' : 'warning');
+      } catch (error) {
+        setMessage(error.message, 'error');
+      } finally {
+        setLoading(false);
+      }
+    });
+  }
+
   elements.runButton.addEventListener('click', async () => {
     const maxRounds = 25;
     const totals = {
       discovered: 0,
       processed: 0,
       sent: 0,
+      retryable: 0,
+      review: 0,
       pendingDoccob: 0,
       blocked: 0,
       settledInvoices: 0,
       deferredHistorical: 0,
+      reconciled: 0,
+      bankSettled: 0,
       errors: []
     };
     let result = null;
@@ -1102,10 +1229,14 @@
         totals.discovered += Number(result.discovered || 0);
         totals.processed += Number(result.processed || 0);
         totals.sent += Number(result.sent || 0);
+        totals.retryable += Number(result.retryable || 0);
+        totals.review += Number(result.review || 0);
         totals.pendingDoccob += Number(result.pendingDoccob || 0);
         totals.blocked = Math.max(totals.blocked, Number(result.blocked || 0));
         totals.settledInvoices += Number(result.settledInvoices || 0);
         totals.deferredHistorical += Number(result.deferredHistorical || 0);
+        totals.reconciled += Number(result.reconciled || 0);
+        totals.bankSettled += Number(result.bankSettled || 0);
         totals.errors.push(...(Array.isArray(result.errors) ? result.errors : []));
       } while (
         result.stoppedByLimit
@@ -1116,8 +1247,8 @@
       await Promise.all([loadPending(), loadLogs()]);
       const incomplete = Boolean(result?.stoppedByLimit && Number(result.remaining || 0) > 0);
       setMessage(
-        `Verificação concluída em ${round} lote(s): ${totals.processed} fatura(s) emitida(s) hoje, perto do vencimento ou vencida(s) examinada(s), ${totals.discovered} nova(s) fatura(s) registrada(s), ${totals.sent} e-mail(s) enviado(s), ${totals.pendingDoccob} aguardando DOCCOB, ${totals.blocked} fatura(s) bloqueada(s) e ${totals.errors.length} erro(s).${incomplete ? ` ${result.remaining || 0} fatura(s) continuarão na próxima verificação.` : ''}`,
-        totals.errors.length || incomplete ? 'warning' : 'success'
+        `Verificação concluída em ${round} lote(s): ${totals.reconciled} boleto(s) conferido(s), ${totals.bankSettled} fatura(s) liquidada(s) automaticamente, ${totals.processed} fatura(s) emitida(s) hoje, perto do vencimento ou vencida(s) examinada(s), ${totals.discovered} nova(s) fatura(s) registrada(s), ${totals.sent} e-mail(s) enviado(s), ${totals.retryable} envio(s) não aceito(s) para nova tentativa, ${totals.review} resultado(s) em conferência, ${totals.pendingDoccob} aguardando DOCCOB, ${totals.blocked} fatura(s) bloqueada(s) e ${totals.errors.length} outro(s) erro(s).${incomplete ? ` ${result.remaining || 0} fatura(s) continuarão na próxima verificação.` : ''}`,
+        totals.errors.length || totals.retryable || totals.review || incomplete ? 'warning' : 'success'
       );
     } catch (error) {
       setMessage(error.message, 'error');

@@ -11,7 +11,8 @@ const brudamContacts = require('../../server/faturamento/cobranca-brudam-contact
 const {
   runBillingCollection,
   resendBillingInvoice,
-  refreshBillingPending
+  refreshBillingPending,
+  enrichLegacyReviewLogs
 } = require('../../server/faturamento/cobranca-processor');
 const { fetchInvoices } = require('../../server/faturamento/brudam');
 const { findDoccobForInvoice } = require('../../server/faturamento/r2-doccob');
@@ -20,6 +21,9 @@ const {
   analyzePaymentImport,
   approvePaymentImport
 } = require('../../server/faturamento/payment-import');
+const {
+  runBankQueryDiagnostic
+} = require('../../server/faturamento/bank-query-diagnostic');
 const {
   BANK_SLIP_CREATION_START_DATE,
   isDslIssuer,
@@ -92,6 +96,14 @@ const handleCategories = async (req, res, query) => {
     });
     return;
   }
+  if (req.method === 'PATCH') {
+    const category = await store.saveCategory(await parseJsonBody(req, 8192));
+    sendJson(res, 200, {
+      category,
+      message: 'Dados da empresa atualizados.'
+    });
+    return;
+  }
   if (req.method === 'DELETE') {
     const deleted = await store.deleteCategory(query.cnpj);
     sendJson(res, deleted ? 200 : 404, {
@@ -100,7 +112,7 @@ const handleCategories = async (req, res, query) => {
     });
     return;
   }
-  res.setHeader('Allow', 'GET, POST, DELETE');
+  res.setHeader('Allow', 'GET, POST, PATCH, DELETE');
   sendJson(res, 405, { message: 'Método não permitido.' });
 };
 
@@ -305,7 +317,7 @@ const handleInvoiceDetail = async (req, res, query) => {
   }
   const cteCount = (Array.isArray(doccob?.transports) ? doccob.transports : [])
     .filter((transport) => transport?.accessKey).length;
-  const controls = invoiceControl(invoice, { pending, logs, bankRecord });
+  const controls = invoiceControl(invoice, { pending, logs, bankRecord, category });
   if (doccob && isDslIssuer(doccob.invoice?.issuerCnpj) && cteCount === 0) {
     controls.documents = {
       code: 'dacte_unavailable',
@@ -389,6 +401,7 @@ const handleLogs = async (req, res, query) => {
       page: query.page,
       limit: query.limit
     });
+    result.logs = await enrichLegacyReviewLogs(result.logs);
     sendJson(res, 200, result);
     return;
   }
@@ -462,6 +475,17 @@ const handlePaymentImport = async (req, res, query) => {
   sendJson(res, 405, { message: 'Método não permitido.' });
 };
 
+const handleBankDiagnostic = async (req, res) => {
+  if (!requireSession(req, res)) return;
+  if (req.method !== 'GET') {
+    res.setHeader('Allow', 'GET');
+    sendJson(res, 405, { message: 'Método não permitido.' });
+    return;
+  }
+  const result = await runBankQueryDiagnostic();
+  sendJson(res, 200, result);
+};
+
 const handleProcess = async (req, res, query) => {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
@@ -499,6 +523,9 @@ const handleProcess = async (req, res, query) => {
       scanned: result.scanned,
       discovered: result.discovered,
       reconciled: result.reconciled,
+      bankSettled: result.bankSettled,
+      bankAlreadySettled: result.bankAlreadySettled,
+      bankPending: result.bankPending,
       processed: result.processed,
       sent: result.sent,
       blocked: result.blocked,
@@ -560,7 +587,9 @@ const handleResend = async (req, res) => {
     });
     sendJson(res, 200, {
       ...result,
-      message: `Cobrança reenviada em ${result.sent} mensagem(ns).`
+      message: `Cobrança reenviada em ${result.sent} mensagem(ns).${result.retryable
+        ? ` ${result.retryable} destinatário(s) não aceito(s); consulte os logs antes de tentar novamente.` : ''}${result.review
+        ? ` ${result.review} resultado(s) exigem conferência para evitar duplicidade.` : ''}`
     });
   } finally {
     try {
@@ -610,6 +639,7 @@ module.exports = async (req, res) => {
     if (query.route === 'invoice-detail') return await handleInvoiceDetail(req, res, query);
     if (query.route === 'invoice-block') return await handleInvoiceBlock(req, res);
     if (query.route === 'payment-import') return await handlePaymentImport(req, res, query);
+    if (query.route === 'bank-diagnostic') return await handleBankDiagnostic(req, res);
     if (query.route === 'logs') return await handleLogs(req, res, query);
     if (query.route === 'resend') return await handleResend(req, res);
     if (query.route === 'process') return await handleProcess(req, res, query);

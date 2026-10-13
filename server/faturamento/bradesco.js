@@ -11,12 +11,14 @@ const ENVIRONMENTS = Object.freeze({
   sandbox: Object.freeze({
     tokenUrl: 'https://openapisandbox.prebanco.com.br/auth/server-mtls/v2/token',
     registrationUrl: 'https://openapisandbox.prebanco.com.br/boleto/cobranca-registro/v1/cobranca',
-    queryUrl: 'https://openapisandbox.prebanco.com.br/boleto/cobranca-consulta/v1/consultar'
+    queryUrl: 'https://openapisandbox.prebanco.com.br/boleto/cobranca-consulta/v1/consultar',
+    settledListUrl: 'https://openapisandbox.prebanco.com.br/boleto/cobranca-lista/v1/listar'
   }),
   production: Object.freeze({
     tokenUrl: 'https://openapi.bradesco.com.br/auth/server-mtls/v2/token',
     registrationUrl: 'https://openapi.bradesco.com.br/boleto/cobranca-registro/v1/cobranca',
-    queryUrl: 'https://openapi.bradesco.com.br/boleto/cobranca-consulta/v1/consultar'
+    queryUrl: 'https://openapi.bradesco.com.br/boleto/cobranca-consulta/v1/consultar',
+    settledListUrl: 'https://openapi.bradesco.com.br/boleto/cobranca-lista/v1/listar'
   })
 });
 
@@ -211,6 +213,11 @@ const bradescoConfig = (env = process.env) => {
     'URL de registro'
   );
   const queryUrl = normalizedHttpsUrl(env.BRADESCO_QUERY_URL, target.queryUrl, 'URL de consulta');
+  const settledListUrl = normalizedHttpsUrl(
+    env.BRADESCO_SETTLED_LIST_URL,
+    target.settledListUrl,
+    'URL de títulos liquidados'
+  );
   const tokenConfigKey = createHash('sha256')
     .update(`${environment}:${tokenUrl}:${clientId}:${clientSecret}:`)
     .update(mtls.cert)
@@ -225,6 +232,7 @@ const bradescoConfig = (env = process.env) => {
     tokenUrl,
     registrationUrl,
     queryUrl,
+    settledListUrl,
     tokenConfigKey,
     beneficiaryName: String(env.BRADESCO_BENEFICIARY_NAME || TWT_ISSUER_NAME).trim(),
     beneficiaryTaxId,
@@ -700,6 +708,89 @@ const queryBradescoBankSlip = async (ourNumber, options = {}) => {
   return bankSlip?.registered ? bankSlip : null;
 };
 
+const bradescoRequestDate = (value) => {
+  const normalized = dateOnly(value);
+  if (!normalized) throw configurationError('Data de pagamento inválida para consulta Bradesco.');
+  const [year, month, day] = normalized.split('-');
+  return `${day}${month}${year}`;
+};
+
+const normalizeBradescoSettlement = (title) => {
+  const rawOurNumber = digits(title?.nossoNumero);
+  const ourNumber = rawOurNumber.padStart(11, '0');
+  const paidAt = dateOnly(title?.dataPagamento);
+  const paidAmount = bradescoMoney(title?.valorPagamento, 2);
+  const titleAmount = bradescoMoney(title?.valorTitulo, 2);
+  if (!rawOurNumber || /^0+$/.test(rawOurNumber) || ourNumber.length !== 11 ||
+      !paidAt || !Number.isFinite(paidAmount) || paidAmount <= 0) {
+    return null;
+  }
+  return {
+    ourNumber,
+    paidAt,
+    paidAmount,
+    titleAmount,
+    movementAt: dateOnly(title?.dataMovimento),
+    payerName: String(title?.nomePagador || '').trim(),
+    channel: String(title?.descricaoOrigemPagamento || '').trim(),
+    creditMethod: String(title?.descricaoFormaCredito || '').trim(),
+    raw: title
+  };
+};
+
+const listBradescoSettledBankSlips = async (criteria = {}, options = {}) => {
+  const config = options.config || bradescoConfig();
+  const paymentDateFrom = bradescoRequestDate(criteria.paymentDateFrom);
+  const paymentDateTo = bradescoRequestDate(criteria.paymentDateTo);
+  const maxPages = Math.max(1, Math.min(Number(options.maxPages) || 10, 20));
+  const settlements = [];
+  let previousPage = 0;
+  for (let pageCount = 0; pageCount < maxPages; pageCount += 1) {
+    const body = JSON.stringify({
+      cpfCnpj: {
+        cpfCnpj: config.beneficiaryRoot,
+        filial: config.beneficiaryBranch,
+        controle: config.beneficiaryControl
+      },
+      produto: config.productId,
+      negociacao: config.queryNegotiation,
+      dataMovimentoDe: 0,
+      dataMovimentoAte: 0,
+      dataPagamentoDe: paymentDateFrom,
+      dataPagamentoAte: paymentDateTo,
+      origemPagamento: 0,
+      valorTituloDe: 0,
+      valorTituloAte: 0,
+      paginaAnterior: previousPage
+    });
+    const result = await authenticatedRequest({
+      url: config.settledListUrl,
+      method: 'POST',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+      body,
+      ...options,
+      config
+    });
+    const response = jsonFromResponse(result);
+    if (result.statusCode < 200 || result.statusCode >= 300 || Number(response?.status) !== 200) {
+      throw bradescoHttpError(result, response, 'Não foi possível listar os boletos liquidados no Bradesco.');
+    }
+    settlements.push(...(Array.isArray(response?.titulos) ? response.titulos : [])
+      .map(normalizeBradescoSettlement)
+      .filter(Boolean));
+    if (String(response?.indMaisPagina || '').toUpperCase() !== 'S') break;
+    const nextPage = Number(response?.pagina);
+    if (!Number.isSafeInteger(nextPage) || nextPage <= previousPage) {
+      throw Object.assign(new Error('O Bradesco retornou paginação inválida na lista de liquidados.'), {
+        statusCode: 502,
+        expose: true
+      });
+    }
+    previousPage = nextPage;
+  }
+  return settlements;
+};
+
 const resetTokenCache = () => {
   cachedToken = '';
   cachedTokenExpiresAt = 0;
@@ -721,7 +812,9 @@ module.exports = {
   dateOnly,
   bradescoMoney,
   normalizeBradescoBankSlip,
+  normalizeBradescoSettlement,
   createBradescoBankSlip,
   queryBradescoBankSlip,
+  listBradescoSettledBankSlips,
   resetTokenCache
 };

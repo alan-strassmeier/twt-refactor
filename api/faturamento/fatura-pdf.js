@@ -2,8 +2,10 @@ const { sessionFromRequest } = require('../../server/faturamento/auth');
 const { queryFromRequest, sendJson } = require('../../server/faturamento/http');
 const {
   fetchInvoicePdfData,
-  buildInvoicePdf
+  buildInvoicePdf,
+  applyCategoryBillingMethod
 } = require('../../server/faturamento/invoice-pdf');
+const store = require('../../server/faturamento/cobranca-store');
 
 const safeFilenameNumber = (value) => String(value || '').replace(/\D/g, '').slice(0, 20);
 
@@ -20,7 +22,10 @@ module.exports = async (req, res) => {
 
   try {
     const { id } = queryFromRequest(req);
-    const data = await fetchInvoicePdfData(id, { requireDoccob: true });
+    let data = await fetchInvoicePdfData(id, { requireDoccob: true });
+    const clientCnpj = String(data?.client?.document || '').replace(/\D/g, '');
+    const category = clientCnpj.length === 14 ? await store.getCategory(clientCnpj) : null;
+    data = applyCategoryBillingMethod(data, category);
     const pdf = await buildInvoicePdf(data);
     const invoiceNumber = safeFilenameNumber(data.invoice.id || id);
     res.statusCode = 200;

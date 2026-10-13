@@ -59,6 +59,7 @@
     dacteChoiceDescription: document.getElementById('dacteChoiceDescription'),
     bankSlipChoice: document.getElementById('bankSlipChoice'),
     bankSlipBankIcon: document.getElementById('bankSlipBankIcon'),
+    bankSlipChoiceTitle: document.getElementById('bankSlipChoiceTitle'),
     bankSlipChoiceDescription: document.getElementById('bankSlipChoiceDescription'),
     nfseChoice: document.getElementById('nfseChoice'),
     nfseChoiceTitle: document.getElementById('nfseChoiceTitle'),
@@ -424,14 +425,19 @@
     elements.dacteChoiceDescription.textContent = cteCount === 1
       ? 'Documento do CT-e vinculado'
       : `${cteCount} DACTEs em um único PDF`;
-    elements.bankSlipChoice.hidden = !options.bankSlipEligible;
-    elements.bankSlipChoice.dataset.invoiceId = options.bankSlipEligible ? invoiceId : '';
+    const bankSlipAvailable = options.bankSlipEligible || options.bankSlipReady;
+    elements.bankSlipChoice.hidden = !bankSlipAvailable;
+    elements.bankSlipChoice.dataset.invoiceId = bankSlipAvailable ? invoiceId : '';
+    elements.bankSlipChoice.dataset.ready = options.bankSlipReady ? 'true' : 'false';
     const bankLabel = String(options.bankSlipBankLabel || 'Banco');
     elements.bankSlipChoice.dataset.bankLabel = bankLabel;
     elements.bankSlipBankIcon.textContent = bankLabel;
+    elements.bankSlipChoiceTitle.textContent = options.bankSlipReady ? 'Abrir boleto' : 'Gerar boleto';
     elements.bankSlipChoice.disabled = false;
     elements.bankSlipChoice.classList.remove('is-loading');
-    elements.bankSlipChoiceDescription.textContent = `Cobrança emitida exclusivamente pelo ${bankLabel}`;
+    elements.bankSlipChoiceDescription.textContent = options.bankSlipReady
+      ? `Boleto já registrado no ${bankLabel}`
+      : `Cobrança emitida exclusivamente pelo ${bankLabel}`;
     elements.nfseChoice.hidden = !options.nfseEligible;
     elements.nfseChoice.dataset.invoiceId = options.nfseEligible ? invoiceId : '';
     elements.nfseChoice.dataset.status = options.nfseStatus || 'not_issued';
@@ -500,6 +506,11 @@
     const invoiceId = String(elements.bankSlipChoice.dataset.invoiceId || '');
     const bankLabel = String(elements.bankSlipChoice.dataset.bankLabel || 'banco');
     if (!invoiceId || elements.bankSlipChoice.disabled) return;
+    if (elements.bankSlipChoice.dataset.ready === 'true') {
+      closeDocumentModal();
+      openPdfAfterCheck(bankSlipPdfUrl(invoiceId));
+      return;
+    }
     const confirmed = window.confirm(
       `Confirma a geração do boleto ${bankLabel} para a fatura ${invoiceId}? Se ele já existir, será apenas aberto.`
     );
@@ -718,11 +729,12 @@
         showDoccobMissingModal(invoiceId, trigger);
         return;
       }
-      if (payload.hasCte || payload.bankSlipEligible || payload.nfseEligible) {
+      if (payload.hasCte || payload.bankSlipEligible || payload.bankSlipReady || payload.nfseEligible) {
         showDocumentModal(invoiceId, {
           hasCte: Boolean(payload.hasCte),
           cteCount: Number(payload.cteCount) || 0,
           bankSlipEligible: Boolean(payload.bankSlipEligible),
+          bankSlipReady: Boolean(payload.bankSlipReady),
           bankSlipBankLabel: payload.bankSlipBankLabel,
           nfseEligible: Boolean(payload.nfseEligible),
           nfseStatus: payload.nfseStatus,
@@ -1538,13 +1550,15 @@
           clientCnpj: invoiceDetailClientCnpj
         })
       });
-      elements.invoiceDetailActionMessage.dataset.tone = 'success';
+      elements.invoiceDetailActionMessage.dataset.tone = result.review || result.retryable
+        ? 'warning' : 'success';
       elements.invoiceDetailActionMessage.textContent = result.message;
       const refreshed = await requestJson(
         `/api/faturamento/cobranca?route=invoice-detail&id=${encodeURIComponent(invoiceDetailId)}`
       );
       if (!elements.invoiceDetail.hidden) renderInvoiceDetail(refreshed);
-      elements.invoiceDetailActionMessage.dataset.tone = 'success';
+      elements.invoiceDetailActionMessage.dataset.tone = result.review || result.retryable
+        ? 'warning' : 'success';
       elements.invoiceDetailActionMessage.textContent = result.message;
     } catch (error) {
       elements.invoiceDetailActionMessage.dataset.tone = 'error';

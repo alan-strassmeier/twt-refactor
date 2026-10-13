@@ -18,13 +18,11 @@ const {
   BANK_SLIP_CREATION_START_DATE,
   BANK_SLIP_CREATION_BLOCKED_CODE,
   BILLING_BANKS,
-  WHITE_MARTINS_TED_DOC_CNPJS,
-  ELECNOR_TED_DOC_CNPJS,
   bankSlipBankForIssuer,
   isBankSlipCreationEligible,
-  requiresTedDocPayment
+  requiresTedDocForCategory
 } = require('../server/faturamento/billing-rules');
-const { getBankSlipRecords } = require('../server/faturamento/boleto-store');
+const { getBankSlipRecords, listBankSlipRecords } = require('../server/faturamento/boleto-store');
 
 const twtInvoice = {
   fatura: 11518,
@@ -55,6 +53,7 @@ const billingDependencies = (issuerCnpj = '09123137000108') => ({
     transports: []
   }),
   fetchCompany: async () => payerCompany,
+  getBillingCategory: async () => null,
   isBankSlipCreationEligible: () => true,
   now: new Date('2026-08-08T12:00:00Z')
 });
@@ -73,6 +72,25 @@ test('consulta estados de vários boletos em uma única ida ao Redis', async () 
   assert.equal(calls[0].length, 3);
   assert.equal(records.get('11518').state, 'ready');
   assert.equal(records.get('11532').state, 'review');
+});
+
+test('lista registros bancários antigos e novos por SCAN sem depender de índice prévio', async () => {
+  const calls = [];
+  const records = await listBankSlipRecords(async (...args) => {
+    calls.push(args);
+    if (args[0] === 'SCAN') return ['0', [
+      'faturamento:boleto:twt:fatura:11777',
+      'faturamento:boleto:twt:fatura:11518'
+    ]];
+    if (args[0] === 'MGET') return [
+      JSON.stringify({ state: 'ready', bank: 'itau' }),
+      JSON.stringify({ state: 'ready', bank: 'bradesco', invoiceId: '11777' })
+    ];
+    throw new Error(`Comando inesperado: ${args[0]}`);
+  });
+  assert.equal(calls[0][0], 'SCAN');
+  assert.equal(calls[1][0], 'MGET');
+  assert.deepEqual(records.map((record) => record.invoiceId), ['11518', '11777']);
 });
 
 test('normaliza o pagador conforme dados obrigatórios das APIs bancárias', () => {
@@ -113,26 +131,14 @@ test('roteia TWT para Bradesco e DSL para Itaú usando o emitente confirmado no 
   );
 });
 
-test('identifica clientes e forma de pagamento exclusivos de TED/DOC', () => {
-  assert.equal(requiresTedDocPayment({
-    clientNames: ['THE WHITE MARTINS GASES INDUSTRIAIS DO NORDESTE LTDA.']
-  }), true);
-  assert.equal(requiresTedDocPayment({
-    clientNames: ['RS WHITE MARTINS GASES INDUSTRIAIS LTDA 0063']
-  }), true);
-  assert.equal(requiresTedDocPayment({ clientNames: ['ELECNOR DO BRASIL LTDA'] }), true);
-  assert.equal(requiresTedDocPayment({ clientNames: ['BL INDUSTRIA OTICA LTDA POA'] }), true);
-  assert.equal(requiresTedDocPayment({ clientDocument: '27.011.022/0001-03' }), true);
-  for (const cnpj of [
-    ...WHITE_MARTINS_TED_DOC_CNPJS,
-    ...ELECNOR_TED_DOC_CNPJS
-  ]) {
-    assert.equal(requiresTedDocPayment({ clientDocument: cnpj }), true, cnpj);
-  }
-  assert.equal(requiresTedDocPayment({ clientDocument: '309286' }), false);
-  assert.equal(requiresTedDocPayment({ clientDocument: '309311' }), false);
-  assert.equal(requiresTedDocPayment({ paymentMethod: 'Transferência TED/DOC' }), true);
-  assert.equal(requiresTedDocPayment({ clientNames: ['OUTRO CLIENTE LTDA'] }), false);
+test('identifica TED/DOC somente pela marcação salva na empresa', () => {
+  assert.equal(requiresTedDocForCategory({ billingMethod: 'ted_doc' }), true);
+  assert.equal(requiresTedDocForCategory({ billingMethod: 'bank_slip' }), false);
+  assert.equal(requiresTedDocForCategory(null), false);
+  assert.equal(requiresTedDocForCategory({
+    name: 'WHITE MARTINS',
+    cnpj: '27011022000103'
+  }), false);
 });
 
 test('bloqueia geração de boleto para cliente com pagamento por TED/DOC', async () => {
@@ -142,10 +148,31 @@ test('bloqueia geração de boleto para cliente com pagamento por TED/DOC', asyn
       fetchCompany: async () => ({
         ...payerCompany,
         fantasia: 'THE WHITE MARTINS GASES INDUSTRIAIS DO NORDESTE LTDA.'
-      })
+      }),
+      getBillingCategory: async () => ({ billingMethod: 'ted_doc' })
     }),
     (error) => error.statusCode === 422 && /TED\/DOC/.test(error.message)
   );
+});
+
+test('prioriza a forma de cobrança escolhida no cadastro da empresa', async () => {
+  await assert.rejects(
+    resolveInvoiceBillingData('11518', {
+      ...billingDependencies('97434690000129'),
+      getBillingCategory: async () => ({ billingMethod: 'ted_doc' })
+    }),
+    (error) => error.statusCode === 422 && /TED\/DOC/.test(error.message)
+  );
+
+  const boleto = await resolveInvoiceBillingData('11518', {
+    ...billingDependencies('97434690000129'),
+    fetchCompany: async () => ({
+      ...payerCompany,
+      fantasia: 'THE WHITE MARTINS GASES INDUSTRIAIS DO NORDESTE LTDA.'
+    }),
+    getBillingCategory: async () => ({ billingMethod: 'bank_slip' })
+  });
+  assert.equal(boleto.bank, BILLING_BANKS.itau);
 });
 
 test('bloqueia somente a criação de boleto para fatura anterior ao corte', async () => {

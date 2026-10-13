@@ -6,10 +6,24 @@ const {
   digits,
   normalizeContactNames
 } = require('./cobranca-contact-import');
+const {
+  BILLING_METHODS,
+  normalizedRuleText
+} = require('./billing-rules');
+
+const CATEGORY_SCHEMA_VERSION = '2';
+const seedCategorySettings = new Map(seedCategories.map((category) => [
+  digits(category.cnpj),
+  {
+    billingMethod: category.billingMethod,
+    whiteMartins: category.whiteMartins === true
+  }
+]));
 
 const KEYS = Object.freeze({
   categories: 'faturamento:cobranca:categorias:v1',
   seed: 'faturamento:cobranca:categorias-seed:v1',
+  categorySchema: 'faturamento:cobranca:categorias-schema:v1',
   pending: 'faturamento:cobranca:doccob-pendente:v1',
   completedEvents: 'faturamento:cobranca:eventos-concluidos:v1',
   dismissedIssues: 'faturamento:cobranca:pendencias-ocultas:v1',
@@ -66,13 +80,25 @@ const normalizedEmail = (value) => {
   return email;
 };
 
-const normalizedCategory = (value) => ({
-  cnpj: requiredCnpj(value?.cnpj),
-  name: requiredText(value?.name, 'Nome fantasia', 160),
-  contacts: Array.isArray(value?.contacts)
-    ? value.contacts.map((contact) => ({ ...contact, enabled: contact?.enabled !== false }))
-    : []
-});
+const normalizedCategory = (value) => {
+  const cnpj = requiredCnpj(value?.cnpj);
+  const name = requiredText(value?.name, 'Nome fantasia', 160);
+  const suppliedBillingMethod = String(value?.billingMethod || '').trim();
+  if (suppliedBillingMethod && !Object.values(BILLING_METHODS).includes(suppliedBillingMethod)) {
+    throw Object.assign(new Error('Selecione uma forma de cobrança válida.'), { statusCode: 422 });
+  }
+  const billingMethod = suppliedBillingMethod || BILLING_METHODS.bankSlip;
+  const whiteMartins = value?.whiteMartins === true;
+  return {
+    cnpj,
+    name,
+    billingMethod,
+    whiteMartins,
+    contacts: Array.isArray(value?.contacts)
+      ? value.contacts.map((contact) => ({ ...contact, enabled: contact?.enabled !== false }))
+      : []
+  };
+};
 
 const normalizedContact = (cnpj, value) => {
   const email = normalizedEmail(value?.email);
@@ -107,8 +133,66 @@ const ensureContactSeed = async (command = redisCommand) => {
   return command('EVAL', script, '2', KEYS.categories, KEYS.seed, ...argumentsList);
 };
 
-const listCategories = async (command = redisCommand) => {
+const historicalCategorySettings = (category) => {
+  const seeded = seedCategorySettings.get(digits(category?.cnpj));
+  if (seeded) return seeded;
+  const name = normalizedRuleText(category?.name);
+  const whiteMartins = name.includes('WHITE');
+  const tedDoc = whiteMartins || name.includes('ELECNOR') || (
+    /(?:^| )BL(?: |$)/.test(name) && name.includes('OTICA')
+  );
+  return {
+    billingMethod: tedDoc ? BILLING_METHODS.tedDoc : BILLING_METHODS.bankSlip,
+    whiteMartins
+  };
+};
+
+const ensureCategorySchema = async (command = redisCommand) => {
   await ensureContactSeed(command);
+  if (String(await command('GET', KEYS.categorySchema) || '') === CATEGORY_SCHEMA_VERSION) return 0;
+  const flat = await command('HGETALL', KEYS.categories) || [];
+  const migrations = [];
+  for (let index = 0; index < flat.length; index += 2) {
+    const cnpj = flat[index];
+    const raw = flat[index + 1];
+    const category = parseRecord(raw);
+    if (!category) continue;
+    const missingBillingMethod = !Object.values(BILLING_METHODS).includes(category.billingMethod);
+    const missingWhiteMartins = typeof category.whiteMartins !== 'boolean';
+    if (!missingBillingMethod && !missingWhiteMartins) continue;
+    const historical = historicalCategorySettings(category);
+    const migrated = {
+      ...category,
+      billingMethod: missingBillingMethod ? historical.billingMethod : category.billingMethod,
+      whiteMartins: missingWhiteMartins ? historical.whiteMartins : category.whiteMartins
+    };
+    migrations.push(cnpj, raw, JSON.stringify(migrated));
+  }
+  const script = [
+    "if redis.call('GET', KEYS[2]) == ARGV[1] then return 0 end",
+    'local updated = 0',
+    'for i = 2, #ARGV, 3 do',
+    "  if redis.call('HGET', KEYS[1], ARGV[i]) == ARGV[i + 1] then",
+    "    redis.call('HSET', KEYS[1], ARGV[i], ARGV[i + 2])",
+    '    updated = updated + 1',
+    '  end',
+    'end',
+    "redis.call('SET', KEYS[2], ARGV[1])",
+    'return updated'
+  ].join('\n');
+  return command(
+    'EVAL',
+    script,
+    '2',
+    KEYS.categories,
+    KEYS.categorySchema,
+    CATEGORY_SCHEMA_VERSION,
+    ...migrations
+  );
+};
+
+const listCategories = async (command = redisCommand) => {
+  await ensureCategorySchema(command);
   const flat = await command('HGETALL', KEYS.categories) || [];
   const categories = [];
   for (let index = 0; index < flat.length; index += 2) {
@@ -119,7 +203,7 @@ const listCategories = async (command = redisCommand) => {
 };
 
 const getCategory = async (cnpj, command = redisCommand) => {
-  await ensureContactSeed(command);
+  await ensureCategorySchema(command);
   const normalizedCnpj = requiredCnpj(cnpj);
   const category = parseRecord(await command('HGET', KEYS.categories, normalizedCnpj));
   return category ? normalizedCategory(category) : null;
@@ -294,6 +378,21 @@ const claimDelivery = async (event, invoiceId, email, record, command = redisCom
     KEYS.deliveries,
     deliveryField(event, invoiceId, email),
     JSON.stringify(record)
+  )
+) === 1;
+
+const RELEASE_DELIVERY_CLAIM_SCRIPT = `
+  local current = redis.call('HGET', KEYS[1], ARGV[1])
+  if not current then return 0 end
+  local record = cjson.decode(current)
+  if record.state ~= 'processing' or record.claimId ~= ARGV[2] then return 0 end
+  return redis.call('HDEL', KEYS[1], ARGV[1])
+`;
+
+const releaseDeliveryClaim = async (event, invoiceId, email, claimId, command = redisCommand) => Number(
+  await command(
+    'EVAL', RELEASE_DELIVERY_CLAIM_SCRIPT, '1', KEYS.deliveries,
+    deliveryField(event, invoiceId, email), String(claimId || '')
   )
 ) === 1;
 
@@ -491,14 +590,83 @@ const paymentImportKey = (importId) => {
 const paymentApprovalKey = (importId, invoiceId) =>
   `${paymentImportKey(importId)}:aprovacao:${requiredInvoiceId(invoiceId)}`;
 
+const paymentImportResultsKey = (importId) => `${paymentImportKey(importId)}:resultados`;
+
 const savePaymentImport = async (record, command = redisCommand) => {
   const importId = String(record?.id || '').trim().toLowerCase();
   await command('SET', paymentImportKey(importId), JSON.stringify(record), 'EX', '86400');
   return record;
 };
 
-const getPaymentImport = async (importId, command = redisCommand) =>
-  parseRecord(await command('GET', paymentImportKey(importId)));
+const paymentImportWithResults = (record, flat = []) => {
+  if (!record) return null;
+  const results = new Map();
+  for (let index = 0; index < flat.length; index += 2) {
+    const result = parseRecord(flat[index + 1]);
+    if (result) results.set(String(flat[index]), result);
+  }
+  let updatedAt = String(record.updatedAt || '');
+  record.candidates = (record.candidates || []).map((candidate) => {
+    const result = results.get(String(candidate.invoiceId));
+    if (!result) return candidate;
+    const status = result.status === 'busy' ? 'error' : result.status;
+    updatedAt = [updatedAt, String(result.updatedAt || '')].sort().at(-1);
+    return {
+      ...candidate,
+      status,
+      eligible: !['liquidated', 'already_settled'].includes(status),
+      approvedAt: result.approvedAt || candidate.approvedAt,
+      liquidationIds: result.liquidationIds || candidate.liquidationIds,
+      reason: status === 'error' ? String(result.message || '') : ''
+    };
+  });
+  record.summary.eligibleInvoices = record.candidates.filter((candidate) =>
+    candidate.eligible && candidate.status === 'ready').length;
+  record.summary.eligibleAmount = record.candidates.filter((candidate) =>
+    candidate.eligible && candidate.status === 'ready')
+    .reduce((total, candidate) => total + candidate.importedAmount, 0);
+  if (updatedAt) record.updatedAt = updatedAt;
+  return record;
+};
+
+const getPaymentImport = async (importId, command = redisCommand) => {
+  const record = parseRecord(await command('GET', paymentImportKey(importId)));
+  if (!record) return null;
+  const flat = await command('HGETALL', paymentImportResultsKey(importId)) || [];
+  return paymentImportWithResults(record, flat);
+};
+
+const SAVE_PAYMENT_IMPORT_RESULT_SCRIPT = `
+  if redis.call('EXISTS', KEYS[1]) == 0 then return 0 end
+  local previous = redis.call('HGET', KEYS[2], ARGV[1])
+  if previous then
+    local old = cjson.decode(previous)
+    local next = cjson.decode(ARGV[2])
+    if old.status == 'liquidated' and next.status ~= 'liquidated' then return 2 end
+    if old.status == 'already_settled' and next.status ~= 'liquidated' then return 2 end
+  end
+  redis.call('HSET', KEYS[2], ARGV[1], ARGV[2])
+  redis.call('EXPIREAT', KEYS[2], ARGV[3])
+  return 1
+`;
+
+const savePaymentImportResult = async (importId, result, expiresAt, command = redisCommand) => {
+  const invoiceId = requiredInvoiceId(result?.invoiceId);
+  const expiresAtSeconds = Math.floor(Date.parse(expiresAt) / 1000);
+  if (!Number.isSafeInteger(expiresAtSeconds) || expiresAtSeconds <= 0) {
+    throw Object.assign(new Error('Prazo da importação inválido.'), { statusCode: 422 });
+  }
+  const saved = await command(
+    'EVAL', SAVE_PAYMENT_IMPORT_RESULT_SCRIPT, '2',
+    paymentImportKey(importId), paymentImportResultsKey(importId),
+    invoiceId, JSON.stringify({ ...result, updatedAt: new Date().toISOString() }),
+    String(expiresAtSeconds)
+  );
+  if (Number(saved) === 0) {
+    throw Object.assign(new Error('A importação expirou ou não foi encontrada.'), { statusCode: 404 });
+  }
+  return saved;
+};
 
 const claimPaymentApproval = async (importId, invoiceId, command = redisCommand) => (
   await command('SET', paymentApprovalKey(importId, invoiceId), new Date().toISOString(), 'NX', 'EX', '90')
@@ -525,6 +693,8 @@ module.exports = {
   normalizedCategory,
   normalizedContact,
   ensureContactSeed,
+  historicalCategorySettings,
+  ensureCategorySchema,
   listCategories,
   getCategory,
   saveCategory,
@@ -546,6 +716,7 @@ module.exports = {
   deliveryField,
   getDelivery,
   claimDelivery,
+  releaseDeliveryClaim,
   saveDelivery,
   saveDeliveryReference,
   getDeliveryReference,
@@ -570,6 +741,8 @@ module.exports = {
   paymentImportKey,
   savePaymentImport,
   getPaymentImport,
+  paymentImportWithResults,
+  savePaymentImportResult,
   claimPaymentApproval,
   releasePaymentApproval,
   saveLastRun,

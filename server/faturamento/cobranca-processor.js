@@ -1,3 +1,4 @@
+const { randomUUID } = require('node:crypto');
 const {
   authenticatedGet,
   buildInvoiceQuery,
@@ -8,7 +9,11 @@ const {
   isPendingInvoice
 } = require('./brudam');
 const { findDoccobForInvoice } = require('./r2-doccob');
-const { fetchInvoicePdfData, buildInvoicePdf } = require('./invoice-pdf');
+const {
+  fetchInvoicePdfData,
+  buildInvoicePdf,
+  applyCategoryBillingMethod
+} = require('./invoice-pdf');
 const { generateInvoiceBankSlip, getInvoiceBankSlipPdf } = require('./boleto');
 const { issueInvoiceNfse, getIssuedNfseXml } = require('./nfse');
 const { buildDanfsePdf } = require('./danfse');
@@ -35,6 +40,7 @@ const {
 } = require('./cobranca-email');
 const { deliveryReference } = require('./cobranca-webhook');
 const { isTerminalBillingFailure } = require('./billing-failures');
+const { reconcileBankPayments } = require('./bank-payment-reconciliation');
 const store = require('./cobranca-store');
 
 const PAGE_SIZE = 100;
@@ -51,6 +57,66 @@ const TRANSIENT_NETWORK_CODES = new Set([
   'ETIMEDOUT'
 ]);
 const FINANCIAL_STATUS_UNCONFIRMED_CODE = 'BILLING_FINANCIAL_STATUS_UNCONFIRMED';
+
+const definiteSmtpNonDelivery = (error) => {
+  if (error?.deliveryAccepted === false) return true;
+  const code = String(error?.code || '').toUpperCase();
+  const command = String(error?.command || '').trim().toUpperCase();
+  return ['EAUTH', 'EENVELOPE', 'EDNS', 'ENOTFOUND', 'ECONNREFUSED'].includes(code)
+    || /^(CONN|AUTH(?:\s|$)|STARTTLS(?:\s|$)|MAIL FROM(?:\s|$)|RCPT TO(?:\s|$))/.test(command);
+};
+
+const deliveryErrorDiagnostic = (error) => {
+  const raw = String(error?.message || error?.cause?.message || error || 'Erro não identificado.');
+  const message = raw
+    .replace(/\b(?:Bearer|Basic)\s+[A-Za-z0-9+/=._-]+/gi, '[autorização ocultada]')
+    .replace(/\b(password|senha|token|secret|apikey)\s*[:=]\s*[^\s,;]+/gi, '$1=[oculto]')
+    .replace(/:\/\/[^\s/@]+@/g, '://[oculto]@')
+    .replace(/[A-Za-z0-9+/_=-]{80,}/g, '[dado oculto]')
+    .replace(/\s+/g, ' ')
+    .slice(0, 240);
+  const code = String(error?.code || error?.cause?.code || '').replace(/[^A-Za-z0-9_]/g, '').slice(0, 50);
+  const command = String(error?.command || '').replace(/[^A-Za-z0-9 -]/g, '').slice(0, 50);
+  const responseCode = Number(error?.responseCode);
+  return {
+    message,
+    ...(code ? { code } : {}),
+    ...(command ? { command } : {}),
+    ...(Number.isInteger(responseCode) && responseCode >= 100 && responseCode <= 599
+      ? { responseCode } : {})
+  };
+};
+
+const enrichLegacyReviewLogs = async (logs, getDelivery = store.getDelivery) => Promise.all(
+  (Array.isArray(logs) ? logs : []).map(async (record) => {
+    const legacyReview = record?.status === 'review'
+      || (record?.status === 'resolved' && record.previousStatus === 'review');
+    if (!legacyReview || record.deliveryStage || !record.invoiceId || !record.email) {
+      return record;
+    }
+    const attemptId = String(record.manualAttemptId || '').replace(/[^a-zA-Z0-9]/g, '').slice(-20).toLowerCase();
+    const deliveryEvent = record.manualResend && attemptId ? `manual_${attemptId}` : record.event;
+    try {
+      const delivery = await getDelivery(deliveryEvent, record.invoiceId, record.email);
+      if (
+        delivery?.state !== 'review'
+        || !delivery.message
+        || delivery.clientReference !== record.clientReference
+      ) return record;
+      const diagnostic = deliveryErrorDiagnostic(delivery.message);
+      return {
+        ...record,
+        message: record.status === 'resolved'
+          ? `Alerta encerrado manualmente, sem reenvio. Falha original: ${diagnostic.message}`
+          : `Falha registrada: ${diagnostic.message} A etapa não foi registrada na versão anterior.`,
+        diagnostic,
+        legacyReview: true
+      };
+    } catch {
+      return record;
+    }
+  })
+);
 
 const saoPauloDate = (value = new Date()) => {
   const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
@@ -150,12 +216,14 @@ const buildBillingQueue = ({
   actionablePending.forEach((invoice) => {
     enqueue(automaticBillingEventForInvoice(invoice, currentDate), [invoice], true);
   });
+  // A fila técnica já descoberta não deve depender de outra varredura da Brudam.
+  // Cada item será revalidado por ID antes de qualquer envio.
+  queuedPending.forEach((invoice) => {
+    enqueue(automaticBillingEventForInvoice(invoice, currentDate), [invoice], true);
+  });
   enqueue(EVENT_TYPES.overdue, overdue);
   reconciliation.forEach((invoice) => {
     enqueue(automaticBillingEventForInvoice(invoice, currentDate), [invoice]);
-  });
-  queuedPending.forEach((invoice) => {
-    enqueue(automaticBillingEventForInvoice(invoice, currentDate), [invoice], true);
   });
   return queue;
 };
@@ -214,6 +282,7 @@ const retryTransientNetworkRequest = async (
 
 const processorConfig = (env = process.env) => ({
   maxInvoices: positiveInteger(env.BILLING_EMAIL_MAX_INVOICES_PER_RUN, 12, 50),
+  maxBankReconciliations: positiveInteger(env.BILLING_BANK_RECONCILIATION_MAX_PER_RUN, 8, 25),
   maxPages: positiveInteger(env.BILLING_EMAIL_SCAN_PAGES_PER_RUN, 2, 10),
   deadlineMs: positiveInteger(env.BILLING_EMAIL_DEADLINE_MS, 50000, 55000)
 });
@@ -576,7 +645,7 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
     return;
   }
 
-  const data = await context.fetchInvoicePdfData(invoice.id);
+  let data = await context.fetchInvoicePdfData(invoice.id);
   if (
     Object.prototype.hasOwnProperty.call(data?.invoice || {}, 'balance')
     && !isPendingInvoice(data.invoice)
@@ -587,6 +656,7 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
   const category = resolvedCnpj === clientCnpj
     ? categoryBeforeInvoiceLookup
     : await context.getCategory(resolvedCnpj);
+  data = applyCategoryBillingMethod(data, category);
   const contacts = enabledContacts(category);
   const missingCustomerContacts = contacts.length === 0;
   if (missingCustomerContacts) {
@@ -710,6 +780,7 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
     context
   });
 
+  let retryableDeliveryFailure = false;
   for (const contact of unsentContacts) {
     // Confere cada destinatário imediatamente antes da reserva e do SMTP. Assim uma
     // liquidação ocorrida durante a preparação (ou entre destinatários) interrompe o lote.
@@ -740,8 +811,10 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
       bankSlipPdf,
       config: context.emailConfig
     });
+    const claimId = randomUUID();
     const claimed = await context.claimDelivery(deliveryEvent, invoice.id, contact.email, {
       state: 'processing',
+      claimId,
       createdAt: now,
       clientReference,
       ...deliveryMetadata
@@ -750,6 +823,111 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
       context.summary.alreadySent += 1;
       continue;
     }
+    const logMetadata = {
+      event,
+      invoiceId: String(invoice.id),
+      clientCnpj: resolvedCnpj,
+      clientName: data.client?.tradeName || data.client?.name || invoice.client,
+      contactName,
+      email: contact.email,
+      ...(internalAlert ? { recipientRole: 'internal_alert' } : {}),
+      clientReference,
+      emailPreview,
+      ...manualMetadata
+    };
+    const recordFailure = async (error, stage, definitelyNotAccepted = false, result = null) => {
+      const diagnostic = deliveryErrorDiagnostic(error);
+      const technicalFields = [
+        diagnostic.code && `código ${diagnostic.code}`,
+        diagnostic.command && `comando ${diagnostic.command}`,
+        diagnostic.responseCode && `SMTP ${diagnostic.responseCode}`
+      ].filter(Boolean);
+      const diagnosticText = technicalFields.length
+        ? `${diagnostic.message} (${technicalFields.join(', ')})`
+        : diagnostic.message;
+      console.error('[faturamento:cobranca:email]', {
+        invoiceId: String(invoice.id), event, stage,
+        ...diagnostic
+      });
+      let released = false;
+      if (definitelyNotAccepted) {
+        try {
+          if (!context.manualResend && !missingCustomerContacts && !retryableDeliveryFailure) {
+            const current = context.pendingByInvoice.get(String(invoice.id));
+            const pending = pendingRecord({
+              ...invoice,
+              client: logMetadata.clientName,
+              clientDocument: resolvedCnpj
+            }, current, context.now().toISOString(), 'email_retry', diagnosticText, {
+              source: context.source,
+              runId: context.runId
+            });
+            await context.savePending(pending);
+            context.pendingByInvoice.set(String(invoice.id), pending);
+          }
+          released = await context.releaseDeliveryClaim(
+            deliveryEvent, invoice.id, contact.email, claimId
+          );
+        } catch (releaseError) {
+          console.error('[faturamento:cobranca:email-claim]', {
+            invoiceId: String(invoice.id), event, stage,
+            ...deliveryErrorDiagnostic(releaseError)
+          });
+        }
+      }
+      const failedAt = context.now().toISOString();
+      if (released) {
+        retryableDeliveryFailure ||= !context.manualResend;
+        await context.addLog({
+          createdAt: failedAt,
+          status: 'error',
+          deliveryStage: stage,
+          retryable: true,
+          ...logMetadata,
+          message: `E-mail não aceito; nova tentativa permitida. ${diagnosticText}`,
+          diagnostic
+        });
+        context.summary.retryable = Number(context.summary.retryable || 0) + 1;
+        return;
+      }
+      const reviewRecord = {
+        state: 'review',
+        failedAt,
+        clientReference,
+        emailPreview,
+        deliveryStage: stage,
+        smtpAccepted: result ? true : null,
+        ...(result ? { messageId: result.messageId, accepted: result.accepted } : {}),
+        message: diagnosticText,
+        ...deliveryMetadata
+      };
+      try {
+        await context.saveDelivery(deliveryEvent, invoice.id, contact.email, reviewRecord);
+      } catch (saveError) {
+        console.error('[faturamento:cobranca:email-state]', {
+          invoiceId: String(invoice.id), event, stage,
+          ...deliveryErrorDiagnostic(saveError)
+        });
+        // A reserva original permanece; não reenvia sem conferência.
+      }
+      const message = stage === 'smtp'
+        ? `Resultado SMTP incerto; confira no provedor antes de reenviar. ${diagnosticText}`
+        : stage === 'persistence'
+          ? `SMTP retornou sem erro, mas o registro do envio falhou. ${diagnosticText}`
+          : `E-mail não enviado; a reserva não pôde ser liberada. ${diagnosticText}`;
+      await context.addLog({
+        createdAt: failedAt,
+        status: 'review',
+        deliveryStage: stage,
+        smtpAccepted: result ? true : null,
+        ...logMetadata,
+        ...(result ? { messageId: result.messageId } : {}),
+        message,
+        diagnostic
+      });
+      context.summary.review += 1;
+    };
+
     try {
       await context.saveDeliveryReference(clientReference, {
         event: deliveryEvent,
@@ -763,7 +941,14 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
         ...manualMetadata,
         ...(internalAlert ? { recipientRole: 'internal_alert' } : {})
       });
-      const result = await context.sendBillingEmail({
+    } catch (error) {
+      await recordFailure(error, 'reference', true);
+      continue;
+    }
+
+    let result;
+    try {
+      result = await context.sendBillingEmail({
         event,
         data,
         contact,
@@ -775,64 +960,60 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
         transport: context.transport,
         config: context.emailConfig
       });
-      const record = {
-        state: 'sent',
-        sentAt: context.now().toISOString(),
-        messageId: result.messageId,
-        accepted: result.accepted,
-        rejected: result.rejected,
-        clientReference,
-        emailPreview,
-        ...deliveryMetadata
-      };
-      await context.saveDelivery(deliveryEvent, invoice.id, contact.email, record);
-      await context.addLog({
-        createdAt: record.sentAt,
-        event,
-        status: 'submitted',
-        invoiceId: String(invoice.id),
-        clientCnpj: resolvedCnpj,
-        clientName: data.client?.tradeName || data.client?.name || invoice.client,
-        contactName,
-        email: contact.email,
-        ...(internalAlert ? { recipientRole: 'internal_alert' } : {}),
-        clientReference,
-        messageId: result.messageId,
-        emailPreview,
-        ...manualMetadata,
-        message: 'Mensagem aceita pelo SMTP do Zoho; a confirmação de entrega ainda está pendente.'
-      });
-      context.summary.sent += 1;
-      context.sentInvoiceIds?.add(String(invoice.id));
     } catch (error) {
-      const failedAt = context.now().toISOString();
-      await context.saveDelivery(deliveryEvent, invoice.id, contact.email, {
-        state: 'review',
-        failedAt,
-        clientReference,
-        emailPreview,
-        message: String(error.message || error).slice(0, 300),
-        ...deliveryMetadata
-      });
-      await context.addLog({
-        createdAt: failedAt,
-        event,
-        status: 'review',
-        invoiceId: String(invoice.id),
-        clientCnpj: resolvedCnpj,
-        clientName: data.client?.tradeName || data.client?.name || invoice.client,
-        contactName,
-        email: contact.email,
-        ...(internalAlert ? { recipientRole: 'internal_alert' } : {}),
-        clientReference,
-        emailPreview,
-        ...manualMetadata,
-        message: 'O resultado do envio precisa de conferência manual para evitar duplicidade.'
-      });
-      context.summary.review += 1;
+      await recordFailure(error, 'smtp', definiteSmtpNonDelivery(error));
+      continue;
     }
+
+    const record = {
+      state: 'sent',
+      sentAt: context.now().toISOString(),
+      messageId: result.messageId,
+      accepted: result.accepted,
+      rejected: result.rejected,
+      clientReference,
+      emailPreview,
+      ...deliveryMetadata
+    };
+    let stateError;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        await context.saveDelivery(deliveryEvent, invoice.id, contact.email, record);
+        stateError = null;
+        break;
+      } catch (error) {
+        stateError = error;
+      }
+    }
+    if (stateError) {
+      await recordFailure(stateError, 'persistence', false, result);
+      continue;
+    }
+    const submittedLog = {
+      id: randomUUID(),
+      createdAt: record.sentAt,
+      status: 'submitted',
+      ...logMetadata,
+      messageId: result.messageId,
+      message: 'Mensagem aceita pelo servidor SMTP configurado; a confirmação de entrega ainda está pendente.'
+    };
+    try {
+      await context.addLog(submittedLog);
+    } catch (error) {
+      try {
+        await context.addLog(submittedLog);
+      } catch (retryError) {
+        // O envio já foi confirmado no estado persistente; erro do log não autoriza reenvio.
+        console.error('[faturamento:cobranca:email-log]', {
+          invoiceId: String(invoice.id), event,
+          ...deliveryErrorDiagnostic(retryError)
+        });
+      }
+    }
+    context.summary.sent += 1;
+    context.sentInvoiceIds?.add(String(invoice.id));
   }
-  if (!missingCustomerContacts && context.pendingByInvoice.has(String(invoice.id))) {
+  if (!missingCustomerContacts && !retryableDeliveryFailure && context.pendingByInvoice.has(String(invoice.id))) {
     await context.removePending(invoice.id);
     context.pendingByInvoice.delete(String(invoice.id));
   }
@@ -878,6 +1059,7 @@ const createProcessorContext = ({
   removePending: dependencies.removePending || store.removePending,
   getDelivery: dependencies.getDelivery || store.getDelivery,
   claimDelivery: dependencies.claimDelivery || store.claimDelivery,
+  releaseDeliveryClaim: dependencies.releaseDeliveryClaim || store.releaseDeliveryClaim,
   saveDelivery: dependencies.saveDelivery || store.saveDelivery,
   saveDeliveryReference: dependencies.saveDeliveryReference || store.saveDeliveryReference,
   addLog: dependencies.addLog || store.addLog,
@@ -951,6 +1133,7 @@ const resendBillingInvoice = async (invoiceId, dependencies = {}) => {
     skippedBankSlipCutoff: 0,
     blocked: 0,
     review: 0,
+    retryable: 0,
     errors: [],
     stoppedByLimit: false
   };
@@ -968,7 +1151,6 @@ const resendBillingInvoice = async (invoiceId, dependencies = {}) => {
       return exact;
     }),
     getDelivery: async () => null,
-    claimDelivery: async () => true,
     deliveryReference: (event, id, email) => deliveryReference(event, id, email, attemptId),
     deliveryEvent: () => `manual_${attemptId.replace(/[^a-zA-Z0-9]/g, '').slice(-20).toLowerCase()}`
   };
@@ -1022,7 +1204,9 @@ const resendBillingInvoice = async (invoiceId, dependencies = {}) => {
     });
   }
   if (!summary.sent) {
-    throw Object.assign(new Error('O reenvio precisa de conferência nos logs antes de uma nova tentativa.'), {
+    throw Object.assign(new Error(summary.retryable
+      ? 'O e-mail não foi aceito pelo SMTP. Consulte o erro técnico nos logs antes de tentar novamente.'
+      : 'O resultado do reenvio precisa de conferência nos logs antes de uma nova tentativa.'), {
       statusCode: 502,
       expose: true
     });
@@ -1032,6 +1216,7 @@ const resendBillingInvoice = async (invoiceId, dependencies = {}) => {
     event,
     sent: summary.sent,
     review: summary.review,
+    retryable: summary.retryable,
     completedAt: summary.completedAt
   };
 };
@@ -1087,6 +1272,7 @@ const refreshBillingPending = async (dependencies = {}) => {
     skippedBankSlipCutoff: 0,
     blocked: 0,
     review: 0,
+    retryable: 0,
     deferredHistorical: 0,
     remaining: Math.max(0, available.length - batch.length),
     nextAfter: available.length > batch.length && batch.length
@@ -1232,22 +1418,29 @@ const runBillingCollection = async (dependencies = {}) => {
     (dependencies.listPending || store.listPending)(),
     (dependencies.getOverdueCursor || store.getOverdueCursor)()
   ]);
-  const staleQueuedIds = continuation
-    ? []
-    : pending.filter((record) => record.reason === 'queued').map((record) => record.invoiceId);
-  if (staleQueuedIds.length) {
-    await (dependencies.removePendingBatch || store.removePendingBatch)(staleQueuedIds);
-  }
-  const staleQueuedSet = new Set(staleQueuedIds.map(String));
-  const currentPending = pending.filter((record) => (
-    !staleQueuedSet.has(String(record.invoiceId))
-  ));
+  const currentPending = pending;
   const pendingByInvoice = new Map(
     currentPending.map((record) => [String(record.invoiceId), record])
   );
   const fetch = dependencies.fetchInvoices || fetchInvoiceScanPage;
 
   const emptyScan = { invoices: [], pages: 0, hasMore: false, nextSkip: 0 };
+  const bankReconciliationPromise = continuation
+    ? Promise.resolve({ checked: 0, settled: 0, alreadySettled: 0, pending: 0, errors: [] })
+    : (dependencies.reconcileBankPayments || reconcileBankPayments)({
+      currentDate,
+      maxRecords: config.maxBankReconciliations
+    }, dependencies).catch((error) => ({
+      checked: 0,
+      settled: 0,
+      alreadySettled: 0,
+      pending: 0,
+      errors: [{
+        invoiceId: '',
+        bank: '',
+        message: String(error.message || error).slice(0, 300)
+      }]
+    }));
   const scanResults = continuation
     ? [
       { scan: emptyScan, error: null },
@@ -1272,10 +1465,17 @@ const runBillingCollection = async (dependencies = {}) => {
         fetch
       })
     ]);
+  const bankReconciliation = await bankReconciliationPromise;
   const [todayResult, reminderResult, overdueResult] = scanResults;
   const todayScan = todayResult.scan;
   const reminderScan = reminderResult.scan;
   const overdueScan = overdueResult.scan;
+  const reconciliationErrors = (bankReconciliation.errors || []).map((error) => ({
+    event: 'bank_reconciliation',
+    invoiceId: String(error.invoiceId || ''),
+    stage: error.bank ? `conciliação ${error.bank}` : 'conciliação bancária',
+    message: String(error.message || 'Falha na conciliação bancária.').slice(0, 300)
+  }));
   const scanErrors = scanResults.map((result) => result.error).filter(Boolean);
   if (!continuation) {
     if (!overdueResult.error) {
@@ -1283,14 +1483,16 @@ const runBillingCollection = async (dependencies = {}) => {
     }
   }
 
-  const continuationPending = continuation
-    ? currentPending.filter((record) => (
-      record.reason === 'queued'
-      && (!dependencies.runId || String(record.lastRunId || '') === String(dependencies.runId))
-    ))
-    : [];
+  const queuedForRun = currentPending.filter((record) => (
+    record.reason === 'queued'
+    && (!continuation || !dependencies.runId ||
+      String(record.lastRunId || '') === String(dependencies.runId))
+  )).sort((left, right) => (
+    String(left.firstSeenAt || '').localeCompare(String(right.firstSeenAt || '')) ||
+    String(left.invoiceId).localeCompare(String(right.invoiceId), 'pt-BR', { numeric: true })
+  ));
   const queue = buildBillingQueue({
-    pending: continuationPending,
+    pending: queuedForRun,
     today: todayScan.invoices,
     reminder: reminderScan.invoices,
     overdue: overdueScan.invoices,
@@ -1304,6 +1506,14 @@ const runBillingCollection = async (dependencies = {}) => {
   const completedEventFields = await (
     dependencies.getCompletedBillingEvents || store.getCompletedBillingEvents
   )(unblockedQueue.map(({ event, invoice }) => ({ event, invoiceId: invoice.id })));
+  const completedQueuedIds = unblockedQueue
+    .filter((item) => item.fromPending && completedEventFields.has(item.key) &&
+      pendingByInvoice.get(String(item.invoice.id))?.reason === 'queued')
+    .map((item) => String(item.invoice.id));
+  if (completedQueuedIds.length) {
+    await (dependencies.removePendingBatch || store.removePendingBatch)(completedQueuedIds);
+    completedQueuedIds.forEach((invoiceId) => pendingByInvoice.delete(invoiceId));
+  }
   const activeQueue = unblockedQueue.filter(({ key }) => !completedEventFields.has(key));
   const discoveredAt = nowFactory().toISOString();
   const newlyQueued = activeQueue
@@ -1326,13 +1536,17 @@ const runBillingCollection = async (dependencies = {}) => {
     completedAt: null,
     scanned: queue.length,
     discovered: newlyQueued.length,
-    reconciled: 0,
+    reconciled: Number(bankReconciliation.checked || 0),
+    bankSettled: Number(bankReconciliation.settled || 0),
+    bankAlreadySettled: Number(bankReconciliation.alreadySettled || 0),
+    bankPending: Number(bankReconciliation.pending || 0),
     processed: 0,
     sent: 0,
     alreadySent: 0,
     pendingDoccob: 0,
     waitingContacts: 0,
-    settledInvoices: 0,
+    settledInvoices: Number(bankReconciliation.settled || 0) +
+      Number(bankReconciliation.alreadySettled || 0),
     skippedBankSlipCutoff: 0,
     blocked: queue.length - unblockedQueue.length,
     alreadyCompleted: unblockedQueue.length - activeQueue.length,
@@ -1340,7 +1554,8 @@ const runBillingCollection = async (dependencies = {}) => {
     scanFailures: scanErrors.length,
     remaining: 0,
     review: 0,
-    errors: [...scanErrors],
+    retryable: 0,
+    errors: [...reconciliationErrors, ...scanErrors],
     stoppedByLimit: false
   };
 
@@ -1448,6 +1663,7 @@ module.exports = {
   buildBillingQueue,
   rotateBillingQueue,
   isTransientNetworkError,
+  enrichLegacyReviewLogs,
   retryTransientNetworkRequest,
   processorConfig,
   fetchInvoiceScanPage,
