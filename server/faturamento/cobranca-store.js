@@ -381,6 +381,21 @@ const claimDelivery = async (event, invoiceId, email, record, command = redisCom
   )
 ) === 1;
 
+const RELEASE_DELIVERY_CLAIM_SCRIPT = `
+  local current = redis.call('HGET', KEYS[1], ARGV[1])
+  if not current then return 0 end
+  local record = cjson.decode(current)
+  if record.state ~= 'processing' or record.claimId ~= ARGV[2] then return 0 end
+  return redis.call('HDEL', KEYS[1], ARGV[1])
+`;
+
+const releaseDeliveryClaim = async (event, invoiceId, email, claimId, command = redisCommand) => Number(
+  await command(
+    'EVAL', RELEASE_DELIVERY_CLAIM_SCRIPT, '1', KEYS.deliveries,
+    deliveryField(event, invoiceId, email), String(claimId || '')
+  )
+) === 1;
+
 const saveDelivery = (event, invoiceId, email, record, command = redisCommand) => command(
   'HSET',
   KEYS.deliveries,
@@ -575,14 +590,83 @@ const paymentImportKey = (importId) => {
 const paymentApprovalKey = (importId, invoiceId) =>
   `${paymentImportKey(importId)}:aprovacao:${requiredInvoiceId(invoiceId)}`;
 
+const paymentImportResultsKey = (importId) => `${paymentImportKey(importId)}:resultados`;
+
 const savePaymentImport = async (record, command = redisCommand) => {
   const importId = String(record?.id || '').trim().toLowerCase();
   await command('SET', paymentImportKey(importId), JSON.stringify(record), 'EX', '86400');
   return record;
 };
 
-const getPaymentImport = async (importId, command = redisCommand) =>
-  parseRecord(await command('GET', paymentImportKey(importId)));
+const paymentImportWithResults = (record, flat = []) => {
+  if (!record) return null;
+  const results = new Map();
+  for (let index = 0; index < flat.length; index += 2) {
+    const result = parseRecord(flat[index + 1]);
+    if (result) results.set(String(flat[index]), result);
+  }
+  let updatedAt = String(record.updatedAt || '');
+  record.candidates = (record.candidates || []).map((candidate) => {
+    const result = results.get(String(candidate.invoiceId));
+    if (!result) return candidate;
+    const status = result.status === 'busy' ? 'error' : result.status;
+    updatedAt = [updatedAt, String(result.updatedAt || '')].sort().at(-1);
+    return {
+      ...candidate,
+      status,
+      eligible: !['liquidated', 'already_settled'].includes(status),
+      approvedAt: result.approvedAt || candidate.approvedAt,
+      liquidationIds: result.liquidationIds || candidate.liquidationIds,
+      reason: status === 'error' ? String(result.message || '') : ''
+    };
+  });
+  record.summary.eligibleInvoices = record.candidates.filter((candidate) =>
+    candidate.eligible && candidate.status === 'ready').length;
+  record.summary.eligibleAmount = record.candidates.filter((candidate) =>
+    candidate.eligible && candidate.status === 'ready')
+    .reduce((total, candidate) => total + candidate.importedAmount, 0);
+  if (updatedAt) record.updatedAt = updatedAt;
+  return record;
+};
+
+const getPaymentImport = async (importId, command = redisCommand) => {
+  const record = parseRecord(await command('GET', paymentImportKey(importId)));
+  if (!record) return null;
+  const flat = await command('HGETALL', paymentImportResultsKey(importId)) || [];
+  return paymentImportWithResults(record, flat);
+};
+
+const SAVE_PAYMENT_IMPORT_RESULT_SCRIPT = `
+  if redis.call('EXISTS', KEYS[1]) == 0 then return 0 end
+  local previous = redis.call('HGET', KEYS[2], ARGV[1])
+  if previous then
+    local old = cjson.decode(previous)
+    local next = cjson.decode(ARGV[2])
+    if old.status == 'liquidated' and next.status ~= 'liquidated' then return 2 end
+    if old.status == 'already_settled' and next.status ~= 'liquidated' then return 2 end
+  end
+  redis.call('HSET', KEYS[2], ARGV[1], ARGV[2])
+  redis.call('EXPIREAT', KEYS[2], ARGV[3])
+  return 1
+`;
+
+const savePaymentImportResult = async (importId, result, expiresAt, command = redisCommand) => {
+  const invoiceId = requiredInvoiceId(result?.invoiceId);
+  const expiresAtSeconds = Math.floor(Date.parse(expiresAt) / 1000);
+  if (!Number.isSafeInteger(expiresAtSeconds) || expiresAtSeconds <= 0) {
+    throw Object.assign(new Error('Prazo da importação inválido.'), { statusCode: 422 });
+  }
+  const saved = await command(
+    'EVAL', SAVE_PAYMENT_IMPORT_RESULT_SCRIPT, '2',
+    paymentImportKey(importId), paymentImportResultsKey(importId),
+    invoiceId, JSON.stringify({ ...result, updatedAt: new Date().toISOString() }),
+    String(expiresAtSeconds)
+  );
+  if (Number(saved) === 0) {
+    throw Object.assign(new Error('A importação expirou ou não foi encontrada.'), { statusCode: 404 });
+  }
+  return saved;
+};
 
 const claimPaymentApproval = async (importId, invoiceId, command = redisCommand) => (
   await command('SET', paymentApprovalKey(importId, invoiceId), new Date().toISOString(), 'NX', 'EX', '90')
@@ -632,6 +716,7 @@ module.exports = {
   deliveryField,
   getDelivery,
   claimDelivery,
+  releaseDeliveryClaim,
   saveDelivery,
   saveDeliveryReference,
   getDeliveryReference,
@@ -656,6 +741,8 @@ module.exports = {
   paymentImportKey,
   savePaymentImport,
   getPaymentImport,
+  paymentImportWithResults,
+  savePaymentImportResult,
   claimPaymentApproval,
   releasePaymentApproval,
   saveLastRun,

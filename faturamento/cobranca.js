@@ -754,9 +754,17 @@
       appendCell(row, record.manualResend
         ? 'Reenvio manual'
         : EVENT_LABELS[record.event] || record.event || '—');
-      const status = appendCell(row, STATUS_LABELS[record.status] || record.status || '—');
+      const retryable = record.status === 'error' && record.retryable === true;
+      const status = appendCell(row, retryable
+        ? 'Não enviado — nova tentativa pendente'
+        : STATUS_LABELS[record.status] || record.status || '—');
       status.className = `collection-status status-${record.status || 'unknown'}`;
       if (record.message) status.title = record.message;
+      if ((retryable || record.status === 'review' || record.legacyReview) && record.message) {
+        const detail = document.createElement('small');
+        detail.textContent = record.message;
+        status.appendChild(detail);
+      }
       const action = document.createElement('td');
       const actionButtons = document.createElement('div');
       actionButtons.className = 'collection-log-actions';
@@ -772,7 +780,7 @@
       resolveButton.disabled = !record.id;
       resolveButton.addEventListener('click', async () => {
         if (!record.id || !window.confirm(
-          'Marcar esta ocorrência como resolvida? O histórico será preservado e ela sairá das pendências.'
+          'Marcar esta ocorrência como resolvida? Isso apenas encerra o alerta: não reenvia o e-mail nem libera uma tentativa bloqueada.'
         )) return;
         resolveButton.disabled = true;
         setLoading(true);
@@ -794,7 +802,7 @@
         }
       });
       actionButtons.append(previewButton);
-      if (RESOLVABLE_LOG_STATUSES.has(record.status)) actionButtons.append(resolveButton);
+      if (RESOLVABLE_LOG_STATUSES.has(record.status) && !retryable) actionButtons.append(resolveButton);
       action.appendChild(actionButtons);
       row.appendChild(action);
       return row;
@@ -1130,6 +1138,8 @@
       settledInvoices: 0,
       resolved: 0,
       sent: 0,
+      retryable: 0,
+      review: 0,
       errors: []
     };
     let after = '';
@@ -1152,14 +1162,16 @@
         totals.settledInvoices += Number(result.settledInvoices || 0);
         totals.resolved += Number(result.resolved || 0);
         totals.sent += Number(result.sent || 0);
+        totals.retryable += Number(result.retryable || 0);
+        totals.review += Number(result.review || 0);
         totals.errors.push(...(Array.isArray(result.errors) ? result.errors : []));
         after = String(result.nextAfter || '');
       } while (after && result.processed > 0 && round < maxRounds);
       await Promise.all([loadPending(), loadLogs()]);
       const incomplete = Boolean(after);
       setMessage(
-        `Atualização concluída em ${round} lote(s): ${totals.processed} pendência(s) conferida(s), ${totals.settledInvoices} liquidada(s) removida(s), ${totals.resolved} problema(s) solucionado(s), ${totals.sent} e-mail(s) enviado(s) e ${totals.errors.length} erro(s).${incomplete ? ' As demais pendências continuarão na próxima atualização.' : ''}`,
-        totals.errors.length || incomplete ? 'warning' : 'success'
+        `Atualização concluída em ${round} lote(s): ${totals.processed} pendência(s) conferida(s), ${totals.settledInvoices} liquidada(s) removida(s), ${totals.resolved} problema(s) solucionado(s), ${totals.sent} e-mail(s) enviado(s), ${totals.retryable} envio(s) não aceito(s) para nova tentativa, ${totals.review} resultado(s) em conferência e ${totals.errors.length} outro(s) erro(s).${incomplete ? ' As demais pendências continuarão na próxima atualização.' : ''}`,
+        totals.errors.length || totals.retryable || totals.review || incomplete ? 'warning' : 'success'
       );
     } catch (error) {
       setMessage(error.message, 'error');
@@ -1189,6 +1201,8 @@
       discovered: 0,
       processed: 0,
       sent: 0,
+      retryable: 0,
+      review: 0,
       pendingDoccob: 0,
       blocked: 0,
       settledInvoices: 0,
@@ -1215,6 +1229,8 @@
         totals.discovered += Number(result.discovered || 0);
         totals.processed += Number(result.processed || 0);
         totals.sent += Number(result.sent || 0);
+        totals.retryable += Number(result.retryable || 0);
+        totals.review += Number(result.review || 0);
         totals.pendingDoccob += Number(result.pendingDoccob || 0);
         totals.blocked = Math.max(totals.blocked, Number(result.blocked || 0));
         totals.settledInvoices += Number(result.settledInvoices || 0);
@@ -1231,8 +1247,8 @@
       await Promise.all([loadPending(), loadLogs()]);
       const incomplete = Boolean(result?.stoppedByLimit && Number(result.remaining || 0) > 0);
       setMessage(
-        `Verificação concluída em ${round} lote(s): ${totals.reconciled} boleto(s) conferido(s), ${totals.bankSettled} fatura(s) liquidada(s) automaticamente, ${totals.processed} fatura(s) emitida(s) hoje, perto do vencimento ou vencida(s) examinada(s), ${totals.discovered} nova(s) fatura(s) registrada(s), ${totals.sent} e-mail(s) enviado(s), ${totals.pendingDoccob} aguardando DOCCOB, ${totals.blocked} fatura(s) bloqueada(s) e ${totals.errors.length} erro(s).${incomplete ? ` ${result.remaining || 0} fatura(s) continuarão na próxima verificação.` : ''}`,
-        totals.errors.length || incomplete ? 'warning' : 'success'
+        `Verificação concluída em ${round} lote(s): ${totals.reconciled} boleto(s) conferido(s), ${totals.bankSettled} fatura(s) liquidada(s) automaticamente, ${totals.processed} fatura(s) emitida(s) hoje, perto do vencimento ou vencida(s) examinada(s), ${totals.discovered} nova(s) fatura(s) registrada(s), ${totals.sent} e-mail(s) enviado(s), ${totals.retryable} envio(s) não aceito(s) para nova tentativa, ${totals.review} resultado(s) em conferência, ${totals.pendingDoccob} aguardando DOCCOB, ${totals.blocked} fatura(s) bloqueada(s) e ${totals.errors.length} outro(s) erro(s).${incomplete ? ` ${result.remaining || 0} fatura(s) continuarão na próxima verificação.` : ''}`,
+        totals.errors.length || totals.retryable || totals.review || incomplete ? 'warning' : 'success'
       );
     } catch (error) {
       setMessage(error.message, 'error');

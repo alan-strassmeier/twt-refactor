@@ -1963,6 +1963,15 @@ body.modal-open {
   font-weight: 800;
 }
 
+.collection-status small {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: .72rem;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
 .collection-status.status-delivered { color: var(--success); }
 .collection-status.status-resolved { color: var(--success); }
 .collection-status.status-accepted,

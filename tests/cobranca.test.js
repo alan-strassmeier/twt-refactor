@@ -18,6 +18,7 @@ const {
   mergeContacts,
   setContactEnabled,
   deliveryField,
+  releaseDeliveryClaim,
   saoPauloDate: logDate,
   listLogs,
   resolveLog,
@@ -69,6 +70,7 @@ const {
   buildBillingQueue,
   rotateBillingQueue,
   isTransientNetworkError,
+  enrichLegacyReviewLogs,
   retryTransientNetworkRequest,
   scanInvoices,
   pendingRecord,
@@ -492,6 +494,20 @@ test('não inclui Adriano em cópia nas mensagens dos clientes', async () => {
   assert.equal(calls[2].priority, 'high');
 });
 
+test('rejeição explícita do destinatário não é tratada como aceite incerto', async () => {
+  await assert.rejects(sendBillingEmail({
+    event: EVENT_TYPES.initial,
+    data: invoiceData(),
+    contact: { firstName: 'Maria', email: 'maria@example.com' },
+    invoicePdf: Buffer.from('pdf'),
+    transport: { sendMail: async () => ({
+      messageId: 'm-rejeitado', accepted: [], rejected: ['maria@example.com']
+    }) },
+    config: { fromName: 'TWT', fromEmail: 'faturamento@twt.com.br' }
+  }), (error) => error.code === 'BILLING_SMTP_RECIPIENT_REJECTED'
+    && error.deliveryAccepted === false);
+});
+
 test('usa o novo destinatário interno e migra a configuração legada', () => {
   const base = {
     ZOHO_SMTP_USER: 'faturamento@twt.com.br',
@@ -878,11 +894,12 @@ test('continuação drena somente itens ainda não examinados sem repetir a varr
   assert.notEqual(pendingUpdates[0].invoiceId, '11838');
 });
 
-test('verificação normal ignora pendências acumuladas e consulta somente as três janelas', async () => {
+test('verificação normal preserva fila descoberta e ignora pendências técnicas acumuladas', async () => {
   const now = new Date();
   let scanCalls = 0;
   let pendingLookups = 0;
   const removedQueued = [];
+  const pendingUpdates = [];
   const result = await runBillingCollection({
     source: 'manual',
     runId: 'somente-janelas',
@@ -897,7 +914,10 @@ test('verificação normal ignora pendências acumuladas e consulta somente as t
         issuedAt: '2026-06-11',
         dueAt: '2026-08-10'
       },
-      { invoiceId: '11000', reason: 'queued', lastRunId: 'execucao-antiga' }
+      {
+        invoiceId: '11000', reason: 'queued', lastRunId: 'execucao-antiga',
+        issuedAt: logDate(now), dueAt: addDays(logDate(now), 20)
+      }
     ],
     removePendingBatch: async (invoiceIds) => { removedQueued.push(...invoiceIds); },
     getOverdueCursor: async () => 0,
@@ -907,17 +927,82 @@ test('verificação normal ignora pendências acumuladas e consulta somente as t
       scanCalls += 1;
       return { invoices: [], pagination: { hasMore: false } };
     },
-    fetchPendingInvoice: async () => { pendingLookups += 1; },
+    fetchPendingInvoice: async () => {
+      pendingLookups += 1;
+      return { invoices: [{
+        id: '11000', status: 0, balance: 100, issuedAt: logDate(now),
+        dueAt: addDays(logDate(now), 20), clientDocument: '41870054000276'
+      }] };
+    },
     listBlockedInvoiceIds: async () => [],
     getCompletedBillingEvents: async () => new Set(),
+    getInvoiceBlock: async () => null,
+    savePending: async (record) => { pendingUpdates.push(record); },
+    findDoccobForInvoice: async () => null,
+    getCategory: async () => null,
     emailConfig: { fromName: 'TWT', fromEmail: 'faturamento@twt.com.br' },
     transport: {}
   });
   assert.equal(scanCalls, 3);
-  assert.equal(pendingLookups, 0);
-  assert.deepEqual(removedQueued, ['11000']);
-  assert.equal(result.processed, 0);
+  assert.equal(pendingLookups, 1);
+  assert.deepEqual(removedQueued, []);
+  assert.equal(pendingUpdates[0].reason, 'doccob');
+  assert.equal(result.processed, 1);
   assert.equal(result.reconciled, 0);
+});
+
+test('rodada automática seguinte processa o item restante mesmo sem nova descoberta na Brudam', async () => {
+  const firstDay = '2026-10-08';
+  const invoices = ['12001', '12002'].map((id) => ({
+    id, status: 0, balance: 100, issuedAt: firstDay,
+    dueAt: '2026-11-08', clientDocument: '41870054000276'
+  }));
+  const pending = new Map();
+  const processed = [];
+  const dependencies = {
+    source: 'automatic',
+    config: { maxInvoices: 1, maxPages: 1, deadlineMs: 55000 },
+    listPending: async () => [...pending.values()],
+    getOverdueCursor: async () => 0,
+    saveOverdueCursor: async () => {},
+    reconcileBankPayments: async () => ({ checked: 0, settled: 0, alreadySettled: 0, pending: 0, errors: [] }),
+    fetchInvoices: async (filters) => ({
+      invoices: filters['emissao[eq]'] === firstDay ? invoices : [],
+      pagination: { hasMore: false }
+    }),
+    fetchPendingInvoice: async ({ id }) => ({
+      invoices: invoices.filter((invoice) => invoice.id === String(id))
+    }),
+    listBlockedInvoiceIds: async () => [],
+    getCompletedBillingEvents: async () => new Set(),
+    getInvoiceBlock: async () => null,
+    savePendingBatch: async (records) => records.forEach((record) => pending.set(record.invoiceId, record)),
+    savePending: async (record) => {
+      pending.set(record.invoiceId, record);
+      processed.push(record.invoiceId);
+    },
+    removePending: async (invoiceId) => { pending.delete(String(invoiceId)); },
+    addLog: async () => {},
+    markBillingEventCompleted: async () => {},
+    findDoccobForInvoice: async () => null,
+    getCategory: async () => null,
+    emailConfig: { fromName: 'TWT', fromEmail: 'faturamento@twt.com.br' },
+    transport: {}
+  };
+  const first = await runBillingCollection({
+    ...dependencies, runId: 'primeira',
+    currentTime: new Date('2026-10-08T12:00:00Z')
+  });
+  assert.equal(first.remaining, 1);
+  assert.equal(pending.get('12002').reason, 'queued');
+  const second = await runBillingCollection({
+    ...dependencies, runId: 'segunda',
+    currentTime: new Date('2026-10-09T12:00:00Z')
+  });
+  assert.equal(second.processed, 1);
+  assert.equal(second.remaining, 0);
+  assert.deepEqual(processed, ['12001', '12002']);
+  assert.equal(pending.get('12002').reason, 'doccob');
 });
 
 test('atualização da Central remove primeiro faturas liquidadas, inclusive falhas vindas só do log', async () => {
@@ -1015,6 +1100,7 @@ test('atualização da Central reprocessa uma pendência aberta depois de confer
     }),
     getDelivery: async () => null,
     claimDelivery: async () => true,
+    releaseDeliveryClaim: async () => true,
     saveDelivery: async () => {},
     saveDeliveryReference: async () => {},
     fetchInvoicePdfData: async () => invoiceData({ type: 'ted_doc' }),
@@ -1080,6 +1166,7 @@ const processorContext = (overrides = {}) => {
     removePending: async () => {},
     getDelivery: async () => null,
     claimDelivery: async () => true,
+    releaseDeliveryClaim: async () => true,
     saveDelivery: async () => {},
     saveDeliveryReference: async () => {},
     addLog: async () => {},
@@ -1087,6 +1174,210 @@ const processorContext = (overrides = {}) => {
     ...overrides
   };
 };
+
+test('libera somente a reserva de envio ainda em processamento e com o mesmo identificador', async () => {
+  const field = deliveryField(EVENT_TYPES.initial, '11756', 'maria@example.com');
+  const records = new Map([[field, { state: 'processing', claimId: 'reserva-certa' }]]);
+  const command = async (operation, _script, keyCount, key, selectedField, claimId) => {
+    assert.equal(operation, 'EVAL');
+    assert.equal(keyCount, '1');
+    assert.equal(key, KEYS.deliveries);
+    const current = records.get(selectedField);
+    if (current?.state !== 'processing' || current.claimId !== claimId) return 0;
+    records.delete(selectedField);
+    return 1;
+  };
+  assert.equal(await releaseDeliveryClaim(
+    EVENT_TYPES.initial, '11756', 'maria@example.com', 'outra-reserva', command
+  ), false);
+  assert.equal(records.has(field), true);
+  assert.equal(await releaseDeliveryClaim(
+    EVENT_TYPES.initial, '11756', 'maria@example.com', 'reserva-certa', command
+  ), true);
+  records.set(field, { state: 'sent', claimId: 'reserva-certa' });
+  assert.equal(await releaseDeliveryClaim(
+    EVENT_TYPES.initial, '11756', 'maria@example.com', 'reserva-certa', command
+  ), false);
+  assert.equal(records.get(field).state, 'sent');
+});
+
+test('falha antes do SMTP libera a reserva e a próxima rodada envia sem duplicar', async () => {
+  const deliveries = new Map();
+  const pending = new Map();
+  const logs = [];
+  let references = 0;
+  let smtpCalls = 0;
+  const context = processorContext({
+    emailConfig: { fromName: 'TWT', fromEmail: 'faturamento@twt.com.br', alertEmail: '' },
+    getDelivery: async (_event, _invoiceId, email) => deliveries.get(email) || null,
+    claimDelivery: async (_event, _invoiceId, email, record) => {
+      if (deliveries.has(email)) return false;
+      deliveries.set(email, record);
+      return true;
+    },
+    releaseDeliveryClaim: async (_event, _invoiceId, email, claimId) => {
+      const current = deliveries.get(email);
+      if (current?.state !== 'processing' || current.claimId !== claimId) return false;
+      deliveries.delete(email);
+      return true;
+    },
+    saveDelivery: async (_event, _invoiceId, email, record) => { deliveries.set(email, record); },
+    saveDeliveryReference: async () => {
+      references += 1;
+      if (references === 1) throw new Error('Falha temporária no controle de referências.');
+    },
+    savePending: async (record) => { pending.set(record.invoiceId, record); },
+    removePending: async (invoiceId) => { pending.delete(String(invoiceId)); },
+    addLog: async (record) => { logs.push(record); },
+    sendBillingEmail: async ({ contact }) => {
+      smtpCalls += 1;
+      return { messageId: 'm-ok', accepted: [contact.email], rejected: [] };
+    }
+  });
+  const task = {
+    event: EVENT_TYPES.initial,
+    invoice: { id: '11756', clientDocument: '11280282000144', client: 'BHZ' },
+    context
+  };
+  await processInvoiceEvent(task);
+  assert.equal(smtpCalls, 0);
+  assert.equal(deliveries.size, 0);
+  assert.equal(pending.get('11756').reason, 'email_retry');
+  assert.equal(logs[0].status, 'error');
+  assert.equal(logs[0].deliveryStage, 'reference');
+  assert.equal(logs[0].retryable, true);
+  assert.match(logs[0].message, /não aceito/i);
+
+  await processInvoiceEvent(task);
+  await processInvoiceEvent(task);
+  assert.equal(smtpCalls, 1);
+  assert.equal(deliveries.get('maria@example.com').state, 'sent');
+  assert.equal(pending.size, 0);
+  assert.deepEqual(logs.map((record) => record.status), ['error', 'submitted']);
+});
+
+test('pendência de e-mail não aceito aparece como nova tentativa, não como falha genérica', () => {
+  const issues = buildUnifiedIssues({
+    pending: [{
+      invoiceId: '11756', reason: 'email_retry', clientCnpj: '11280282000144',
+      message: 'Falha na autenticação SMTP.'
+    }]
+  });
+  assert.equal(issues[0].type, 'email');
+  assert.equal(issues[0].action, 'logs');
+  assert.match(issues[0].title, /nova tentativa/i);
+});
+
+test('rejeição na autenticação SMTP permite nova tentativa, mas timeout após DATA exige conferência', async () => {
+  for (const [command, expectedStatus, expectedRelease] of [
+    ['AUTH PLAIN', 'error', true],
+    ['DATA', 'review', false]
+  ]) {
+    const deliveries = new Map();
+    const logs = [];
+    let released = 0;
+    const context = processorContext({
+      emailConfig: { fromName: 'TWT', fromEmail: 'faturamento@twt.com.br', alertEmail: '' },
+      getDelivery: async (_event, _invoiceId, email) => deliveries.get(email) || null,
+      claimDelivery: async (_event, _invoiceId, email, record) => {
+        deliveries.set(email, record);
+        return true;
+      },
+      releaseDeliveryClaim: async (_event, _invoiceId, email) => {
+        released += 1;
+        deliveries.delete(email);
+        return true;
+      },
+      saveDelivery: async (_event, _invoiceId, email, record) => { deliveries.set(email, record); },
+      savePending: async () => {},
+      addLog: async (record) => { logs.push(record); },
+      sendBillingEmail: async () => {
+        throw Object.assign(new Error('Falha SMTP de teste.'), { code: 'ETIMEDOUT', command });
+      }
+    });
+    await processInvoiceEvent({
+      event: EVENT_TYPES.initial,
+      invoice: { id: '11756', clientDocument: '11280282000144', client: 'BHZ' },
+      context
+    });
+    assert.equal(logs[0].status, expectedStatus);
+    assert.equal(logs[0].diagnostic.command, command);
+    assert.equal(released > 0, expectedRelease);
+    assert.equal(deliveries.has('maria@example.com'), !expectedRelease);
+  }
+});
+
+test('erro no log após aceite não reclassifica o e-mail enviado nem permite duplicidade', async () => {
+  const deliveries = new Map();
+  let sent = 0;
+  let logCalls = 0;
+  const context = processorContext({
+    emailConfig: { fromName: 'TWT', fromEmail: 'faturamento@twt.com.br', alertEmail: '' },
+    getDelivery: async (_event, _invoiceId, email) => deliveries.get(email) || null,
+    claimDelivery: async (_event, _invoiceId, email, record) => {
+      deliveries.set(email, record);
+      return true;
+    },
+    saveDelivery: async (_event, _invoiceId, email, record) => { deliveries.set(email, record); },
+    addLog: async () => { logCalls += 1; throw new Error('Falha no log.'); },
+    sendBillingEmail: async ({ contact }) => {
+      sent += 1;
+      return { messageId: 'm-ok', accepted: [contact.email], rejected: [] };
+    }
+  });
+  const task = {
+    event: EVENT_TYPES.initial,
+    invoice: { id: '11756', clientDocument: '11280282000144', client: 'BHZ' },
+    context
+  };
+  await processInvoiceEvent(task);
+  await processInvoiceEvent(task);
+  assert.equal(sent, 1);
+  assert.equal(logCalls, 2);
+  assert.equal(deliveries.get('maria@example.com').state, 'sent');
+  assert.equal(context.summary.review, 0);
+});
+
+test('falha ao gravar estado depois do aceite mantém a trava e registra a etapa correta', async () => {
+  const deliveries = new Map();
+  const logs = [];
+  let smtpCalls = 0;
+  let stateCalls = 0;
+  let releases = 0;
+  const context = processorContext({
+    emailConfig: { fromName: 'TWT', fromEmail: 'faturamento@twt.com.br', alertEmail: '' },
+    getDelivery: async (_event, _invoiceId, email) => deliveries.get(email) || null,
+    claimDelivery: async (_event, _invoiceId, email, record) => {
+      deliveries.set(email, record);
+      return true;
+    },
+    releaseDeliveryClaim: async () => { releases += 1; return true; },
+    saveDelivery: async (_event, _invoiceId, email, record) => {
+      stateCalls += 1;
+      if (stateCalls <= 2) throw new Error('Redis indisponível após o SMTP.');
+      deliveries.set(email, record);
+    },
+    addLog: async (record) => { logs.push(record); },
+    sendBillingEmail: async ({ contact }) => {
+      smtpCalls += 1;
+      return { messageId: 'm-aceito', accepted: [contact.email], rejected: [] };
+    }
+  });
+  const task = {
+    event: EVENT_TYPES.initial,
+    invoice: { id: '11756', clientDocument: '11280282000144', client: 'BHZ' },
+    context
+  };
+  await processInvoiceEvent(task);
+  await processInvoiceEvent(task);
+  assert.equal(smtpCalls, 1);
+  assert.equal(releases, 0);
+  assert.equal(deliveries.get('maria@example.com').state, 'review');
+  assert.equal(deliveries.get('maria@example.com').smtpAccepted, true);
+  assert.equal(logs[0].status, 'review');
+  assert.equal(logs[0].deliveryStage, 'persistence');
+  assert.equal(logs[0].messageId, 'm-aceito');
+});
 
 test('mantém a fatura na fila enquanto o DOCCOB não chegou', async () => {
   const saved = [];
@@ -1770,6 +2061,33 @@ test('marca falha de entrega como resolvida sem apagar seu histórico', async ()
   assert.ok(!result.logs.some((record) => record.id === 'falha-1'));
 });
 
+test('logs antigos de conferência recuperam o erro gravado sem revelar a senha SMTP', async () => {
+  const logs = await enrichLegacyReviewLogs([{
+    id: 'revisao-antiga', status: 'review', event: EVENT_TYPES.reminder,
+    invoiceId: '11855', email: 'financeiro@example.com', clientReference: 'ref-antiga',
+    manualResend: true, manualAttemptId: 'reenvio-manual-1',
+    message: 'O resultado do envio precisa de conferência manual para evitar duplicidade.'
+  }], async (event, invoiceId, email) => {
+    assert.equal(event, 'manual_reenviomanual1');
+    assert.equal(invoiceId, '11855');
+    assert.equal(email, 'financeiro@example.com');
+    return {
+      state: 'review', clientReference: 'ref-antiga',
+      message: 'Invalid login password=segredo-supersecreto'
+    };
+  });
+  assert.match(logs[0].message, /Invalid login/);
+  assert.doesNotMatch(logs[0].message, /segredo-supersecreto/);
+  assert.equal(logs[0].legacyReview, true);
+
+  const resolved = await enrichLegacyReviewLogs([{
+    ...logs[0], status: 'resolved', previousStatus: 'review', deliveryStage: ''
+  }], async () => ({
+    state: 'review', clientReference: 'ref-antiga', message: 'Falha antes da entrega.'
+  }));
+  assert.match(resolved[0].message, /sem reenvio/i);
+});
+
 test('persiste e remove o bloqueio de envio por fatura', async () => {
   const blocks = new Map();
   const command = async (operation, _key, field, value) => {
@@ -1979,7 +2297,7 @@ test('reenvio manual ignora a trava do envio anterior e cria referência exclusi
       contacts: [{ id: '1', firstName: 'Maria', lastName: '', email: 'maria@example.com' }]
     }),
     getDelivery: async () => ({ state: 'sent' }),
-    claimDelivery: async () => false,
+    claimDelivery: async (event) => event.startsWith('manual_'),
     saveDelivery: async (...args) => savedDeliveries.push(args),
     saveDeliveryReference: async (reference, record) => references.push({ reference, record }),
     sendBillingEmail: async (input) => {
@@ -2112,6 +2430,7 @@ test('reenvio manual permite fatura antiga quando o pagamento é TED/DOC', async
       return { messageId: 'manual-antiga', accepted: ['maria@example.com'], rejected: [] };
     },
     saveDelivery: async () => {},
+    claimDelivery: async () => true,
     saveDeliveryReference: async () => {},
     addLog: async () => {},
     removePending: async () => {}

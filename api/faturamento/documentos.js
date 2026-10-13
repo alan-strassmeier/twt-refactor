@@ -2,11 +2,13 @@ const { sessionFromRequest } = require('../../server/faturamento/auth');
 const { queryFromRequest, sendJson } = require('../../server/faturamento/http');
 const { resolveInvoiceCteKeys } = require('../../server/faturamento/cte-documents');
 const {
+  BILLING_BANKS,
   bankSlipBankForIssuer,
   isTwtIssuer,
   requiresTedDocForCategory
 } = require('../../server/faturamento/billing-rules');
 const billingStore = require('../../server/faturamento/cobranca-store');
+const { getBankSlipRecord } = require('../../server/faturamento/boleto-store');
 const { getNfseRecord } = require('../../server/faturamento/nfse-store');
 const { nfseConfig } = require('../../server/faturamento/nfse-config');
 
@@ -31,6 +33,7 @@ module.exports = async (req, res) => {
         hasCte: false,
         cteCount: 0,
         bankSlipEligible: false,
+        bankSlipReady: false,
         bankSlipBank: null,
         bankSlipBankLabel: null,
         paymentMethod: null,
@@ -41,10 +44,15 @@ module.exports = async (req, res) => {
       return;
     }
     const bank = bankSlipBankForIssuer(documents.issuerCnpj);
-    const category = documents.clientCnpj
-      ? await billingStore.getCategory(documents.clientCnpj)
-      : null;
+    const [category, bankSlipRecord] = await Promise.all([
+      documents.clientCnpj ? billingStore.getCategory(documents.clientCnpj) : null,
+      bank ? getBankSlipRecord(documents.invoiceId) : null
+    ]);
     const tedDocPayment = requiresTedDocForCategory(category);
+    const savedBank = BILLING_BANKS[bankSlipRecord?.bank];
+    const bankSlipReady = bankSlipRecord?.state === 'ready' &&
+      Boolean(bankSlipRecord.bankSlipId) && Boolean(savedBank);
+    const displayedBank = bankSlipReady ? savedBank : bank;
     const nfseEligible = isTwtIssuer(documents.issuerCnpj);
     let nfseRecord = null;
     let nfseCertificateMode = '';
@@ -66,8 +74,9 @@ module.exports = async (req, res) => {
       hasCte: documents.cteKeys.length > 0,
       cteCount: documents.cteKeys.length,
       bankSlipEligible: Boolean(bank) && !tedDocPayment,
-      bankSlipBank: bank && !tedDocPayment ? bank.id : null,
-      bankSlipBankLabel: bank && !tedDocPayment ? bank.label : null,
+      bankSlipReady,
+      bankSlipBank: displayedBank && (!tedDocPayment || bankSlipReady) ? displayedBank.id : null,
+      bankSlipBankLabel: displayedBank && (!tedDocPayment || bankSlipReady) ? displayedBank.label : null,
       paymentMethod: tedDocPayment ? 'ted_doc' : 'bank_slip',
       nfseEligible,
       nfseStatus: nfseRecord?.state || 'not_issued',

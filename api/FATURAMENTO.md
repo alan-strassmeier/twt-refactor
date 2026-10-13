@@ -225,8 +225,14 @@ O endereço legado `adriano@twt.com.br` é migrado automaticamente para
 
 Cada combinação de evento, fatura e destinatário é reservada no Redis antes do
 envio. Atualizar a página ou executar a rotina novamente não envia uma segunda
-cópia. Em caso de resposta SMTP incerta, o registro fica como **Requer
-conferência**, sem tentativa automática que possa duplicar a cobrança.
+cópia. Falhas comprovadamente anteriores ao aceite do SMTP liberam somente a
+reserva daquela tentativa e mantêm a fatura na fila para nova verificação; o log
+indica **Não enviado — nova tentativa pendente** e mostra a etapa e o erro.
+Timeouts durante a transmissão e falhas ao registrar um aceite continuam como
+**Requer conferência**, sem repetição automática que possa duplicar a cobrança.
+**Marcar resolvido** encerra apenas o alerta; não reenvia nem libera uma reserva.
+Registros antigos de conferência não são liberados automaticamente após a
+atualização, pois não é possível provar retroativamente se o SMTP os aceitou.
 
 O botão **Verificar agora** e as quatro rotinas automáticas consultam somente
 três grupos: faturas emitidas no dia, faturas que entram na janela de aviso de

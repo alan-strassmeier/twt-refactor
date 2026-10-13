@@ -226,7 +226,9 @@ const sendBillingEmail = async ({
   if (rejected.some((email) => email.toLocaleLowerCase('pt-BR') === contact.email.toLocaleLowerCase('pt-BR'))) {
     throw Object.assign(new Error('O servidor SMTP rejeitou o destinatário da cobrança.'), {
       statusCode: 502,
-      expose: true
+      expose: true,
+      code: 'BILLING_SMTP_RECIPIENT_REJECTED',
+      deliveryAccepted: false
     });
   }
   return {

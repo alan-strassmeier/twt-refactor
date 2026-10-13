@@ -11,7 +11,8 @@ const brudamContacts = require('../../server/faturamento/cobranca-brudam-contact
 const {
   runBillingCollection,
   resendBillingInvoice,
-  refreshBillingPending
+  refreshBillingPending,
+  enrichLegacyReviewLogs
 } = require('../../server/faturamento/cobranca-processor');
 const { fetchInvoices } = require('../../server/faturamento/brudam');
 const { findDoccobForInvoice } = require('../../server/faturamento/r2-doccob');
@@ -400,6 +401,7 @@ const handleLogs = async (req, res, query) => {
       page: query.page,
       limit: query.limit
     });
+    result.logs = await enrichLegacyReviewLogs(result.logs);
     sendJson(res, 200, result);
     return;
   }
@@ -585,7 +587,9 @@ const handleResend = async (req, res) => {
     });
     sendJson(res, 200, {
       ...result,
-      message: `Cobrança reenviada em ${result.sent} mensagem(ns).`
+      message: `Cobrança reenviada em ${result.sent} mensagem(ns).${result.retryable
+        ? ` ${result.retryable} destinatário(s) não aceito(s); consulte os logs antes de tentar novamente.` : ''}${result.review
+        ? ` ${result.review} resultado(s) exigem conferência para evitar duplicidade.` : ''}`
     });
   } finally {
     try {

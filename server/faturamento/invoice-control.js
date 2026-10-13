@@ -99,7 +99,8 @@ const collectionState = (logs = []) => {
     return controlState('no_contacts', 'Sem destinatário', 'warning');
   }
   if (logs.some((log) => log.status === 'resolved')) {
-    return controlState('resolved', 'Resolvida manualmente', 'success');
+    return controlState('resolved', 'Ocorrência encerrada', 'neutral',
+      'Encerrar um alerta não confirma a entrega nem reenvia o e-mail.');
   }
   const deliveryLogs = logs.filter((log) => log.email || log.clientReference);
   if (deliveryLogs.length && deliveryLogs.every((log) => log.status === 'delivered')) {
@@ -202,6 +203,8 @@ const issueFromPending = (record, now) => {
     ? 'contacts'
     : record.reason === 'doccob'
       ? 'documents'
+      : record.reason === 'email_retry'
+        ? 'email'
       : /boleto|banco|ita[uú]|bradesco/i.test(message)
         ? 'payment'
         : /dacte|ct-?e|xml|document/i.test(message)
@@ -211,6 +214,7 @@ const issueFromPending = (record, now) => {
     contacts: 'Cadastrar destinatário',
     documents: record.reason === 'doccob' ? 'Aguardando DOCCOB' : 'Falha nos documentos',
     payment: 'Falha no boleto',
+    email: 'E-mail não enviado; nova tentativa pendente',
     processing: record.reason === 'queued' ? 'Aguardando processamento' : 'Falha no processamento'
   };
   return {
@@ -231,6 +235,8 @@ const issueFromPending = (record, now) => {
         ? 'documents'
         : type === 'payment'
           ? 'payment'
+          : type === 'email'
+            ? 'logs'
           : 'invoice'
   };
 };
@@ -244,7 +250,13 @@ const issueFromLog = (record, now) => ({
   clientCnpj: digits(record.clientCnpj),
   dueAt: record.dueAt || '',
   updatedAt: record.createdAt || '',
-  title: record.status === 'waiting_contacts' ? 'Cadastrar destinatário' : 'Falha na entrega do e-mail',
+  title: record.status === 'waiting_contacts'
+    ? 'Cadastrar destinatário'
+    : record.retryable
+      ? 'E-mail não aceito; nova tentativa pendente'
+      : record.status === 'review'
+        ? 'Resultado do envio em conferência'
+        : 'Falha na entrega do e-mail',
   message: record.message || 'O envio precisa de conferência.',
   email: record.email || '',
   action: record.status === 'waiting_contacts' ? 'contacts' : 'logs'
