@@ -6,7 +6,8 @@ const {
   companyLookupPath,
   companyRecordsFromPayload,
   invoiceListFromPayload,
-  normalizeVisibleInvoices
+  normalizeVisibleInvoices,
+  validCnpj
 } = require('./brudam');
 const { normalizedDateOnly } = require('./billing-rules');
 
@@ -136,7 +137,7 @@ const fetchInactiveInvoicePage = async (skip) => {
 };
 
 const retryable = (error) => Number(error?.statusCode) === 429 ||
-  Number(error?.statusCode) >= 500 ||
+  (error?.retryable !== false && Number(error?.statusCode) >= 500) ||
   error?.name === 'AbortError' ||
   /fetch failed|timeout|network|socket|limite de requisi/i.test(String(error?.message || ''));
 
@@ -179,11 +180,25 @@ const tradeNameFromPayload = (payload, cnpj) => {
     name.replace(/\D/g, '') === cnpj ? '' : name;
 };
 
-const fetchInactiveTradeName = async (cnpj) => {
-  const { response, payload } = await authenticatedGet(companyLookupPath({ cnpj }));
+const fetchInactiveTradeName = async (cnpj, get = authenticatedGet) => {
+  if (!validCnpj(cnpj)) return '';
+  const { response, payload } = await get(companyLookupPath({ cnpj }));
   if (!response.ok) {
-    throw Object.assign(new Error('Não foi possível consultar o nome fantasia na Brudam.'), {
-      statusCode: response.status || 502
+    const upstreamMessage = String(
+      payload?.message || payload?.mensagem || payload?.descricao || payload?.descricaoErro || ''
+    ).trim().slice(0, 180);
+    if (response.status === 404 ||
+      (response.status === 400 && /n[aã]o (?:foi )?(?:encontrad|localizad|cadastrad)|inexistente|cnpj inv[aá]lido/i.test(upstreamMessage))) {
+      return '';
+    }
+    const rateLimited = response.status === 429 || /limite de requisi|requisições por segundo|rate limit/i.test(upstreamMessage);
+    throw Object.assign(new Error(
+      `A Brudam recusou a consulta do CNPJ ${cnpj} (HTTP ${response.status || 502})` +
+      (upstreamMessage ? `: ${upstreamMessage}` : '.')
+    ), {
+      statusCode: rateLimited ? 429 : 502,
+      retryable: rateLimited || response.status >= 500,
+      expose: true
     });
   }
   return tradeNameFromPayload(payload, cnpj);
@@ -195,7 +210,7 @@ const queryTradeName = async (cnpj, { fetchTradeName, wait }) => {
       return await fetchTradeName(cnpj);
     } catch (error) {
       if (attempt === 2 || !retryable(error)) throw error;
-      await wait(500 * attempt);
+      await wait(Number(error?.statusCode) === 429 ? 1500 : 500 * attempt);
     }
   }
   return '';

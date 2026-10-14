@@ -9,6 +9,7 @@ const {
   addInvoices,
   buildInactiveSnapshot,
   tradeNameFromPayload,
+  fetchInactiveTradeName,
   getInactiveSnapshot,
   startInactiveRefresh,
   continueInactiveRefresh
@@ -96,6 +97,29 @@ test('seleciona apenas o nome fantasia do CNPJ correto, sem usar razão social o
   assert.equal(tradeNameFromPayload({ status: 1, data: [
     { cnpj: '11111111000111', fantasia: '11111111000111' }
   ] }, '11111111000111'), '');
+});
+
+test('não consulta cadastro para CNPJ inválido e aceita ausência confirmada pela Brudam', async () => {
+  let calls = 0;
+  const get = async () => {
+    calls += 1;
+    return { response: { ok: false, status: 400 }, payload: { message: 'Empresa não encontrada.' } };
+  };
+  assert.equal(await fetchInactiveTradeName('00000000000000', get), '');
+  assert.equal(calls, 0);
+  assert.equal(await fetchInactiveTradeName('09483235000156', get), '');
+  assert.equal(calls, 1);
+});
+
+test('informa CNPJ e motivo retornado pela Brudam quando HTTP 400 não é ausência', async () => {
+  await assert.rejects(fetchInactiveTradeName('09483235000156', async () => ({
+    response: { ok: false, status: 400 },
+    payload: { message: 'Parâmetro inválido.' }
+  })), (error) => {
+    assert.equal(error.statusCode, 502);
+    assert.match(error.message, /09483235000156.*HTTP 400.*Parâmetro inválido/);
+    return true;
+  });
 });
 
 test('troca o snapshot no Redis somente após percorrer todas as páginas', async () => {
