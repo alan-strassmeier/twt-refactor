@@ -8,6 +8,8 @@ const {
   REFRESH_KEY,
   addInvoices,
   buildInactiveSnapshot,
+  tradeNameFromPayload,
+  fetchInactiveTradeName,
   getInactiveSnapshot,
   startInactiveRefresh,
   continueInactiveRefresh
@@ -76,6 +78,50 @@ test('ignora fatura sem CNPJ ou emissão confiável sem classificar empresa erra
   assert.equal(buildInactiveSnapshot(run).totalCompanies, 0);
 });
 
+test('seleciona apenas o nome fantasia do CNPJ correto, sem usar razão social ou documento', () => {
+  const payload = { status: 1, data: [
+    { cnpj: '11111111000111', fantasia: 'Fantasia Correta', razao: 'Razão A' },
+    { cnpj: '22222222000122', fantasia: 'Outra Fantasia', razao: 'Razão B' }
+  ] };
+  assert.equal(tradeNameFromPayload(payload, '11111111000111'), 'Fantasia Correta');
+  assert.equal(tradeNameFromPayload({ status: 1, data: {
+    fantasia: 'Fantasia no objeto data', razao: 'Razão A'
+  } }, '11111111000111'), 'Fantasia no objeto data');
+  assert.equal(tradeNameFromPayload({ status: 1, data: {
+    cnpj: '22222222000122', fantasia: 'Empresa diferente'
+  } }, '11111111000111'), '');
+  assert.equal(tradeNameFromPayload(payload, '33333333000133'), '');
+  assert.equal(tradeNameFromPayload({ status: 1, data: [
+    { cnpj: '11111111000111', fantasia: 'Não informado', razao: 'Razão A' }
+  ] }, '11111111000111'), '');
+  assert.equal(tradeNameFromPayload({ status: 1, data: [
+    { cnpj: '11111111000111', fantasia: '11111111000111' }
+  ] }, '11111111000111'), '');
+});
+
+test('não consulta cadastro para CNPJ inválido e aceita ausência confirmada pela Brudam', async () => {
+  let calls = 0;
+  const get = async () => {
+    calls += 1;
+    return { response: { ok: false, status: 400 }, payload: { message: 'Empresa não encontrada.' } };
+  };
+  assert.equal(await fetchInactiveTradeName('00000000000000', get), '');
+  assert.equal(calls, 0);
+  assert.equal(await fetchInactiveTradeName('09483235000156', get), '');
+  assert.equal(calls, 1);
+});
+
+test('informa CNPJ e motivo retornado pela Brudam quando HTTP 400 não é ausência', async () => {
+  await assert.rejects(fetchInactiveTradeName('09483235000156', async () => ({
+    response: { ok: false, status: 400 },
+    payload: { message: 'Parâmetro inválido.' }
+  })), (error) => {
+    assert.equal(error.statusCode, 502);
+    assert.match(error.message, /09483235000156.*HTTP 400.*Parâmetro inválido/);
+    return true;
+  });
+});
+
 test('troca o snapshot no Redis somente após percorrer todas as páginas', async () => {
   const { command } = fakeRedis();
   const previous = { updatedAt: '2026-09-01T00:00:00Z', clients: [{ cnpj: 'old' }] };
@@ -102,7 +148,9 @@ test('troca o snapshot no Redis somente após percorrer todas as páginas', asyn
     };
   };
   const options = {
-    command, fetchPage, wait: async () => {}, now: () => new Date('2026-10-14T12:05:00Z')
+    command, fetchPage, wait: async () => {},
+    fetchTradeName: async (cnpj) => cnpj === '11111111000111' ? 'Fantasia A' : 'Fantasia B',
+    now: () => new Date('2026-10-14T12:05:00Z')
   };
   const first = await continueInactiveRefresh({ runId: started.runId }, options);
   assert.equal(first.complete, false);
@@ -110,12 +158,17 @@ test('troca o snapshot no Redis somente após percorrer todas as páginas', asyn
   assert.deepEqual(await getInactiveSnapshot(command), previous);
 
   const second = await continueInactiveRefresh({ runId: started.runId }, options);
-  assert.equal(second.complete, true);
+  assert.equal(second.complete, false);
   assert.deepEqual(requests, [0, 100, 200]);
-  assert.equal(second.snapshot.invoicesRead, 201);
-  assert.equal(second.snapshot.totalCompanies, 2);
-  assert.deepEqual(second.snapshot.clients.map((item) => item.cnpj), ['11111111000111']);
-  assert.deepEqual(await getInactiveSnapshot(command), second.snapshot);
+  assert.equal(second.refresh.phase, 'names');
+  assert.deepEqual(await getInactiveSnapshot(command), previous);
+  const third = await continueInactiveRefresh({ runId: started.runId }, options);
+  assert.equal(third.complete, true);
+  assert.equal(third.snapshot.invoicesRead, 201);
+  assert.equal(third.snapshot.totalCompanies, 2);
+  assert.deepEqual(third.snapshot.clients.map((item) => item.cnpj), ['11111111000111']);
+  assert.equal(third.snapshot.clients[0].name, 'Fantasia A');
+  assert.deepEqual(await getInactiveSnapshot(command), third.snapshot);
   assert.equal(await command('GET', REFRESH_KEY), null);
 });
 
@@ -131,14 +184,52 @@ test('falha intermediária mantém a lista antiga e permite retomar do mesmo pon
       ? { invoices: [invoice('11111111000111', '2026-08-01', 1)], rawCount: 100, reportedTotal: 101, fingerprint: 'first' }
       : { invoices: [invoice('22222222000122', '2026-08-02', 2)], rawCount: 1, reportedTotal: 101, fingerprint: 'second' };
   };
-  const options = { command, fetchPage, wait: async () => {} };
+  const options = {
+    command, fetchPage, wait: async () => {}, fetchTradeName: async () => 'Fantasia'
+  };
   await assert.rejects(continueInactiveRefresh({ runId: started.runId }, options), /Limite de requisições/);
   assert.deepEqual(await getInactiveSnapshot(command), previous);
   assert.equal(JSON.parse(await command('GET', REFRESH_KEY)).skip, 0);
   fail = false;
   const result = await continueInactiveRefresh({ runId: started.runId }, options);
-  assert.equal(result.complete, true);
-  assert.equal(result.snapshot.totalCompanies, 2);
+  assert.equal(result.complete, false);
+  const named = await continueInactiveRefresh({ runId: started.runId }, options);
+  assert.equal(named.complete, true);
+  assert.equal(named.snapshot.totalCompanies, 2);
+});
+
+test('consulta nomes fantasia em lotes e só publica o snapshot após o último nome', async () => {
+  const { command } = fakeRedis();
+  const previous = { clients: [{ cnpj: 'old' }] };
+  await command('SET', SNAPSHOT_KEY, JSON.stringify(previous));
+  const started = await startInactiveRefresh({ now: new Date('2026-10-14T12:00:00Z') }, command);
+  const cnpjs = Array.from({ length: 11 }, (_, index) => String(index + 1).padStart(14, '0'));
+  const names = [];
+  const options = {
+    command,
+    wait: async () => {},
+    fetchPage: async () => ({
+      invoices: cnpjs.map((cnpj, index) => invoice(cnpj, '2026-08-01', index + 1, cnpj)),
+      rawCount: cnpjs.length,
+      reportedTotal: cnpjs.length,
+      fingerprint: 'only-page'
+    }),
+    fetchTradeName: async (cnpj) => {
+      names.push(cnpj);
+      return `Fantasia ${cnpj}`;
+    }
+  };
+  const scan = await continueInactiveRefresh({ runId: started.runId }, options);
+  assert.equal(scan.complete, false);
+  assert.equal(scan.refresh.namesTotal, 11);
+  const firstNames = await continueInactiveRefresh({ runId: started.runId }, options);
+  assert.equal(firstNames.complete, false);
+  assert.equal(firstNames.refresh.namesLookedUp, 10);
+  assert.deepEqual(await getInactiveSnapshot(command), previous);
+  const lastName = await continueInactiveRefresh({ runId: started.runId }, options);
+  assert.equal(lastName.complete, true);
+  assert.equal(names.length, 11);
+  assert.ok(lastName.snapshot.clients.every((item) => item.name.startsWith('Fantasia ')));
 });
 
 test('não apaga a lista quando a primeira página vazia não confirma total zero', async () => {
@@ -184,6 +275,8 @@ test('interface abre uma terceira área e não consulta a Brudam ao entrar nela'
   assert.match(html, /data-billing-area="inactive"/);
   assert.match(html, /id="inactiveWorkspace"/);
   assert.match(html, /id="refreshInactiveClients"/);
+  assert.doesNotMatch(html, /<h2>Empresas sem faturamento recente<\/h2>\s*<p>/);
+  assert.match(html, /id="sortInactiveDays"/);
   assert.match(script, /elements\.tab\.addEventListener\('click', loadCached\)/);
   assert.match(script, /request\(\{ action: 'start' \}\)/);
   assert.match(api, /query\.route === 'inactive-clients'/);
@@ -225,4 +318,55 @@ test('entrar novamente na aba reutiliza a lista carregada sem nova requisição'
   await handlers['tab:click']();
   await handlers['tab:click']();
   assert.deepEqual(requests, ['GET']);
+});
+
+test('ordena dias sem fatura nos dois sentidos sem consultar a Brudam novamente', async () => {
+  const script = fs.readFileSync(path.join(__dirname, '..', 'faturamento', 'clientes-inativos.js'), 'utf8');
+  const handlers = {};
+  const element = () => ({
+    textContent: '', dataset: {}, hidden: false, disabled: false,
+    setAttribute() {}, addEventListener() {}, querySelector: () => element()
+  });
+  const tab = { addEventListener: (type, handler) => { handlers[`tab:${type}`] = handler; } };
+  const refresh = { ...element(), addEventListener: () => {} };
+  const sort = { ...element(), addEventListener: (type, handler) => { handlers[`sort:${type}`] = handler; } };
+  let rendered = [];
+  const rows = {
+    replaceChildren: () => { rendered = []; },
+    appendChild: (fragment) => { rendered = fragment.items; }
+  };
+  const ids = {
+    inactiveWorkspace: element(), refreshInactiveClients: refresh,
+    inactiveClientsMessage: element(), inactiveClientsCount: element(),
+    inactiveCompaniesCount: element(), inactiveUpdatedAt: element(),
+    inactiveClientsRows: rows, inactiveClientsEmpty: element(),
+    inactiveDaysHeader: element(), sortInactiveDays: sort
+  };
+  const snapshot = {
+    updatedAt: '2026-10-14T12:00:00Z', totalCompanies: 2,
+    clients: [
+      { cnpj: '11111111000111', name: 'Fantasia antiga', lastIssuedAt: '2020-01-01' },
+      { cnpj: '22222222000122', name: 'Fantasia recente', lastIssuedAt: '2021-01-01' }
+    ]
+  };
+  let requests = 0;
+  vm.runInNewContext(script, {
+    document: {
+      querySelector: () => tab,
+      getElementById: (id) => ids[id] || null,
+      createDocumentFragment: () => ({ items: [], appendChild(row) { this.items.push(row); } }),
+      createElement: () => ({ items: [], appendChild(cell) { this.items.push(cell); } })
+    },
+    fetch: async () => {
+      requests += 1;
+      return { ok: true, headers: { get: () => 'application/json' },
+        json: async () => ({ snapshot, refresh: null }) };
+    },
+    Intl, Date, Promise, setTimeout
+  });
+  await handlers['tab:click']();
+  assert.deepEqual(rendered.map((row) => row.items[0].textContent), ['Fantasia antiga', 'Fantasia recente']);
+  handlers['sort:click']();
+  assert.deepEqual(rendered.map((row) => row.items[0].textContent), ['Fantasia recente', 'Fantasia antiga']);
+  assert.equal(requests, 1);
 });

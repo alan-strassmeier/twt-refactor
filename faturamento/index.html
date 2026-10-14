@@ -11,7 +11,7 @@
   <script src="/faturamento/sort.js?v=1" defer></script>
   <script src="/faturamento/app.js?v=21" defer></script>
   <script src="/faturamento/cobranca.js?v=6" defer></script>
-  <script src="/faturamento/clientes-inativos.js?v=1" defer></script>
+  <script src="/faturamento/clientes-inativos.js?v=2" defer></script>
 </head>
 <body>
   <div class="page-shell">
@@ -296,12 +296,11 @@
             <div class="collection-card-heading">
               <div>
                 <h2>Empresas sem faturamento recente</h2>
-                <p>A lista fica guardada no Redis e só é substituída após concluir uma atualização.</p>
               </div>
             </div>
             <div class="table-scroll collection-table-scroll">
               <table class="collection-table inactive-clients-table">
-                <thead><tr><th>Empresa</th><th>CNPJ</th><th>Última fatura</th><th>Emitida em</th><th>Dias sem fatura</th></tr></thead>
+                <thead><tr><th>Empresa</th><th>CNPJ</th><th>Última fatura</th><th>Emitida em</th><th id="inactiveDaysHeader" aria-sort="descending"><button id="sortInactiveDays" type="button" aria-label="Ordenar dias sem fatura em ordem crescente">Dias sem fatura <span aria-hidden="true">▼</span></button></th></tr></thead>
                 <tbody id="inactiveClientsRows"></tbody>
               </table>
               <div class="collection-empty" id="inactiveClientsEmpty">
