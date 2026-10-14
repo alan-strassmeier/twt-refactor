@@ -5,6 +5,7 @@
     areaButtons: [...document.querySelectorAll('[data-billing-area]')],
     invoiceWorkspace: document.getElementById('invoiceWorkspace'),
     collectionWorkspace: document.getElementById('collectionWorkspace'),
+    inactiveWorkspace: document.getElementById('inactiveWorkspace'),
     collectionSectionButtons: [...document.querySelectorAll('[data-collection-section]')],
     collectionSectionPanels: [...document.querySelectorAll('.collection-anchor-target')],
     message: document.getElementById('collectionMessage'),
@@ -963,8 +964,9 @@
 
   const setArea = (area) => {
     const collection = area === 'collection';
-    elements.invoiceWorkspace.hidden = collection;
+    elements.invoiceWorkspace.hidden = area !== 'invoices';
     elements.collectionWorkspace.hidden = !collection;
+    if (elements.inactiveWorkspace) elements.inactiveWorkspace.hidden = area !== 'inactive';
     elements.areaButtons.forEach((button) => {
       const active = button.dataset.billingArea === area;
       button.classList.toggle('is-active', active);

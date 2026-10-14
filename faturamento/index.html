@@ -7,10 +7,11 @@
   <meta name="theme-color" content="#112a40">
   <title>Faturamento | TWT Airpack</title>
   <link rel="icon" href="/favicon.ico">
-  <link rel="stylesheet" href="/faturamento/styles.css?v=17">
+  <link rel="stylesheet" href="/faturamento/styles.css?v=18">
   <script src="/faturamento/sort.js?v=1" defer></script>
   <script src="/faturamento/app.js?v=21" defer></script>
   <script src="/faturamento/cobranca.js?v=6" defer></script>
+  <script src="/faturamento/clientes-inativos.js?v=1" defer></script>
 </head>
 <body>
   <div class="page-shell">
@@ -63,6 +64,9 @@
           </button>
           <button class="area-tab" type="button" data-billing-area="collection" aria-pressed="false">
             Cobrança de faturas
+          </button>
+          <button class="area-tab" type="button" data-billing-area="inactive" aria-pressed="false">
+            Clientes Inativos
           </button>
         </nav>
 
@@ -272,6 +276,41 @@
           </div>
         </section>
         </div>
+
+        <section class="inactive-workspace" id="inactiveWorkspace" hidden>
+          <div class="dashboard-heading collection-heading">
+            <div>
+              <span class="eyebrow">Histórico de faturamento</span>
+              <h1>Clientes Inativos</h1>
+              <p>Empresas com faturas registradas, mas sem emissão nos últimos 31 dias.</p>
+            </div>
+            <button class="button button-primary" id="refreshInactiveClients" type="button">Atualizar</button>
+          </div>
+          <p class="dashboard-message collection-message" id="inactiveClientsMessage" role="status" aria-live="polite"></p>
+          <div class="collection-summary inactive-summary" aria-label="Resumo dos clientes inativos">
+            <article><span>Clientes inativos</span><strong id="inactiveClientsCount">—</strong></article>
+            <article><span>Empresas com faturas</span><strong id="inactiveCompaniesCount">—</strong></article>
+            <article><span>Última atualização</span><strong id="inactiveUpdatedAt">Nunca</strong></article>
+          </div>
+          <section class="collection-card">
+            <div class="collection-card-heading">
+              <div>
+                <h2>Empresas sem faturamento recente</h2>
+                <p>A lista fica guardada no Redis e só é substituída após concluir uma atualização.</p>
+              </div>
+            </div>
+            <div class="table-scroll collection-table-scroll">
+              <table class="collection-table inactive-clients-table">
+                <thead><tr><th>Empresa</th><th>CNPJ</th><th>Última fatura</th><th>Emitida em</th><th>Dias sem fatura</th></tr></thead>
+                <tbody id="inactiveClientsRows"></tbody>
+              </table>
+              <div class="collection-empty" id="inactiveClientsEmpty">
+                <strong>Lista ainda não atualizada</strong>
+                <p>Clique em Atualizar para buscar o histórico de faturas na Brudam.</p>
+              </div>
+            </div>
+          </section>
+        </section>
 
         <section class="collection-workspace" id="collectionWorkspace" hidden>
           <div class="dashboard-heading collection-heading">
