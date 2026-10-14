@@ -3,6 +3,7 @@ const { redisCommand } = require('./boleto-store');
 const {
   authenticatedGet,
   buildInvoiceQuery,
+  companyRecordsFromPayload,
   invoiceListFromPayload,
   normalizeVisibleInvoices
 } = require('./brudam');
@@ -13,6 +14,7 @@ const REFRESH_KEY = 'faturamento:clientes-inativos:atualizacao:v1';
 const LOCK_KEY = 'faturamento:clientes-inativos:atualizacao-lock:v1';
 const PAGE_SIZE = 100;
 const PAGES_PER_STEP = 2;
+const NAME_LOOKUPS_PER_STEP = 10;
 const STEP_BUDGET_MS = 45000;
 const RUN_TTL_SECONDS = 4 * 60 * 60;
 const INACTIVE_DAYS = 31;
@@ -70,9 +72,12 @@ const daysBetween = (start, end) => Math.floor(
 const progress = (run) => run && ({
   runId: run.runId,
   startedAt: run.startedAt,
+  phase: run.phase || 'invoices',
   pagesRead: run.pagesRead,
   invoicesRead: run.invoicesRead,
-  companiesFound: Object.keys(run.companies || {}).length
+  companiesFound: Object.keys(run.companies || {}).length,
+  namesLookedUp: run.nameLookupIndex || 0,
+  namesTotal: run.nameLookupTotal || 0
 });
 
 const getInactiveSnapshot = async (command = redisCommand) =>
@@ -92,6 +97,9 @@ const startInactiveRefresh = async ({ now = new Date() } = {}, command = redisCo
     ignoredInvoices: 0,
     expectedTotal: null,
     lastFingerprint: '',
+    phase: 'invoices',
+    nameLookupIndex: 0,
+    nameLookupTotal: 0,
     companies: {}
   };
   const created = await command('SET', REFRESH_KEY, JSON.stringify(run), 'NX', 'EX', String(RUN_TTL_SECONDS));
@@ -152,6 +160,44 @@ const queryPage = async (skip, { fetchPage, wait }) => {
   throw error || new Error('Consulta de faturas não concluída.');
 };
 
+const tradeNameFromPayload = (payload, cnpj) => {
+  if (Number(payload?.status) !== 1) return '';
+  const company = companyRecordsFromPayload(payload).find((record) =>
+    String(record.cnpj || record.cpf_cnpj || record.documento || '').replace(/\D/g, '') === cnpj
+  );
+  const name = String(company?.fantasia || company?.nome_fantasia || '').trim().slice(0, 200);
+  const normalized = name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  return !name || ['nao informado', 'nao informada', '-'].includes(normalized) ||
+    name.replace(/\D/g, '') === cnpj ? '' : name;
+};
+
+const fetchInactiveTradeName = async (cnpj) => {
+  const { response, payload } = await authenticatedGet(`/cadastro/empresas?cnpj=${cnpj}`);
+  if (!response.ok) {
+    throw Object.assign(new Error('Não foi possível consultar o nome fantasia na Brudam.'), {
+      statusCode: response.status || 502
+    });
+  }
+  return tradeNameFromPayload(payload, cnpj);
+};
+
+const queryTradeName = async (cnpj, { fetchTradeName, wait }) => {
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      return await fetchTradeName(cnpj);
+    } catch (error) {
+      if (attempt === 2 || !retryable(error)) throw error;
+      await wait(500 * attempt);
+    }
+  }
+  return '';
+};
+
+const inactiveCnpjs = (run) => Object.values(run.companies)
+  .filter((company) => daysBetween(company.lastIssuedAt, run.asOfDate) >= INACTIVE_DAYS)
+  .map((company) => company.cnpj)
+  .sort();
+
 const addInvoices = (run, invoices) => {
   for (const invoice of invoices) {
     const cnpj = String(invoice.clientDocument || '').replace(/\D/g, '');
@@ -194,6 +240,7 @@ const buildInactiveSnapshot = (run, now = new Date()) => {
     totalCompanies: Object.keys(run.companies).length,
     invoicesRead: run.invoicesRead,
     ignoredInvoices: run.ignoredInvoices,
+    missingTradeNames: clients.filter((company) => company.name === 'Nome fantasia não localizado').length,
     clients
   };
 };
@@ -204,6 +251,7 @@ const continueInactiveRefresh = async ({ runId } = {}, dependencies = {}) => {
   }
   const command = dependencies.command || redisCommand;
   const fetchPage = dependencies.fetchPage || fetchInactiveInvoicePage;
+  const fetchTradeName = dependencies.fetchTradeName || fetchInactiveTradeName;
   const wait = dependencies.wait || pause;
   const now = dependencies.now || (() => new Date());
   const lockToken = randomUUID();
@@ -220,8 +268,10 @@ const continueInactiveRefresh = async ({ runId } = {}, dependencies = {}) => {
         statusCode: 409, expose: true
       });
     }
+    run.phase ||= 'invoices';
+    run.nameLookupIndex ||= 0;
     let complete = false;
-    for (let pageIndex = 0; pageIndex < PAGES_PER_STEP; pageIndex += 1) {
+    for (let pageIndex = 0; run.phase !== 'names' && pageIndex < PAGES_PER_STEP; pageIndex += 1) {
       if (pageIndex > 0 && Date.now() - stepStartedAt > STEP_BUDGET_MS - 25000) break;
       if (run.skip > 1000000) {
         throw Object.assign(new Error('A quantidade de faturas ultrapassou o limite de paginação.'), {
@@ -282,9 +332,27 @@ const continueInactiveRefresh = async ({ runId } = {}, dependencies = {}) => {
             });
           }
         }
+        run.phase = 'names';
+        run.nameLookupTotal = inactiveCnpjs(run).length;
         break;
       }
       run.skip += PAGE_SIZE;
+    }
+    if (run.phase === 'names' && !complete) {
+      const cnpjs = inactiveCnpjs(run);
+      for (let index = 0;
+        index < NAME_LOOKUPS_PER_STEP && run.nameLookupIndex < cnpjs.length;
+        index += 1) {
+        if (index > 0 && Date.now() - stepStartedAt > STEP_BUDGET_MS - 25000) break;
+        if (index > 0) await wait(400);
+        const cnpj = cnpjs[run.nameLookupIndex];
+        const name = await queryTradeName(cnpj, { fetchTradeName, wait });
+        run.companies[cnpj].name = name || 'Nome fantasia não localizado';
+        run.nameLookupIndex += 1;
+      }
+      complete = run.nameLookupIndex >= cnpjs.length;
+    } else if (run.phase === 'names') {
+      complete = run.nameLookupTotal === 0;
     }
     if (complete) {
       const snapshot = buildInactiveSnapshot(run, now());
@@ -312,7 +380,9 @@ module.exports = {
   daysBetween,
   addInvoices,
   buildInactiveSnapshot,
+  tradeNameFromPayload,
   fetchInactiveInvoicePage,
+  fetchInactiveTradeName,
   getInactiveSnapshot,
   getInactiveRefresh,
   startInactiveRefresh,

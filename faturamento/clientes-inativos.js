@@ -10,12 +10,14 @@
     companies: document.getElementById('inactiveCompaniesCount'),
     updatedAt: document.getElementById('inactiveUpdatedAt'),
     rows: document.getElementById('inactiveClientsRows'),
+    daysHeader: document.getElementById('inactiveDaysHeader'),
+    daysSort: document.getElementById('sortInactiveDays'),
     empty: document.getElementById('inactiveClientsEmpty'),
     logout: document.getElementById('logoutButton')
   };
   if (!elements.workspace || !elements.tab) return;
 
-  const state = { loaded: false, loading: false, snapshot: null, version: 0 };
+  const state = { loaded: false, loading: false, snapshot: null, version: 0, sort: 'desc' };
   const endpoint = '/api/faturamento/cobranca?route=inactive-clients';
 
   const request = async (body) => {
@@ -77,15 +79,30 @@
   const formatCnpj = (value) => String(value || '').replace(/\D/g, '')
     .replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5');
 
+  const missingTradeName = (client) => {
+    const name = String(client.name || '').trim();
+    return !name || name.replace(/\D/g, '') === client.cnpj ||
+      name === 'Nome fantasia não localizado';
+  };
+
   const cell = (row, value) => {
     const item = document.createElement('td');
     item.textContent = value;
     row.appendChild(item);
   };
 
+  const renderSort = () => {
+    if (!elements.daysHeader || !elements.daysSort) return;
+    elements.daysHeader.setAttribute('aria-sort', state.sort === 'asc' ? 'ascending' : 'descending');
+    elements.daysSort.setAttribute('aria-label',
+      `Ordenar dias sem fatura em ordem ${state.sort === 'asc' ? 'decrescente' : 'crescente'}`);
+    elements.daysSort.querySelector('span').textContent = state.sort === 'asc' ? '▲' : '▼';
+  };
+
   const render = (snapshot) => {
     state.snapshot = snapshot;
     elements.rows.replaceChildren();
+    renderSort();
     if (!snapshot) {
       elements.count.textContent = '—';
       elements.companies.textContent = '—';
@@ -107,9 +124,16 @@
         'Todas as empresas encontradas tiveram faturas emitidas nos últimos 31 dias.';
     }
     const fragment = document.createDocumentFragment();
-    clients.forEach((client) => {
+    const sorted = [...clients].sort((left, right) => {
+      const daysLeft = daysSince(left.lastIssuedAt);
+      const daysRight = daysSince(right.lastIssuedAt);
+      return (state.sort === 'asc' ? daysLeft - daysRight : daysRight - daysLeft) ||
+        String(left.name || '').localeCompare(String(right.name || ''), 'pt-BR') ||
+        String(left.cnpj || '').localeCompare(String(right.cnpj || ''));
+    });
+    sorted.forEach((client) => {
       const row = document.createElement('tr');
-      cell(row, client.name || client.cnpj);
+      cell(row, missingTradeName(client) ? 'Nome fantasia não localizado' : client.name);
       cell(row, formatCnpj(client.cnpj));
       cell(row, client.lastInvoiceId || '—');
       cell(row, formatDate(client.lastIssuedAt));
@@ -121,8 +145,11 @@
   };
 
   const progressMessage = (refresh) =>
-    `Consultadas ${refresh.invoicesRead} fatura(s) em ${refresh.pagesRead} página(s); ` +
-    `${refresh.companiesFound} empresa(s) identificada(s). A lista anterior permanece visível até o fim.`;
+    (refresh.phase === 'names'
+      ? `Conferidos ${refresh.namesLookedUp} de ${refresh.namesTotal} nomes fantasia na Brudam. `
+      : `Consultadas ${refresh.invoicesRead} fatura(s) em ${refresh.pagesRead} página(s); ` +
+        `${refresh.companiesFound} empresa(s) identificada(s). `) +
+    'A lista anterior permanece visível até o fim.';
 
   const loadCached = async () => {
     if (state.loaded || state.loading) return;
@@ -136,6 +163,8 @@
       state.loaded = true;
       if (result.refresh) {
         setMessage(`Há uma atualização incompleta. Clique em Atualizar para continuar. ${progressMessage(result.refresh)}`, 'warning');
+      } else if (result.snapshot?.clients?.some(missingTradeName)) {
+        setMessage('Há empresas sem nome fantasia nesta lista. Clique em Atualizar para consultar os cadastros na Brudam.', 'warning');
       } else if (result.snapshot?.ignoredInvoices) {
         setMessage(`${result.snapshot.ignoredInvoices} fatura(s) sem CNPJ ou data de emissão não puderam ser classificadas.`, 'warning');
       } else {
@@ -149,6 +178,10 @@
   };
 
   elements.tab.addEventListener('click', loadCached);
+  elements.daysSort?.addEventListener('click', () => {
+    state.sort = state.sort === 'desc' ? 'asc' : 'desc';
+    render(state.snapshot);
+  });
   elements.refresh.addEventListener('click', async () => {
     if (state.loading) return;
     const version = ++state.version;
@@ -171,11 +204,13 @@
             render(result.snapshot);
             state.loaded = true;
             const ignored = Number(result.snapshot?.ignoredInvoices || 0);
+            const missing = Number(result.snapshot?.missingTradeNames || 0);
             setMessage(
               `Atualização concluída: ${result.snapshot.clients.length} cliente(s) inativo(s) ` +
               `entre ${result.snapshot.totalCompanies} empresa(s) com faturas.` +
-              (ignored ? ` ${ignored} fatura(s) sem CNPJ ou emissão não puderam ser classificadas.` : ''),
-              ignored ? 'warning' : 'success'
+              (ignored ? ` ${ignored} fatura(s) sem CNPJ ou emissão não puderam ser classificadas.` : '') +
+              (missing ? ` ${missing} nome(s) fantasia não foram localizados na Brudam.` : ''),
+              ignored || missing ? 'warning' : 'success'
             );
           } else {
             setMessage(progressMessage(result.refresh));

@@ -1360,6 +1360,23 @@ body.modal-open {
   font-weight: 800;
 }
 
+.inactive-clients-table th button {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
+}
+
+.inactive-clients-table th button:hover,
+.inactive-clients-table th button:focus-visible {
+  color: var(--blue-600);
+}
+
 .collection-heading { margin-bottom: 0; }
 
 .collection-heading-actions {
