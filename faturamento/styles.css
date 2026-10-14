@@ -1306,10 +1306,12 @@ body.modal-open {
 
 .area-tabs {
   width: fit-content;
+  max-width: 100%;
   margin-bottom: 28px;
   padding: 5px;
   display: flex;
   gap: 5px;
+  overflow-x: auto;
   border: 1px solid #cbd9e4;
   border-radius: 14px;
   background: rgb(255 255 255 / 88%);
@@ -1338,6 +1340,24 @@ body.modal-open {
 .collection-workspace {
   display: grid;
   gap: 24px;
+}
+
+.inactive-workspace {
+  display: grid;
+  gap: 24px;
+}
+
+.inactive-summary #inactiveUpdatedAt {
+  font-size: 1.2rem;
+}
+
+.inactive-clients-table {
+  min-width: 760px;
+}
+
+.inactive-clients-table td:last-child {
+  color: var(--warning);
+  font-weight: 800;
 }
 
 .collection-heading { margin-bottom: 0; }

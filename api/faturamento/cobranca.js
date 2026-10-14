@@ -25,6 +25,12 @@ const {
   runBankQueryDiagnostic
 } = require('../../server/faturamento/bank-query-diagnostic');
 const {
+  getInactiveSnapshot,
+  getInactiveRefresh,
+  startInactiveRefresh,
+  continueInactiveRefresh
+} = require('../../server/faturamento/inactive-clients');
+const {
   BANK_SLIP_CREATION_START_DATE,
   isDslIssuer,
   isBankSlipCreationEligible
@@ -67,6 +73,33 @@ const requireSameOrigin = (req, res) => {
   if (hasSameOrigin(req)) return true;
   sendJson(res, 403, { message: 'Origem da solicitação inválida.' });
   return false;
+};
+
+const handleInactiveClients = async (req, res) => {
+  if (!requireSession(req, res)) return;
+  if (req.method === 'GET') {
+    const [snapshot, refresh] = await Promise.all([
+      getInactiveSnapshot(), getInactiveRefresh()
+    ]);
+    sendJson(res, 200, { snapshot, refresh });
+    return;
+  }
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', 'GET, POST');
+    sendJson(res, 405, { message: 'Método não permitido.' });
+    return;
+  }
+  if (!requireSameOrigin(req, res)) return;
+  const body = await parseJsonBody(req, 512);
+  if (body.action === 'start') {
+    sendJson(res, 200, { complete: false, refresh: await startInactiveRefresh() });
+    return;
+  }
+  if (body.action === 'continue') {
+    sendJson(res, 200, await continueInactiveRefresh({ runId: body.runId }));
+    return;
+  }
+  sendJson(res, 422, { message: 'Ação de atualização inválida.' });
 };
 
 const handleCategories = async (req, res, query) => {
@@ -640,6 +673,7 @@ module.exports = async (req, res) => {
     if (query.route === 'invoice-block') return await handleInvoiceBlock(req, res);
     if (query.route === 'payment-import') return await handlePaymentImport(req, res, query);
     if (query.route === 'bank-diagnostic') return await handleBankDiagnostic(req, res);
+    if (query.route === 'inactive-clients') return await handleInactiveClients(req, res);
     if (query.route === 'logs') return await handleLogs(req, res, query);
     if (query.route === 'resend') return await handleResend(req, res);
     if (query.route === 'process') return await handleProcess(req, res, query);
