@@ -83,6 +83,12 @@ test('seleciona apenas o nome fantasia do CNPJ correto, sem usar razão social o
     { cnpj: '22222222000122', fantasia: 'Outra Fantasia', razao: 'Razão B' }
   ] };
   assert.equal(tradeNameFromPayload(payload, '11111111000111'), 'Fantasia Correta');
+  assert.equal(tradeNameFromPayload({ status: 1, data: {
+    fantasia: 'Fantasia no objeto data', razao: 'Razão A'
+  } }, '11111111000111'), 'Fantasia no objeto data');
+  assert.equal(tradeNameFromPayload({ status: 1, data: {
+    cnpj: '22222222000122', fantasia: 'Empresa diferente'
+  } }, '11111111000111'), '');
   assert.equal(tradeNameFromPayload(payload, '33333333000133'), '');
   assert.equal(tradeNameFromPayload({ status: 1, data: [
     { cnpj: '11111111000111', fantasia: 'Não informado', razao: 'Razão A' }

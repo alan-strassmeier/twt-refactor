@@ -3,6 +3,7 @@ const { redisCommand } = require('./boleto-store');
 const {
   authenticatedGet,
   buildInvoiceQuery,
+  companyLookupPath,
   companyRecordsFromPayload,
   invoiceListFromPayload,
   normalizeVisibleInvoices
@@ -162,8 +163,15 @@ const queryPage = async (skip, { fetchPage, wait }) => {
 
 const tradeNameFromPayload = (payload, cnpj) => {
   if (Number(payload?.status) !== 1) return '';
-  const company = companyRecordsFromPayload(payload).find((record) =>
-    String(record.cnpj || record.cpf_cnpj || record.documento || '').replace(/\D/g, '') === cnpj
+  const documentOf = (record) => String(
+    record?.cnpj || record?.cpf_cnpj || record?.documento || ''
+  ).replace(/\D/g, '');
+  const data = payload.data;
+  const directCompany = data && typeof data === 'object' && !Array.isArray(data) &&
+    (data.fantasia || data.nome_fantasia) &&
+    (!documentOf(data) || documentOf(data) === cnpj) ? data : null;
+  const company = directCompany || companyRecordsFromPayload(payload).find((record) =>
+    documentOf(record) === cnpj
   );
   const name = String(company?.fantasia || company?.nome_fantasia || '').trim().slice(0, 200);
   const normalized = name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
@@ -172,7 +180,7 @@ const tradeNameFromPayload = (payload, cnpj) => {
 };
 
 const fetchInactiveTradeName = async (cnpj) => {
-  const { response, payload } = await authenticatedGet(`/cadastro/empresas?cnpj=${cnpj}`);
+  const { response, payload } = await authenticatedGet(companyLookupPath({ cnpj }));
   if (!response.ok) {
     throw Object.assign(new Error('Não foi possível consultar o nome fantasia na Brudam.'), {
       statusCode: response.status || 502
