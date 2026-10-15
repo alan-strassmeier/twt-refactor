@@ -5,6 +5,7 @@ const REQUEST_TIMEOUT_MS = 20000;
 const JSON_MAX_BYTES = 1024 * 1024;
 const TOKEN_URL = 'https://sts.itau.com.br/api/oauth/token';
 const API_BASE_URL = 'https://api.gateway.itau.com.br/cash_management/v2';
+const QUERY_API_BASE_URL = 'https://secure.api.cloud.itau.com.br/boletoscash/v2';
 const BOLETO_PATH = 'boletos';
 const ITAU_ISSUER_CNPJ = '97434690000129';
 const ITAU_ISSUER_NAME = 'DSL DO BRASIL TRANSPORTE E LOGISTICA LTDA';
@@ -61,6 +62,7 @@ const itauConfig = (env = process.env) => {
   const passphrase = String(env.ITAU_MTLS_KEY_PASSPHRASE || '');
   const tokenUrl = normalizedHttpsUrl(env.ITAU_TOKEN_URL, TOKEN_URL, 'URL de autenticação');
   const apiBaseUrl = normalizedHttpsUrl(env.ITAU_API_BASE_URL, API_BASE_URL, 'URL da API');
+  const queryApiBaseUrl = String(env.ITAU_QUERY_API_BASE_URL || QUERY_API_BASE_URL).trim();
   const apiKey = String(env.ITAU_API_KEY || clientId).trim();
   const tokenConfigKey = createHash('sha256')
     .update(`${tokenUrl}:${clientId}:${clientSecret}:`)
@@ -76,6 +78,7 @@ const itauConfig = (env = process.env) => {
     passphrase,
     tokenUrl,
     apiBaseUrl,
+    queryApiBaseUrl,
     apiKey,
     tokenConfigKey
   };
@@ -347,13 +350,14 @@ const authenticatedRequest = async ({
   body = null,
   maxBytes = JSON_MAX_BYTES,
   config = itauConfig(),
+  apiBaseUrl = config.apiBaseUrl,
   request = httpsRequest
 }) => {
   const execute = async (forceRefresh = false) => {
     const token = await getAccessToken(config, forceRefresh, request);
     try {
       return await request({
-        url: new URL(path, `${config.apiBaseUrl}/`).toString(),
+        url: new URL(path, `${apiBaseUrl}/`).toString(),
         method,
         headers: {
           Authorization: `Bearer ${token}`,
@@ -500,6 +504,11 @@ const createItauBankSlip = async (payload, options = {}) => {
 
 const queryItauBankSlips = async (criteria = {}, options = {}) => {
   const config = options.config || itauBoletoConfig();
+  const queryApiBaseUrl = normalizedHttpsUrl(
+    config.queryApiBaseUrl,
+    QUERY_API_BASE_URL,
+    'URL de consulta de boletos'
+  );
   const beneficiaryId = digits(criteria.beneficiaryId || config.beneficiaryId);
   if (beneficiaryId.length !== 12) throw configurationError('Código do beneficiário Itaú inválido.');
   const params = new URLSearchParams({ id_beneficiario: beneficiaryId });
@@ -526,11 +535,12 @@ const queryItauBankSlips = async (criteria = {}, options = {}) => {
   let result;
   for (let redirects = 0; redirects <= 3; redirects += 1) {
     result = await authenticatedRequest({
+      ...options,
       method: 'GET',
       path,
-      headers: { Accept: 'application/json' },
-      ...options,
-      config
+      headers: { Accept: 'application/json', ...options.headers },
+      config,
+      apiBaseUrl: queryApiBaseUrl
     });
     if (result.statusCode !== 303) break;
 
@@ -542,8 +552,8 @@ const queryItauBankSlips = async (criteria = {}, options = {}) => {
         upstreamStatus: 303
       });
     }
-    const redirectUrl = new URL(location, `${config.apiBaseUrl}/`);
-    if (redirectUrl.protocol !== 'https:' || redirectUrl.origin !== new URL(config.apiBaseUrl).origin) {
+    const redirectUrl = new URL(location, `${queryApiBaseUrl}/`);
+    if (redirectUrl.protocol !== 'https:' || redirectUrl.origin !== new URL(queryApiBaseUrl).origin) {
       throw Object.assign(new Error('O Itaú retornou um redirecionamento de consulta inválido.'), {
         statusCode: 502,
         receivedResponse: true,
@@ -564,9 +574,22 @@ const queryItauBankSlips = async (criteria = {}, options = {}) => {
     response?.value?.value?.data
   ];
   const list = candidates.find(Array.isArray);
-  if (list) return list.map((item) => normalizeItauBankSlip({ data: item })).filter(Boolean);
+  if (list) {
+    const normalized = list.map((item) => normalizeItauBankSlip({ data: item }));
+    if (normalized.some((item) => !item?.ourNumber)) {
+      throw Object.assign(new Error('O Itaú retornou boletos em formato não reconhecido.'), {
+        statusCode: 502,
+        receivedResponse: true
+      });
+    }
+    return normalized;
+  }
   const single = normalizeItauBankSlip(response);
-  return single ? [single] : [];
+  if (single?.ourNumber) return [single];
+  throw Object.assign(new Error('O Itaú retornou a consulta em formato não reconhecido.'), {
+    statusCode: 502,
+    receivedResponse: true
+  });
 };
 
 const resetTokenCache = () => {
@@ -578,6 +601,7 @@ const resetTokenCache = () => {
 module.exports = {
   TOKEN_URL,
   API_BASE_URL,
+  QUERY_API_BASE_URL,
   BOLETO_PATH,
   REQUEST_TIMEOUT_MS,
   itauConfig,

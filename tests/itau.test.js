@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const {
   TOKEN_URL,
   API_BASE_URL,
+  QUERY_API_BASE_URL,
   itauConfig,
   itauBoletoConfig,
   requestAccessToken,
@@ -33,6 +34,7 @@ test('configura os endpoints produtivos e os arquivos mTLS do Itaú', () => {
   const config = itauConfig(configEnvironment());
   assert.equal(config.tokenUrl, TOKEN_URL);
   assert.equal(config.apiBaseUrl, API_BASE_URL);
+  assert.equal(config.queryApiBaseUrl, QUERY_API_BASE_URL);
   assert.equal(config.apiKey, 'cliente-id');
   assert.equal(config.cert.toString(), certificate);
   assert.equal(config.key.toString(), privateKey);
@@ -354,6 +356,10 @@ test('consulta boletos pelos parâmetros documentados pelo Itaú', async () => {
     view: 'specific'
   }, { config, request });
   const url = new URL(requests[1].url);
+  assert.equal(url.origin, 'https://secure.api.cloud.itau.com.br');
+  assert.equal(url.pathname, '/boletoscash/v2/boletos');
+  assert.equal(requests[1].method, 'GET');
+  assert.equal(requests[1].body, null);
   assert.equal(url.searchParams.get('id_beneficiario'), '150000052061');
   assert.equal(url.searchParams.get('codigo_carteira'), '109');
   assert.equal(url.searchParams.get('nosso_numero'), '00011532');
@@ -378,7 +384,7 @@ test('segue o redirecionamento 303 e aceita a lista direta documentada pelo Ita�
     if (requests.length === 2) {
       return {
         statusCode: 303,
-        headers: { location: '/cash_management/v2/boletos/consulta-processada' },
+        headers: { location: '/boletoscash/v2/boletos/consulta-processada' },
         body: Buffer.alloc(0)
       };
     }
@@ -411,7 +417,50 @@ test('segue o redirecionamento 303 e aceita a lista direta documentada pelo Ita�
   }, { config, request });
 
   assert.equal(requests.length, 3);
-  assert.equal(requests[2].url, 'https://api.gateway.itau.com.br/cash_management/v2/boletos/consulta-processada');
+  assert.equal(requests[2].url, 'https://secure.api.cloud.itau.com.br/boletoscash/v2/boletos/consulta-processada');
   assert.equal(list[0].id, 'boleto-redirecionado');
   assert.equal(list[0].payerTaxId, '28759933000186');
+});
+
+test('permite configurar somente a URL de consulta sem alterar a emissão', async () => {
+  resetTokenCache();
+  const config = itauBoletoConfig({
+    ...configEnvironment(),
+    ITAU_QUERY_API_BASE_URL: 'https://consulta.exemplo.com/boletoscash/v2/'
+  });
+  const requests = [];
+  const request = async (options) => {
+    requests.push(options);
+    if (options.url === TOKEN_URL) {
+      return {
+        statusCode: 200,
+        headers: {},
+        body: Buffer.from(JSON.stringify({ access_token: 'token-itau', expires_in: 300 }))
+      };
+    }
+    return { statusCode: 200, headers: {}, body: Buffer.from('[]') };
+  };
+
+  assert.deepEqual(await queryItauBankSlips({}, { config, request }), []);
+  assert.equal(requests[1].url, 'https://consulta.exemplo.com/boletoscash/v2/boletos?id_beneficiario=150000052061&view=full');
+  await authenticatedRequest({ method: 'POST', path: 'boletos', config, request });
+  assert.equal(requests[2].url, 'https://api.gateway.itau.com.br/cash_management/v2/boletos');
+  assert.equal(config.apiBaseUrl, API_BASE_URL);
+});
+
+test('não confunde uma resposta de consulta desconhecida com ausência de boletos', async () => {
+  resetTokenCache();
+  const config = itauBoletoConfig(configEnvironment());
+  const request = async (options) => options.url === TOKEN_URL
+    ? {
+      statusCode: 200,
+      headers: {},
+      body: Buffer.from(JSON.stringify({ access_token: 'token-itau', expires_in: 300 }))
+    }
+    : { statusCode: 200, headers: {}, body: Buffer.from('{"items":[]}') };
+
+  await assert.rejects(
+    queryItauBankSlips({}, { config, request }),
+    (error) => error.statusCode === 502 && error.receivedResponse === true
+  );
 });
