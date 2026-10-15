@@ -3,7 +3,7 @@ const {
   queryItauBankSlipDetail,
   itauBoletoConfig
 } = require('./itau');
-const { listBankSlipRecords } = require('./boleto-store');
+const { getBankSlipRecord, listBankSlipRecords } = require('./boleto-store');
 const {
   listBradescoSettledBankSlips,
   bradescoConfig
@@ -95,23 +95,42 @@ const diagnoseBradescoQuery = async (currentDate, dependencies = {}) => {
   };
 };
 
-const diagnoseItauDetailQuery = async (dependencies = {}) => {
+const diagnoseItauDetailQuery = async ({ invoiceId = '' } = {}, dependencies = {}) => {
   const config = resolveConfig(dependencies.itauConfig, itauBoletoConfig);
-  const records = await (dependencies.listBankSlipRecords || listBankSlipRecords)();
   const digits = (value) => String(value || '').replace(/\D/g, '');
-  const sample = records
-    .filter((record) => record.state === 'ready' && record.bank === 'itau' &&
-      digits(record.beneficiaryId) === digits(config.beneficiaryId) &&
-      digits(record.wallet) === digits(config.wallet) &&
-      /^\d{1,8}$/.test(String(record.ourNumber || '')))
-    .sort((left, right) => String(right.createdAt || '').localeCompare(String(left.createdAt || '')))[0];
+  const matchesItauConfig = (record) => record.state === 'ready' && record.bank === 'itau' &&
+    digits(record.beneficiaryId) === digits(config.beneficiaryId) &&
+    digits(record.wallet) === digits(config.wallet) &&
+    /^\d{1,8}$/.test(String(record.ourNumber || ''));
+  const requestedInvoiceId = digits(invoiceId);
+  const requestedRecord = requestedInvoiceId
+    ? await (dependencies.getBankSlipRecord || getBankSlipRecord)(requestedInvoiceId)
+    : null;
+  const records = requestedInvoiceId ? []
+    : await (dependencies.listBankSlipRecords || listBankSlipRecords)();
+  const sample = requestedInvoiceId
+    ? (requestedRecord && { ...requestedRecord, invoiceId: requestedInvoiceId })
+    : records.filter(matchesItauConfig)
+      .sort((left, right) => String(right.createdAt || '').localeCompare(String(left.createdAt || '')))[0];
   if (!sample) {
     return {
       ok: false,
       bank: 'itau',
       operation: 'GET /boletoscash/v2/boletos',
       reason: 'no_registered_sample',
-      message: 'Nenhum boleto Itaú registrado foi encontrado para testar a consulta v2.'
+      message: requestedInvoiceId
+        ? 'Não há boleto registrado para esta fatura no controle local.'
+        : 'Nenhum boleto Itaú registrado foi encontrado para testar a consulta v2.'
+    };
+  }
+  if (!matchesItauConfig(sample)) {
+    return {
+      ok: false,
+      bank: 'itau',
+      operation: 'GET /boletoscash/v2/boletos',
+      invoiceId: sample.invoiceId,
+      reason: 'not_eligible_sample',
+      message: 'A fatura informada não possui boleto Itaú registrado com os identificadores configurados.'
     };
   }
   try {
@@ -124,8 +143,14 @@ const diagnoseItauDetailQuery = async (dependencies = {}) => {
       ok: true,
       bank: 'itau',
       operation: 'GET /boletoscash/v2/boletos',
+      invoiceId: sample.invoiceId,
       upstreamStatus: response.upstreamStatus,
       records: response.data.length,
+      statuses: [...new Set(response.data.flatMap((item) =>
+        (Array.isArray(item?.dado_boleto?.dados_individuais_boleto)
+          ? item.dado_boleto.dados_individuais_boleto : [])
+          .map((detail) => String(detail?.situacao_geral_boleto || '').trim())
+          .filter(Boolean)))].slice(0, 5),
       statusFieldsPresent: response.data.some((item) =>
         Array.isArray(item?.dado_boleto?.dados_individuais_boleto) &&
         item.dado_boleto.dados_individuais_boleto.some((detail) =>
@@ -145,6 +170,7 @@ const diagnoseItauDetailQuery = async (dependencies = {}) => {
       ok: false,
       bank: 'itau',
       operation: 'GET /boletoscash/v2/boletos',
+      invoiceId: sample.invoiceId,
       reason,
       ...(upstreamStatus ? { upstreamStatus } : {}),
       message: {

@@ -9,7 +9,7 @@ const {
 
 test('diagnóstico v2 lê um boleto registrado e devolve somente metadados', async () => {
   let criteria;
-  const result = await diagnoseItauDetailQuery({
+  const result = await diagnoseItauDetailQuery({}, {
     itauConfig: { beneficiaryId: '150000052061', wallet: '109' },
     listBankSlipRecords: async () => [{
       state: 'ready', bank: 'itau', invoiceId: '11840',
@@ -33,25 +33,50 @@ test('diagnóstico v2 lê um boleto registrado e devolve somente metadados', asy
     ok: true,
     bank: 'itau',
     operation: 'GET /boletoscash/v2/boletos',
+    invoiceId: '11840',
     upstreamStatus: 200,
     records: 1,
+    statuses: ['Baixado'],
     statusFieldsPresent: true,
     paymentEntries: 1
   });
-  assert.equal(JSON.stringify(result).includes('11840'), false);
   assert.equal(JSON.stringify(result).includes('00017244'), false);
   assert.equal(JSON.stringify(result).includes('200.00'), false);
 });
 
+test('diagnóstico v2 consulta somente a fatura Itaú solicitada', async () => {
+  let queriedInvoiceId;
+  let ourNumber;
+  const result = await diagnoseItauDetailQuery({ invoiceId: '11838' }, {
+    itauConfig: { beneficiaryId: '060200166662', wallet: '109' },
+    getBankSlipRecord: async (invoiceId) => {
+      queriedInvoiceId = invoiceId;
+      return {
+        state: 'ready', bank: 'itau', beneficiaryId: '060200166662',
+        wallet: '109', ourNumber: '00011838'
+      };
+    },
+    listBankSlipRecords: async () => { throw new Error('Não deve varrer outros boletos.'); },
+    queryItauBankSlipDetail: async (criteria) => {
+      ourNumber = criteria.ourNumber;
+      return { upstreamStatus: 200, data: [] };
+    }
+  });
+  assert.equal(queriedInvoiceId, '11838');
+  assert.equal(ourNumber, '00011838');
+  assert.equal(result.invoiceId, '11838');
+  assert.equal(result.records, 0);
+});
+
 test('diagnóstico v2 distingue amostra ausente de bloqueio HTTP 403', async () => {
   const config = { beneficiaryId: '150000052061', wallet: '109' };
-  const noSample = await diagnoseItauDetailQuery({
+  const noSample = await diagnoseItauDetailQuery({}, {
     itauConfig: config,
     listBankSlipRecords: async () => []
   });
   assert.equal(noSample.reason, 'no_registered_sample');
 
-  const forbidden = await diagnoseItauDetailQuery({
+  const forbidden = await diagnoseItauDetailQuery({}, {
     itauConfig: config,
     listBankSlipRecords: async () => [{
       state: 'ready', bank: 'itau', beneficiaryId: '150000052061',

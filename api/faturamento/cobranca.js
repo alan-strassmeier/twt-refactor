@@ -520,14 +520,23 @@ const handleBankDiagnostic = async (req, res) => {
   sendJson(res, 200, result);
 };
 
-const handleItauDetailDiagnostic = async (req, res) => {
+const handleItauDetailDiagnostic = async (req, res, query) => {
   if (!requireSession(req, res)) return;
   if (req.method !== 'GET') {
     res.setHeader('Allow', 'GET');
     sendJson(res, 405, { message: 'Método não permitido.' });
     return;
   }
-  sendJson(res, 200, { readOnly: true, result: await diagnoseItauDetailQuery() });
+  const rawInvoiceId = String(query.id || '').trim();
+  if (rawInvoiceId && (!/^\d{1,20}$/.test(rawInvoiceId) || Number(rawInvoiceId) <= 0)) {
+    sendJson(res, 422, { message: 'Número da fatura inválido.' });
+    return;
+  }
+  const invoiceId = rawInvoiceId.replace(/^0+(?=\d)/, '');
+  sendJson(res, 200, {
+    readOnly: true,
+    result: await diagnoseItauDetailQuery({ invoiceId })
+  });
 };
 
 const handleProcess = async (req, res, query) => {
@@ -684,7 +693,7 @@ module.exports = async (req, res) => {
     if (query.route === 'invoice-block') return await handleInvoiceBlock(req, res);
     if (query.route === 'payment-import') return await handlePaymentImport(req, res, query);
     if (query.route === 'bank-diagnostic') return await handleBankDiagnostic(req, res);
-    if (query.route === 'itau-v2-diagnostic') return await handleItauDetailDiagnostic(req, res);
+    if (query.route === 'itau-v2-diagnostic') return await handleItauDetailDiagnostic(req, res, query);
     if (query.route === 'inactive-clients') return await handleInactiveClients(req, res);
     if (query.route === 'logs') return await handleLogs(req, res, query);
     if (query.route === 'resend') return await handleResend(req, res);
