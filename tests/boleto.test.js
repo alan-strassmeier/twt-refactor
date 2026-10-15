@@ -484,6 +484,40 @@ test('reconcilia uma efetivação Itaú em revisão sem repetir o POST', async (
   assert.equal(createCalls, 0);
 });
 
+test('não emite boleto duplicado quando a listagem Itaú encontra o título sem código de barras', async () => {
+  let createCalls = 0;
+  const dependencies = {
+    ...billingDependencies('97434690000129'),
+    getBankSlipRecord: async () => null,
+    itauBoletoConfig: () => ({
+      stage: 'efetivacao',
+      beneficiaryId: '150000052061',
+      beneficiaryName: 'DSL DO BRASIL TRANSPORTE E LOGISTICA LTDA',
+      beneficiaryTaxId: '97434690000129',
+      wallet: '109',
+      species: '01',
+      acceptance: 'N'
+    }),
+    queryItauBankSlips: async () => [{
+      id: 'boleto-listado-v1',
+      ourNumber: '00011518',
+      payerTaxId: '28759933000186',
+      amount: 1844,
+      dueDate: '2026-08-14',
+      wallet: '109',
+      digitableLine: '',
+      barCode: ''
+    }],
+    createItauBankSlip: async () => { createCalls += 1; }
+  };
+
+  await assert.rejects(
+    generateInvoiceBankSlip('11518', dependencies),
+    (error) => error.statusCode === 409 && /já lista um boleto compatível/.test(error.message)
+  );
+  assert.equal(createCalls, 0);
+});
+
 test('expõe o status e a mensagem segura quando a consulta Itaú falha', () => {
   const error = itauLookupError(
     'Não foi possível conferir no Itaú a tentativa anterior de emissão',

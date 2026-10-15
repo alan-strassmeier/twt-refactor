@@ -62,7 +62,7 @@ const diagnoseItauQuery = async (currentDate, dependencies = {}) => {
   return {
     ok: true,
     bank: 'itau',
-    operation: 'GET /boletos',
+    operation: 'GET /boleto/v1/boletos',
     queriedDate: currentDate,
     records: Array.isArray(list) ? list.length : 0
   };

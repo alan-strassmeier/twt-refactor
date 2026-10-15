@@ -84,6 +84,13 @@ const itauSettlementForRecord = async (record, dependencies = {}) => {
   }, { config });
   const ourNumber = digits(record.ourNumber);
   const boleto = list.find((item) => digits(item.ourNumber) === ourNumber);
+  if (/^(?:pago|liquidado)$/i.test(String(boleto?.generalStatus || '').trim()) &&
+      (!boleto.paidAt || !Number.isFinite(Number(boleto.paidAmount)) ||
+       Number(boleto.paidAmount) <= 0)) {
+    throw new Error(
+      'O Itaú lista o boleto como pago, mas a consulta básica não informa data e valor recebidos. É necessária a consulta de detalhe para liquidar na Brudam.'
+    );
+  }
   if (!boleto?.paidAt || !settlementCovers(boleto, record.amount)) return null;
   return {
     bank: 'itau',

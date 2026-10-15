@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 
 const {
   brudamLiquidationSettings,
+  itauSettlementForRecord,
   reconcilePaidRecord,
   reconcileBankPayments
 } = require('../server/faturamento/bank-payment-reconciliation');
@@ -118,6 +119,27 @@ test('rotina consulta o Itaú em visão específica e não baixa pagamento parci
   assert.equal(result.settled, 0);
   assert.equal(liquidations, 0);
   assert.equal(savedCursor, 0);
+});
+
+test('listagem básica Itaú não liquida boleto pago sem data e valor efetivos', async () => {
+  await assert.rejects(
+    itauSettlementForRecord({
+      invoiceId: '11518',
+      ourNumber: '00011518',
+      amount: 200,
+      createdAt: '2026-09-20T12:00:00.000Z'
+    }, {
+      itauConfig: { beneficiaryId: '150000052061', wallet: '109' },
+      queryItauBankSlips: async () => [{
+        id: 'boleto-itau',
+        ourNumber: '00011518',
+        generalStatus: 'pago',
+        paidAt: '',
+        paidAmount: 0
+      }]
+    }),
+    /consulta de detalhe para liquidar/
+  );
 });
 
 test('fatura já liquidada é encerrada sem repetir POST na Brudam', async () => {
