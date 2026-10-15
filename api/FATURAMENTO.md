@@ -308,6 +308,9 @@ configuração dos IDs da Brudam. Se a resposta Itaú tiver formato inesperado,
 o diagnóstico inclui apenas status HTTP, host, tipo de conteúdo e nomes dos
 campos estruturais da resposta, nunca os dados dos boletos. Ela não emite
 boleto, não liquida fatura, não envia e-mail e não grava estado no Redis.
+A listagem Itaú aceita os campos de paginação `page` (coleção oficial) ou
+`pagination` (observado em produção), mas rejeita total ou número de página
+ausentes/inválidos para não confundir erro com ausência de boletos.
 
 ## Roteamento dos boletos
 

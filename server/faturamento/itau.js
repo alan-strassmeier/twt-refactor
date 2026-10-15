@@ -531,12 +531,20 @@ const normalizeItauQueryBankSlip = (boleto, beneficiaryId) => {
   };
 };
 
+const nonNegativeInteger = (value) => {
+  if (typeof value !== 'number' && !(typeof value === 'string' && /^\d+$/.test(value))) {
+    return null;
+  }
+  const number = Number(value);
+  return Number.isSafeInteger(number) && number >= 0 ? number : null;
+};
+
 const itauResponseShape = (result, response, queryApiBaseUrl, requestedPage) => {
   const kind = (value) => Array.isArray(value) ? 'array' : value === null ? 'null' : typeof value;
   const fieldNames = (value) => value && typeof value === 'object' && !Array.isArray(value)
     ? Object.keys(value).filter((key) => /^[a-zA-Z][a-zA-Z0-9_]{0,39}$/.test(key)).slice(0, 12)
     : [];
-  const pageValue = (value) => Number.isSafeInteger(value) && value >= 0 ? value : null;
+  const pageInfo = response?.page === undefined ? response?.pagination : response?.page;
   const rawContentType = String(result.headers?.['content-type'] || '').split(';')[0].trim().toLowerCase();
   const contentType = /^[a-z0-9.+-]+\/[a-z0-9.+-]+$/.test(rawContentType)
     ? rawContentType
@@ -548,11 +556,15 @@ const itauResponseShape = (result, response, queryApiBaseUrl, requestedPage) => 
     rootType: kind(response),
     rootFields: fieldNames(response),
     dataType: kind(response?.data),
+    dataLength: Array.isArray(response?.data) ? response.data.length : null,
+    firstItemFields: fieldNames(response?.data?.[0]),
     pageType: kind(response?.page),
     pageFields: fieldNames(response?.page),
+    paginationType: kind(response?.pagination),
+    paginationFields: fieldNames(response?.pagination),
     requestedPage,
-    returnedPage: pageValue(response?.page?.page),
-    totalPages: pageValue(response?.page?.totalPages)
+    returnedPage: nonNegativeInteger(pageInfo?.page),
+    totalPages: nonNegativeInteger(pageInfo?.totalPages)
   };
 };
 
@@ -631,10 +643,11 @@ const queryItauBankSlips = async (criteria = {}, options = {}) => {
       throw itauHttpError(result, errorPayload, 'Não foi possível consultar o boleto no Itaú.');
     }
     const response = jsonFromResponse(result);
-    const totalPages = Number(response?.page?.totalPages);
-    const responsePage = Number(response?.page?.page);
-    if (!Array.isArray(response?.data) || !Number.isSafeInteger(totalPages) ||
-        totalPages < 0 || responsePage !== page ||
+    const pageInfo = response?.page === undefined ? response?.pagination : response?.page;
+    const totalPages = nonNegativeInteger(pageInfo?.totalPages);
+    const responsePage = nonNegativeInteger(pageInfo?.page);
+    if (!Array.isArray(response?.data) || totalPages === null ||
+        responsePage !== page ||
         (totalPages === 0 && response.data.length)) {
       throw Object.assign(new Error('O Itaú retornou a consulta em formato não reconhecido.'), {
         statusCode: 502,

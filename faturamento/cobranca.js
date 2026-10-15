@@ -187,8 +187,10 @@
     const describeShape = (shape) => shape
       ? ` [HTTP ${shape.upstreamStatus}; host ${shape.queryHost}; ${shape.contentType}; `
         + `raiz ${shape.rootType} (${shape.rootFields.join(', ') || 'sem campos'}); `
-        + `data ${shape.dataType}; paginação ${shape.pageType} `
-        + `(${shape.pageFields.join(', ') || 'sem campos'}); `
+        + `data ${shape.dataType} (${shape.dataLength ?? '?'} registro(s), `
+        + `campos: ${shape.firstItemFields.join(', ') || 'nenhum'}); `
+        + `page ${shape.pageType} (${shape.pageFields.join(', ') || 'sem campos'}); `
+        + `pagination ${shape.paginationType} (${shape.paginationFields.join(', ') || 'sem campos'}); `
         + `página ${shape.returnedPage ?? '?'} de ${shape.totalPages ?? '?'} `
         + `(solicitada ${shape.requestedPage})]`
       : '';

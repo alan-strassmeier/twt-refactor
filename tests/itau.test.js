@@ -460,6 +460,37 @@ test('permite configurar somente a URL de consulta sem alterar a emissão', asyn
   assert.equal(config.apiBaseUrl, API_BASE_URL);
 });
 
+test('aceita paginação real em pagination somente quando página e total são válidos', async () => {
+  resetTokenCache();
+  const config = itauBoletoConfig(configEnvironment());
+  const request = async (options) => options.url === TOKEN_URL
+    ? {
+      statusCode: 200,
+      headers: {},
+      body: Buffer.from(JSON.stringify({ access_token: 'token-itau', expires_in: 300 }))
+    }
+    : {
+      statusCode: 200,
+      headers: { 'content-type': 'application/json' },
+      body: Buffer.from(JSON.stringify({
+        data: [{
+          idBoleto: 'boleto-pagination',
+          nossoNumero: '00011532',
+          codigoCarteira: '109',
+          dataVencimento: '2026-09-20',
+          valor: '501.87',
+          situacao: 'aberto',
+          pagador: { numeroDocumento: '28759933000186' }
+        }],
+        pagination: { page: 0, totalPages: 1 }
+      }))
+    };
+
+  const list = await queryItauBankSlips({}, { config, request });
+  assert.equal(list.length, 1);
+  assert.equal(list[0].id, 'boleto-pagination');
+});
+
 test('não confunde uma resposta de consulta desconhecida com ausência de boletos', async () => {
   resetTokenCache();
   const config = itauBoletoConfig(configEnvironment());
@@ -490,8 +521,12 @@ test('não confunde uma resposta de consulta desconhecida com ausência de bolet
         rootType: 'object',
         rootFields: ['items', 'pageInfo'],
         dataType: 'undefined',
+        dataLength: null,
+        firstItemFields: [],
         pageType: 'undefined',
         pageFields: [],
+        paginationType: 'undefined',
+        paginationFields: [],
         requestedPage: 0,
         returnedPage: null,
         totalPages: null
@@ -500,6 +535,32 @@ test('não confunde uma resposta de consulta desconhecida com ausência de bolet
       assert.equal(JSON.stringify(error.responseShape).includes('SEGREDO'), false);
       return true;
     }
+  );
+});
+
+test('não considera metadados de paginação ausentes como zero boletos', async () => {
+  resetTokenCache();
+  const config = itauBoletoConfig(configEnvironment());
+  const request = async (options) => options.url === TOKEN_URL
+    ? {
+      statusCode: 200,
+      headers: {},
+      body: Buffer.from(JSON.stringify({ access_token: 'token-itau', expires_in: 300 }))
+    }
+    : {
+      statusCode: 200,
+      headers: {},
+      body: Buffer.from(JSON.stringify({
+        data: [],
+        pagination: { page: null, totalPages: null }
+      }))
+    };
+
+  await assert.rejects(
+    queryItauBankSlips({}, { config, request }),
+    (error) => error.statusCode === 502 &&
+      error.responseShape.paginationFields.includes('totalPages') &&
+      error.responseShape.totalPages === null
   );
 });
 

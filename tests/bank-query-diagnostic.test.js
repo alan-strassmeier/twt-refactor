@@ -86,8 +86,12 @@ test('diagnóstico repassa somente a estrutura segura de resposta Itaú inespera
     rootType: 'object',
     rootFields: ['items'],
     dataType: 'undefined',
+    dataLength: null,
+    firstItemFields: [],
     pageType: 'undefined',
     pageFields: [],
+    paginationType: 'undefined',
+    paginationFields: [],
     requestedPage: 0,
     returnedPage: null,
     totalPages: null
