@@ -3,8 +3,68 @@ const assert = require('node:assert/strict');
 
 const {
   brudamConfigurationStatus,
+  diagnoseItauDetailQuery,
   runBankQueryDiagnostic
 } = require('../server/faturamento/bank-query-diagnostic');
+
+test('diagnóstico v2 lê um boleto registrado e devolve somente metadados', async () => {
+  let criteria;
+  const result = await diagnoseItauDetailQuery({
+    itauConfig: { beneficiaryId: '150000052061', wallet: '109' },
+    listBankSlipRecords: async () => [{
+      state: 'ready', bank: 'itau', invoiceId: '11840',
+      beneficiaryId: '150000052061', wallet: '109', ourNumber: '00017244',
+      createdAt: '2026-10-10T12:00:00.000Z'
+    }],
+    queryItauBankSlipDetail: async (input) => {
+      criteria = input;
+      return { upstreamStatus: 200, data: [{
+        dado_boleto: {
+          dados_individuais_boleto: [{ situacao_geral_boleto: 'Baixado' }],
+          pagamentos_cobranca: [{ valor_pago_total_cobranca: '200.00' }]
+        }
+      }] };
+    }
+  });
+  assert.deepEqual(criteria, {
+    beneficiaryId: '150000052061', wallet: '109', ourNumber: '00017244'
+  });
+  assert.deepEqual(result, {
+    ok: true,
+    bank: 'itau',
+    operation: 'GET /boletoscash/v2/boletos',
+    upstreamStatus: 200,
+    records: 1,
+    statusFieldsPresent: true,
+    paymentEntries: 1
+  });
+  assert.equal(JSON.stringify(result).includes('11840'), false);
+  assert.equal(JSON.stringify(result).includes('00017244'), false);
+  assert.equal(JSON.stringify(result).includes('200.00'), false);
+});
+
+test('diagnóstico v2 distingue amostra ausente de bloqueio HTTP 403', async () => {
+  const config = { beneficiaryId: '150000052061', wallet: '109' };
+  const noSample = await diagnoseItauDetailQuery({
+    itauConfig: config,
+    listBankSlipRecords: async () => []
+  });
+  assert.equal(noSample.reason, 'no_registered_sample');
+
+  const forbidden = await diagnoseItauDetailQuery({
+    itauConfig: config,
+    listBankSlipRecords: async () => [{
+      state: 'ready', bank: 'itau', beneficiaryId: '150000052061',
+      wallet: '109', ourNumber: '00017244'
+    }],
+    queryItauBankSlipDetail: async () => {
+      throw Object.assign(new Error('Dados sensíveis do banco'), { upstreamStatus: 403 });
+    }
+  });
+  assert.equal(forbidden.reason, 'forbidden');
+  assert.equal(forbidden.upstreamStatus, 403);
+  assert.equal(JSON.stringify(forbidden).includes('Dados sensíveis'), false);
+});
 
 test('diagnóstico consulta apenas leitura no Itaú e no Bradesco', async () => {
   const calls = {};

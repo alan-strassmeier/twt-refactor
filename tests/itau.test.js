@@ -5,6 +5,7 @@ const {
   TOKEN_URL,
   API_BASE_URL,
   QUERY_API_BASE_URL,
+  DETAIL_API_BASE_URL,
   itauConfig,
   itauBoletoConfig,
   requestAccessToken,
@@ -13,6 +14,7 @@ const {
   normalizeItauBankSlip,
   createItauBankSlip,
   queryItauBankSlips,
+  queryItauBankSlipDetail,
   resetTokenCache
 } = require('../server/faturamento/itau');
 
@@ -35,6 +37,7 @@ test('configura os endpoints produtivos e os arquivos mTLS do Itaú', () => {
   assert.equal(config.tokenUrl, TOKEN_URL);
   assert.equal(config.apiBaseUrl, API_BASE_URL);
   assert.equal(config.queryApiBaseUrl, QUERY_API_BASE_URL);
+  assert.equal(config.detailApiBaseUrl, DETAIL_API_BASE_URL);
   assert.equal(config.apiKey, 'cliente-id');
   assert.equal(config.cert.toString(), certificate);
   assert.equal(config.key.toString(), privateKey);
@@ -133,6 +136,41 @@ test('envia token, api key e identificadores de rastreio nas chamadas Itaú', as
   assert.equal(requests[1].headers['x-itau-apikey'], 'cliente-id');
   assert.match(requests[1].headers['x-itau-correlationID'], /^[0-9a-f-]{36}$/);
   assert.match(requests[1].headers['x-itau-flowID'], /^[0-9a-f-]{36}$/);
+});
+
+test('consulta detalhe v2 por GET com os parâmetros e cabeçalhos exigidos', async () => {
+  resetTokenCache();
+  const config = itauBoletoConfig(configEnvironment());
+  const requests = [];
+  const request = async (options) => {
+    requests.push(options);
+    return options.url === TOKEN_URL
+      ? { statusCode: 200, headers: {}, body: Buffer.from(JSON.stringify({
+        access_token: 'token-produtivo', expires_in: 300
+      })) }
+      : { statusCode: 200, headers: {}, body: Buffer.from(JSON.stringify({
+        data: [{ dado_boleto: { pagamentos_cobranca: [] } }]
+      })) };
+  };
+  const result = await queryItauBankSlipDetail({ ourNumber: '00017244' }, { config, request });
+  assert.equal(result.upstreamStatus, 200);
+  assert.equal(result.data.length, 1);
+  assert.equal(requests.length, 2);
+  const url = new URL(requests[1].url);
+  assert.equal(url.origin + url.pathname, `${DETAIL_API_BASE_URL}/boletos`);
+  assert.deepEqual(Object.fromEntries(url.searchParams), {
+    id_beneficiario: '150000052061',
+    codigo_carteira: '109',
+    nosso_numero: '00017244',
+    view: 'specific'
+  });
+  assert.equal(requests[1].method, 'GET');
+  assert.equal(requests[1].body, null);
+  assert.equal(requests[1].headers.Authorization, 'Bearer token-produtivo');
+  assert.equal(requests[1].headers['x-itau-apikey'], config.apiKey);
+  assert.equal(requests[1].headers.auth, config.apiKey);
+  await assert.rejects(queryItauBankSlipDetail({ ourNumber: '123456789' }, { config }),
+    /Identificadores do boleto Itaú inválidos/);
 });
 
 test('normaliza a resposta oficial de emissão, inclusive valores sem separador decimal', () => {

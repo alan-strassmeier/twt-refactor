@@ -6,6 +6,7 @@ const JSON_MAX_BYTES = 1024 * 1024;
 const TOKEN_URL = 'https://sts.itau.com.br/api/oauth/token';
 const API_BASE_URL = 'https://api.gateway.itau.com.br/cash_management/v2';
 const QUERY_API_BASE_URL = 'https://boleto.api.itau.com/boleto/v1';
+const DETAIL_API_BASE_URL = 'https://secure.api.cloud.itau.com.br/boletoscash/v2';
 const BOLETO_PATH = 'boletos';
 const ITAU_ISSUER_CNPJ = '97434690000129';
 const ITAU_ISSUER_NAME = 'DSL DO BRASIL TRANSPORTE E LOGISTICA LTDA';
@@ -63,6 +64,11 @@ const itauConfig = (env = process.env) => {
   const tokenUrl = normalizedHttpsUrl(env.ITAU_TOKEN_URL, TOKEN_URL, 'URL de autenticação');
   const apiBaseUrl = normalizedHttpsUrl(env.ITAU_API_BASE_URL, API_BASE_URL, 'URL da API');
   const queryApiBaseUrl = String(env.ITAU_QUERY_API_BASE_URL || QUERY_API_BASE_URL).trim();
+  const detailApiBaseUrl = normalizedHttpsUrl(
+    env.ITAU_DETAIL_API_BASE_URL,
+    DETAIL_API_BASE_URL,
+    'URL da consulta detalhada'
+  );
   const apiKey = String(env.ITAU_API_KEY || clientId).trim();
   const tokenConfigKey = createHash('sha256')
     .update(`${tokenUrl}:${clientId}:${clientSecret}:`)
@@ -79,6 +85,7 @@ const itauConfig = (env = process.env) => {
     tokenUrl,
     apiBaseUrl,
     queryApiBaseUrl,
+    detailApiBaseUrl,
     apiKey,
     tokenConfigKey
   };
@@ -671,6 +678,58 @@ const queryItauBankSlips = async (criteria = {}, options = {}) => {
   });
 };
 
+const queryItauBankSlipDetail = async (criteria = {}, options = {}) => {
+  const config = options.config || itauBoletoConfig();
+  const beneficiaryId = digits(criteria.beneficiaryId || config.beneficiaryId);
+  const wallet = digits(criteria.wallet || config.wallet);
+  const ourNumber = digits(criteria.ourNumber);
+  if (beneficiaryId.length !== 12 || wallet.length !== 3 ||
+      !ourNumber || ourNumber.length > 8) {
+    throw configurationError('Identificadores do boleto Itaú inválidos para consulta detalhada.');
+  }
+  const detailApiBaseUrl = normalizedHttpsUrl(
+    config.detailApiBaseUrl,
+    DETAIL_API_BASE_URL,
+    'URL da consulta detalhada'
+  );
+  const params = new URLSearchParams({
+    id_beneficiario: beneficiaryId,
+    codigo_carteira: wallet,
+    nosso_numero: ourNumber,
+    view: 'specific'
+  });
+  const result = await authenticatedRequest({
+    ...options,
+    method: 'GET',
+    path: `${BOLETO_PATH}?${params}`,
+    headers: {
+      Accept: 'application/json',
+      auth: config.apiKey,
+      ...options.headers
+    },
+    config,
+    apiBaseUrl: detailApiBaseUrl
+  });
+  if (result.statusCode < 200 || result.statusCode >= 300) {
+    let errorPayload = {};
+    try {
+      errorPayload = JSON.parse(result.body.toString('utf8') || '{}');
+    } catch {
+      // Algumas falhas do gateway não são JSON; mantenha o status HTTP original.
+    }
+    throw itauHttpError(result, errorPayload, 'Não foi possível consultar o detalhe do boleto no Itaú.');
+  }
+  const response = jsonFromResponse(result);
+  if (!Array.isArray(response?.data)) {
+    throw Object.assign(new Error('O Itaú retornou a consulta detalhada em formato não reconhecido.'), {
+      statusCode: 502,
+      receivedResponse: true,
+      upstreamStatus: result.statusCode
+    });
+  }
+  return { upstreamStatus: result.statusCode, data: response.data };
+};
+
 const resetTokenCache = () => {
   cachedToken = '';
   cachedTokenExpiresAt = 0;
@@ -681,6 +740,7 @@ module.exports = {
   TOKEN_URL,
   API_BASE_URL,
   QUERY_API_BASE_URL,
+  DETAIL_API_BASE_URL,
   BOLETO_PATH,
   REQUEST_TIMEOUT_MS,
   itauConfig,
@@ -694,5 +754,6 @@ module.exports = {
   normalizeItauBankSlip,
   createItauBankSlip,
   queryItauBankSlips,
+  queryItauBankSlipDetail,
   resetTokenCache
 };
