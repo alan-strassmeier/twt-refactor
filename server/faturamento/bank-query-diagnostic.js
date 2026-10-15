@@ -40,7 +40,8 @@ const diagnosticError = (error) => ({
     : {}),
   ...(Number.isInteger(error?.statusCode)
     ? { statusCode: error.statusCode }
-    : {})
+    : {}),
+  ...(error?.responseShape ? { responseShape: error.responseShape } : {})
 });
 
 const resolveConfig = (configured, fallback) => (

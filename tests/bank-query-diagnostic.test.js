@@ -78,6 +78,40 @@ test('falha de um banco não impede o diagnóstico do outro nem expõe configura
   assert.equal(JSON.stringify(result).includes('segredo'), false);
 });
 
+test('diagnóstico repassa somente a estrutura segura de resposta Itaú inesperada', async () => {
+  const shape = {
+    upstreamStatus: 200,
+    queryHost: 'boleto.api.itau.com',
+    contentType: 'application/json',
+    rootType: 'object',
+    rootFields: ['items'],
+    dataType: 'undefined',
+    pageType: 'undefined',
+    pageFields: [],
+    requestedPage: 0,
+    returnedPage: null,
+    totalPages: null
+  };
+  const result = await runBankQueryDiagnostic({
+    now: new Date('2026-09-30T15:00:00.000Z')
+  }, {
+    env: {},
+    itauConfig: { beneficiaryId: '060200166662', wallet: '109' },
+    bradescoConfig: { environment: 'production' },
+    queryItauBankSlips: async () => {
+      throw Object.assign(new Error('Formato não reconhecido'), {
+        statusCode: 502,
+        responseShape: shape
+      });
+    },
+    listBradescoSettledBankSlips: async () => []
+  });
+
+  assert.deepEqual(result.banks.itau.responseShape, shape);
+  assert.equal(result.banks.bradesco.ok, true);
+  assert.equal(JSON.stringify(result).includes('060200166662'), false);
+});
+
 test('estado das variáveis da Brudam exige IDs inteiros positivos', () => {
   assert.deepEqual(brudamConfigurationStatus({
     BRUDAM_BANK_SLIP_PAYMENT_METHOD_ID: '2',

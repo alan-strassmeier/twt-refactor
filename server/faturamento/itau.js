@@ -531,6 +531,31 @@ const normalizeItauQueryBankSlip = (boleto, beneficiaryId) => {
   };
 };
 
+const itauResponseShape = (result, response, queryApiBaseUrl, requestedPage) => {
+  const kind = (value) => Array.isArray(value) ? 'array' : value === null ? 'null' : typeof value;
+  const fieldNames = (value) => value && typeof value === 'object' && !Array.isArray(value)
+    ? Object.keys(value).filter((key) => /^[a-zA-Z][a-zA-Z0-9_]{0,39}$/.test(key)).slice(0, 12)
+    : [];
+  const pageValue = (value) => Number.isSafeInteger(value) && value >= 0 ? value : null;
+  const rawContentType = String(result.headers?.['content-type'] || '').split(';')[0].trim().toLowerCase();
+  const contentType = /^[a-z0-9.+-]+\/[a-z0-9.+-]+$/.test(rawContentType)
+    ? rawContentType
+    : 'não informado';
+  return {
+    upstreamStatus: result.statusCode,
+    queryHost: new URL(queryApiBaseUrl).hostname,
+    contentType,
+    rootType: kind(response),
+    rootFields: fieldNames(response),
+    dataType: kind(response?.data),
+    pageType: kind(response?.page),
+    pageFields: fieldNames(response?.page),
+    requestedPage,
+    returnedPage: pageValue(response?.page?.page),
+    totalPages: pageValue(response?.page?.totalPages)
+  };
+};
+
 const queryItauBankSlips = async (criteria = {}, options = {}) => {
   const config = options.config || itauBoletoConfig();
   const queryApiBaseUrl = normalizedHttpsUrl(
@@ -613,7 +638,8 @@ const queryItauBankSlips = async (criteria = {}, options = {}) => {
         (totalPages === 0 && response.data.length)) {
       throw Object.assign(new Error('O Itaú retornou a consulta em formato não reconhecido.'), {
         statusCode: 502,
-        receivedResponse: true
+        receivedResponse: true,
+        responseShape: itauResponseShape(result, response, queryApiBaseUrl, page)
       });
     }
     const normalized = response.data.map((item) => normalizeItauQueryBankSlip(item, beneficiaryId));

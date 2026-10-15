@@ -469,11 +469,37 @@ test('não confunde uma resposta de consulta desconhecida com ausência de bolet
       headers: {},
       body: Buffer.from(JSON.stringify({ access_token: 'token-itau', expires_in: 300 }))
     }
-    : { statusCode: 200, headers: {}, body: Buffer.from('{"items":[]}') };
+    : {
+      statusCode: 200,
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+      body: Buffer.from(JSON.stringify({
+        items: [{ pagador: 'DADO-SENSIVEL' }],
+        pageInfo: { token: 'SEGREDO' }
+      }))
+    };
 
   await assert.rejects(
     queryItauBankSlips({}, { config, request }),
-    (error) => error.statusCode === 502 && error.receivedResponse === true
+    (error) => {
+      assert.equal(error.statusCode, 502);
+      assert.equal(error.receivedResponse, true);
+      assert.deepEqual(error.responseShape, {
+        upstreamStatus: 200,
+        queryHost: 'boleto.api.itau.com',
+        contentType: 'application/json',
+        rootType: 'object',
+        rootFields: ['items', 'pageInfo'],
+        dataType: 'undefined',
+        pageType: 'undefined',
+        pageFields: [],
+        requestedPage: 0,
+        returnedPage: null,
+        totalPages: null
+      });
+      assert.equal(JSON.stringify(error.responseShape).includes('DADO-SENSIVEL'), false);
+      assert.equal(JSON.stringify(error.responseShape).includes('SEGREDO'), false);
+      return true;
+    }
   );
 });
 

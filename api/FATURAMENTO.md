@@ -304,8 +304,10 @@ Administradores autenticados podem validar exclusivamente a permissão de
 consulta com `GET /api/faturamento/cobranca?route=bank-diagnostic`. A rota usa
 `GET /boletos` no Itaú e a listagem de títulos liquidados de D-1 no Bradesco,
 retornando somente o sucesso, a quantidade de registros e o estado de
-configuração dos IDs da Brudam. Ela não emite boleto, não liquida fatura, não
-envia e-mail e não grava estado no Redis.
+configuração dos IDs da Brudam. Se a resposta Itaú tiver formato inesperado,
+o diagnóstico inclui apenas status HTTP, host, tipo de conteúdo e nomes dos
+campos estruturais da resposta, nunca os dados dos boletos. Ela não emite
+boleto, não liquida fatura, não envia e-mail e não grava estado no Redis.
 
 ## Roteamento dos boletos
 
