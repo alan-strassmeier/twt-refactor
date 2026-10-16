@@ -2659,6 +2659,8 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(html, /id="paymentImportForm"/);
   assert.match(html, /id="approveAllPayments"/);
   assert.match(html, /id="bankDiagnosticButton"/);
+  assert.match(html, /id="itauReconciliationPreviewForm"/);
+  assert.match(html, /Conferir sem liquidar/);
   assert.match(html, /Transferência TED\/DOC · Conta: ITAÚ-DSL/);
   assert.doesNotMatch(html, /name="paymentMethodId"|name="bankAccountId"/);
   assert.doesNotMatch(source, /data\.get\('paymentMethodId'\)|data\.get\('bankAccountId'\)/);
@@ -2686,6 +2688,7 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(source, /panel\.hidden = panel\.id !== sectionId/);
   assert.match(source, /setCollectionSection\(state\.collectionSection\)/);
   assert.match(source, /endpoint\('bank-diagnostic'\)/);
+  assert.match(source, /endpoint\('itau-reconciliation-preview'/);
   assert.match(source, /describeBank\('Itaú'/);
   assert.match(source, /describeBank\('Bradesco'/);
   assert.match(source, /billing:open-documents/);
@@ -2707,6 +2710,7 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(apiSource, /query\.route === 'invoice-block'/);
   assert.match(apiSource, /query\.route === 'payment-import'/);
   assert.match(apiSource, /query\.route === 'bank-diagnostic'/);
+  assert.match(apiSource, /query\.route === 'itau-reconciliation-preview'/);
   assert.match(apiSource, /store\.dismissIssue\(issue\.id, issue\.updatedAt\)/);
   assert.match(apiSource, /query\.route === 'resend'/);
   assert.match(apiSource, /req\.method === 'GET' \|\| req\.method === 'HEAD'/);

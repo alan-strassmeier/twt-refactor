@@ -340,6 +340,16 @@ como índice da última página (zero para uma página), desde que a contagem de
 registros feche. Rejeita metadados ausentes ou inconsistentes para não
 confundir erro com ausência de boletos.
 
+Antes de habilitar a baixa automática Itaú, a seção de cobrança oferece
+**Prévia de baixa Itaú** por número de fatura. A rota autenticada
+`GET /api/faturamento/cobranca?route=itau-reconciliation-preview&id=11838`
+consulta o boleto na API v2 e a fatura atual na Brudam. Ela usa as mesmas
+validações de identidade, pagamento, saldo e IDs internos da baixa, mas não
+grava no Redis nem chama `POST /financeiro/liquidar/lancamento`. O resultado
+informa se a fatura está apta, já liquidada, bloqueada ou apenas aguardando
+liberação em `ITAU_RECONCILIATION_INVOICE_IDS`. A execução efetiva sempre
+refaz as conferências; a prévia não reserva nem autoriza uma baixa.
+
 ## Roteamento dos boletos
 
 O banco é definido no servidor pelo emitente confirmado nos dados da

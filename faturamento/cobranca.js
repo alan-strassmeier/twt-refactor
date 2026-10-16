@@ -11,6 +11,9 @@
     message: document.getElementById('collectionMessage'),
     runButton: document.getElementById('runCollectionButton'),
     bankDiagnosticButton: document.getElementById('bankDiagnosticButton'),
+    itauReconciliationPreviewForm: document.getElementById('itauReconciliationPreviewForm'),
+    itauReconciliationInvoiceId: document.getElementById('itauReconciliationInvoiceId'),
+    itauReconciliationPreviewResult: document.getElementById('itauReconciliationPreviewResult'),
     companyCount: document.getElementById('collectionCompanyCount'),
     contactCount: document.getElementById('collectionContactCount'),
     pendingCount: document.getElementById('collectionPendingCount'),
@@ -1201,6 +1204,35 @@
         setMessage(bankDiagnosticMessage(result), result.ok ? 'success' : 'warning');
       } catch (error) {
         setMessage(error.message, 'error');
+      } finally {
+        setLoading(false);
+      }
+    });
+  }
+
+  if (elements.itauReconciliationPreviewForm) {
+    elements.itauReconciliationPreviewForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const invoiceId = elements.itauReconciliationInvoiceId.value.trim();
+      if (!/^\d{1,20}$/.test(invoiceId)) return;
+      const output = elements.itauReconciliationPreviewResult;
+      setLoading(true);
+      output.textContent = `Conferindo o boleto Itaú e a fatura ${invoiceId}, sem liquidar…`;
+      output.dataset.kind = '';
+      try {
+        const result = await requestJson(endpoint('itau-reconciliation-preview', { id: invoiceId }));
+        const payment = result.paidAt
+          ? ` Pagamento de ${formatMoney(result.paidAmount)} em ${formatDate(result.paidAt)}.`
+          : '';
+        const balance = Number.isFinite(Number(result.invoiceBalance))
+          ? ` Saldo confirmado na Brudam: ${formatMoney(result.invoiceBalance)}.`
+          : '';
+        output.textContent = `Fatura ${result.invoiceId}: ${result.message}${payment}${balance}`;
+        output.dataset.kind = result.status === 'eligible' || result.status === 'already_settled'
+          ? 'success' : 'warning';
+      } catch (error) {
+        output.textContent = error.message;
+        output.dataset.kind = 'error';
       } finally {
         setLoading(false);
       }

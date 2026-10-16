@@ -330,6 +330,19 @@
 
           <p class="dashboard-message collection-message" id="collectionMessage" role="status" aria-live="polite"></p>
 
+          <details class="itau-reconciliation-check">
+            <summary>Prévia de baixa Itaú</summary>
+            <form id="itauReconciliationPreviewForm" class="itau-reconciliation-form">
+              <label for="itauReconciliationInvoiceId">Número da fatura
+                <input id="itauReconciliationInvoiceId" name="invoiceId" type="text"
+                  inputmode="numeric" pattern="[0-9]+" maxlength="20" required autocomplete="off">
+              </label>
+              <button class="button button-quiet" type="submit">Conferir sem liquidar</button>
+            </form>
+            <p class="dashboard-message collection-message" id="itauReconciliationPreviewResult"
+              role="status" aria-live="polite"></p>
+          </details>
+
           <nav class="collection-quick-nav" aria-label="Seções da cobrança" role="tablist">
             <span>Exibir</span>
             <button class="collection-section-tab is-active" type="button" role="tab"
