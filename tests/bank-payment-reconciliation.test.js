@@ -44,8 +44,8 @@ const itauDetail = ({
 test('exige IDs internos distintos das contas bancárias físicas para liquidar na Brudam', () => {
   assert.deepEqual(brudamLiquidationSettings('itau', {
     BRUDAM_BANK_SLIP_PAYMENT_METHOD_ID: '7',
-    BRUDAM_ITAU_BANK_ACCOUNT_ID: '16666'
-  }), { paymentMethodId: 7, bankAccountId: 16666 });
+    BRUDAM_ITAU_BANK_ACCOUNT_ID: '6'
+  }), { paymentMethodId: 7, bankAccountId: 6 });
   assert.throws(
     () => brudamLiquidationSettings('bradesco', {
       BRUDAM_BANK_SLIP_PAYMENT_METHOD_ID: '7'
@@ -692,12 +692,94 @@ test('resposta incerta da Brudam bloqueia outro POST e conclui após confirmaç�
   };
   await assert.rejects(reconcilePaidRecord(record, settlement, dependencies), /Timeout/);
   assert.equal(record.reconciliation.status, 'submission_pending');
+  assert.equal(record.reconciliation.failure.kind, 'transport_error');
+  assert.match(record.reconciliation.failure.message, /Timeout/);
   await assert.rejects(reconcilePaidRecord(record, settlement, dependencies), /Confira manualmente/);
   assert.equal(liquidations, 1);
   settled = true;
   const result = await reconcilePaidRecord(record, settlement, dependencies);
   assert.equal(result.status, 'already_settled');
   assert.equal(record.reconciliation.status, 'completed');
+  assert.equal(liquidations, 1);
+});
+
+test('resposta recusada da Brudam fica diagnosticada sem liberar segunda baixa', async () => {
+  let record = {
+    state: 'ready', invoiceId: '11838', bank: 'itau', amount: 128.81,
+    beneficiaryId: '060200166662', wallet: '109', ourNumber: '00011838'
+  };
+  const settlement = {
+    bank: 'itau', paidAt: '2026-10-13', paidAmount: 128.81,
+    ourNumber: '00011838', beneficiaryId: '060200166662', wallet: '109',
+    bankStatus: 'pago', paidAtSource: 'itau_v2_payment_inclusion',
+    paidAmountSource: 'itau_v2_payments'
+  };
+  let liquidations = 0;
+  const dependencies = {
+    claimReconciliationLock: async () => 'token',
+    releaseReconciliationLock: async () => {},
+    getBankSlipRecord: async () => record,
+    saveBankSlipRecord: async (_invoiceId, updated) => { record = updated; },
+    fetchInvoices: async () => ({ invoices: [{
+      id: '11838', internalId: 21408, status: 0, balance: 128.81
+    }] }),
+    liquidationSettings: () => ({ paymentMethodId: 7, bankAccountId: 2 }),
+    liquidate: async () => {
+      liquidations += 1;
+      return {
+        response: { ok: false, status: 400 },
+        payload: { status: 0, message: 'Dados inválidos', data: ['Conta bancária inválida'] }
+      };
+    }
+  };
+  await assert.rejects(reconcilePaidRecord(record, settlement, dependencies), /Conta bancária inválida/);
+  assert.equal(record.reconciliation.status, 'submission_pending');
+  assert.deepEqual(record.reconciliation.failure, {
+    kind: 'rejected_response', httpStatus: 400, apiStatus: 0,
+    dataStatus: null, code: '', message: 'Dados inválidos: Conta bancária inválida'
+  });
+  const preview = await previewItauReconciliation({
+    invoiceId: '11838', currentDate: '2026-10-16'
+  }, dependencies);
+  assert.equal(preview.status, 'manual_review');
+  assert.equal(preview.eligible, false);
+  assert.match(preview.message, /ainda informa a fatura em aberto/);
+  assert.match(preview.message, /Conta bancária inválida/);
+  await assert.rejects(reconcilePaidRecord(record, settlement, dependencies), /Confira manualmente/);
+  assert.equal(liquidations, 1);
+});
+
+test('HTTP 200 sem confirmação explícita da Brudam não é tratado como baixa concluída', async () => {
+  let record = {
+    state: 'ready', invoiceId: '11777', bank: 'bradesco',
+    ourNumber: '00000021311', amount: 100
+  };
+  let liquidations = 0;
+  const dependencies = {
+    claimReconciliationLock: async () => 'token',
+    releaseReconciliationLock: async () => {},
+    getBankSlipRecord: async () => record,
+    saveBankSlipRecord: async (_invoiceId, updated) => { record = updated; },
+    fetchInvoices: async () => ({ invoices: [{
+      id: '11777', internalId: 12, status: 0, balance: 100
+    }] }),
+    liquidationSettings: () => ({ paymentMethodId: 7, bankAccountId: 321 }),
+    liquidate: async () => {
+      liquidations += 1;
+      return { response: { ok: true, status: 200 }, payload: { status: 1, data: { ids: [12] } } };
+    }
+  };
+  const settlement = {
+    bank: 'bradesco', reference: '00000021311', paidAt: '2026-09-29',
+    paidAmount: 100, titleAmounts: [100], payerTaxIds: []
+  };
+  await assert.rejects(reconcilePaidRecord(record, settlement, dependencies), /não confirmou/);
+  assert.equal(record.reconciliation.status, 'submission_pending');
+  assert.equal(record.reconciliation.failure.kind, 'unconfirmed_response');
+  assert.equal(record.reconciliation.failure.httpStatus, 200);
+  assert.equal(record.reconciliation.failure.apiStatus, 1);
+  assert.equal(record.reconciliation.failure.dataStatus, null);
+  await assert.rejects(reconcilePaidRecord(record, settlement, dependencies), /Confira manualmente/);
   assert.equal(liquidations, 1);
 });
 

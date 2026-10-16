@@ -50,6 +50,7 @@ const positiveInteger = (value, label) => {
 
 const brudamLiquidationSettings = (bank, env = process.env) => {
   if (!BANKS.has(bank)) throw new Error('Banco não suportado para conciliação.');
+  // conta_bancaria usa o valor interno da opção na Brudam, não agência/conta exibidas.
   return {
     paymentMethodId: positiveInteger(
       env.BRUDAM_BANK_SLIP_PAYMENT_METHOD_ID,
@@ -281,12 +282,59 @@ const prepareLiquidation = (record, settlement, current, dependencies = {}) => {
 
 const liquidationError = (result) => {
   const data = result?.payload?.data;
-  const details = Array.isArray(data) ? data.filter(Boolean).join('; ') : '';
+  const details = Array.isArray(data) ? data.filter((item) => typeof item === 'string' && item.trim()).join('; ') : '';
   const message = String(result?.payload?.message || '').trim();
   return Object.assign(new Error(
     [message && message.toUpperCase() !== 'OK' ? message : '', details]
-      .filter(Boolean).join(': ') || 'A Brudam recusou a liquidação bancária da fatura.'
+      .filter(Boolean).join(': ') || 'A resposta da Brudam não confirmou a liquidação bancária da fatura.'
   ), { statusCode: result?.response?.status >= 400 ? result.response.status : 502 });
+};
+
+const liquidationFailure = (error, result) => {
+  const httpStatus = Number(result?.response?.status) || null;
+  const apiStatus = result?.payload?.status != null && Number.isFinite(Number(result.payload.status))
+    ? Number(result.payload.status) : null;
+  const dataStatus = result?.payload?.data?.status != null &&
+    Number.isFinite(Number(result.payload.data.status))
+    ? Number(result.payload.data.status) : null;
+  const kind = !result ? 'transport_error'
+    : !result.response?.ok || apiStatus === 0 || dataStatus === 0
+      ? 'rejected_response' : 'unconfirmed_response';
+  return {
+    kind,
+    httpStatus,
+    apiStatus,
+    dataStatus,
+    code: String(error?.code || error?.cause?.code || '').slice(0, 80),
+    message: String(error?.message || error || '').slice(0, 240)
+  };
+};
+
+const recordLiquidationFailure = async (record, error, result, dependencies = {}) => {
+  const failure = liquidationFailure(error, result);
+  console.error('[faturamento:conciliacao:baixa-incerta]', {
+    invoiceId: record.invoiceId,
+    bank: record.bank,
+    ...failure
+  });
+  try {
+    const getRecord = dependencies.getBankSlipRecord || bankSlipStore.getBankSlipRecord;
+    const current = await getRecord(record.invoiceId);
+    if (current?.reconciliation?.status === 'submission_pending') {
+      await (dependencies.saveBankSlipRecord || bankSlipStore.saveBankSlipRecord)(
+        record.invoiceId,
+        {
+          ...current,
+          reconciliation: { ...current.reconciliation, failure }
+        }
+      );
+    }
+  } catch (saveError) {
+    console.error('[faturamento:conciliacao:diagnostico]', {
+      invoiceId: record.invoiceId,
+      message: String(saveError?.message || saveError).slice(0, 240)
+    });
+  }
 };
 
 const closeBilling = async (invoiceId, settlement, dependencies = {}) => {
@@ -385,13 +433,19 @@ const reconcilePaidRecord = async (record, settlement, dependencies = {}) => {
         }
       }
     );
-    const result = await (dependencies.liquidate || authenticatedPost)(
-      '/financeiro/liquidar/lancamento',
-      request
-    );
-    if (!result?.response?.ok || Number(result?.payload?.status) !== 1 ||
-        Number(result?.payload?.data?.status) !== 1) {
-      throw liquidationError(result);
+    let result;
+    try {
+      result = await (dependencies.liquidate || authenticatedPost)(
+        '/financeiro/liquidar/lancamento',
+        request
+      );
+      if (!result?.response?.ok || Number(result?.payload?.status) !== 1 ||
+          Number(result?.payload?.data?.status) !== 1) {
+        throw liquidationError(result);
+      }
+    } catch (error) {
+      await recordLiquidationFailure(savedRecord, error, result, dependencies);
+      throw error;
     }
     const completedSettlement = {
       ...settlement,
@@ -399,7 +453,16 @@ const reconcilePaidRecord = async (record, settlement, dependencies = {}) => {
         ? result.payload.data.ids
         : [internalId]
     };
-    await saveCompletedReconciliation(savedRecord, completedSettlement, 'liquidated', dependencies);
+    try {
+      await saveCompletedReconciliation(savedRecord, completedSettlement, 'liquidated', dependencies);
+    } catch (error) {
+      console.error('[faturamento:conciliacao:persistencia]', {
+        invoiceId: savedRecord.invoiceId,
+        bank: savedRecord.bank,
+        message: String(error?.message || error).slice(0, 240)
+      });
+      throw error;
+    }
     return { status: 'liquidated', request };
   } finally {
     try {
@@ -458,8 +521,21 @@ const previewItauReconciliation = async ({ invoiceId, currentDate } = {}, depend
       message: 'A conciliação deste boleto já foi concluída.' };
   }
   if (record.reconciliation?.status === 'submission_pending') {
+    const failure = record.reconciliation.failure;
+    let current = null;
+    try {
+      current = await exactInvoice(id, dependencies.fetchInvoices || fetchInvoices);
+    } catch {
+      // O POST continua bloqueado mesmo se a consulta read-only falhar.
+    }
+    const brudamState = current && Number(current.status) === 1
+      ? ' A Brudam informa agora que a fatura está liquidada.'
+      : current && Number(current.status) === 0
+        ? ' A Brudam ainda informa a fatura em aberto.' : '';
+    const failureDetail = failure?.message
+      ? ` Último erro registrado: ${failure.message}.` : '';
     return { ...base, status: 'manual_review', eligible: false,
-      message: 'Existe uma tentativa de baixa incerta; confira a Brudam antes de qualquer novo envio.' };
+      message: `Existe uma tentativa de baixa incerta; não faça novo envio.${brudamState}${failureDetail}` };
   }
 
   let settlement;
