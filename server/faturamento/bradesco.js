@@ -732,6 +732,7 @@ const normalizeBradescoSettlement = (title) => {
     titleAmount,
     movementAt: dateOnly(title?.dataMovimento),
     payerName: String(title?.nomePagador || '').trim(),
+    payerTaxId: digits(title?.cpfcnpjPagador || title?.cpfCnpjPagador),
     channel: String(title?.descricaoOrigemPagamento || '').trim(),
     creditMethod: String(title?.descricaoFormaCredito || '').trim(),
     raw: title
@@ -778,7 +779,13 @@ const listBradescoSettledBankSlips = async (criteria = {}, options = {}) => {
     settlements.push(...(Array.isArray(response?.titulos) ? response.titulos : [])
       .map(normalizeBradescoSettlement)
       .filter(Boolean));
-    if (String(response?.indMaisPagina || '').toUpperCase() !== 'S') break;
+    if (String(response?.indMaisPagina || '').toUpperCase() !== 'S') return settlements;
+    if (pageCount + 1 >= maxPages) {
+      throw Object.assign(new Error('A lista de boletos liquidados do Bradesco excedeu o limite de páginas; nenhuma baixa foi efetuada.'), {
+        statusCode: 502,
+        expose: true
+      });
+    }
     const nextPage = Number(response?.pagina);
     if (!Number.isSafeInteger(nextPage) || nextPage <= previousPage) {
       throw Object.assign(new Error('O Bradesco retornou paginação inválida na lista de liquidados.'), {

@@ -443,6 +443,7 @@ test('lista títulos liquidados no Bradesco e normaliza data e valor recebidos',
     titleAmount: 724.61,
     movementAt: '2026-09-30',
     payerName: 'CLIENTE TESTE',
+    payerTaxId: '',
     channel: '',
     creditMethod: '',
     raw: {
@@ -455,4 +456,19 @@ test('lista títulos liquidados no Bradesco e normaliza data e valor recebidos',
     }
   });
   assert.equal(normalizeBradescoSettlement({ nossoNumero: 0 }), null);
+});
+
+test('não usa lista Bradesco incompleta quando ainda existe outra página', async () => {
+  resetTokenCache();
+  const config = bradescoConfig(configEnvironment());
+  const request = async (options) => options.url === config.tokenUrl
+    ? { statusCode: 200, headers: {}, body: Buffer.from(JSON.stringify({
+      access_token: 'token', expires_in: 3600
+    })) }
+    : { statusCode: 200, headers: {}, body: Buffer.from(JSON.stringify({
+      status: 200, pagina: 1, indMaisPagina: 'S', titulos: []
+    })) };
+  await assert.rejects(listBradescoSettledBankSlips({
+    paymentDateFrom: '2026-09-23', paymentDateTo: '2026-09-29'
+  }, { config, request, maxPages: 1 }), /excedeu o limite de páginas/);
 });

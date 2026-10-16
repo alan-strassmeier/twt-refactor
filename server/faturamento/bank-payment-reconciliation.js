@@ -1,4 +1,9 @@
-const { queryItauBankSlips, itauBoletoConfig } = require('./itau');
+const {
+  queryItauBankSlipDetail,
+  normalizeItauBankSlip,
+  itauAmount,
+  itauBoletoConfig
+} = require('./itau');
 const {
   listBradescoSettledBankSlips,
   bradescoConfig
@@ -11,6 +16,12 @@ const BILLING_EVENTS = ['initial', 'reminder', 'overdue'];
 const BANKS = new Set(['itau', 'bradesco']);
 
 const digits = (value) => String(value || '').replace(/\D/g, '');
+const sameOurNumber = (left, right) => {
+  const first = digits(left);
+  const second = digits(right);
+  return Boolean(first && second && /[1-9]/.test(first) && /[1-9]/.test(second)) &&
+    first.replace(/^0+/, '') === second.replace(/^0+/, '');
+};
 const cents = (value) => Math.round(Number(value || 0) * 100);
 
 const validIsoDate = (value) => {
@@ -67,36 +78,107 @@ const settlementCovers = (settlement, amount) => (
 );
 
 const itauSettlementForRecord = async (record, dependencies = {}) => {
-  const query = dependencies.queryItauBankSlips || queryItauBankSlips;
+  const detectedAt = String(dependencies.currentDate || '');
+  if (!validIsoDate(detectedAt)) {
+    throw new Error('Data de detecção do pagamento Itaú inválida.');
+  }
+  const query = dependencies.queryItauBankSlipDetail || queryItauBankSlipDetail;
   const config = typeof dependencies.itauConfig === 'function'
     ? dependencies.itauConfig()
     : dependencies.itauConfig || itauBoletoConfig();
-  const inclusionDate = String(record.createdAt || record.issuedAt || '').slice(0, 10);
-  if (!validIsoDate(inclusionDate)) {
-    throw new Error('O boleto Itaú não possui data de inclusão válida para consulta específica.');
+  const issuedAt = String(record.createdAt || record.issuedAt || '').slice(0, 10);
+  if (!validIsoDate(issuedAt) || detectedAt < issuedAt) {
+    throw new Error('A detecção do pagamento é anterior à emissão do boleto Itaú.');
   }
-  const list = await query({
-    beneficiaryId: record.beneficiaryId || config.beneficiaryId,
-    wallet: record.wallet || config.wallet,
-    ourNumber: record.ourNumber,
-    inclusionDate,
-    view: 'specific'
-  }, { config });
+  const beneficiaryId = digits(record.beneficiaryId);
+  const wallet = digits(record.wallet);
   const ourNumber = digits(record.ourNumber);
-  const boleto = list.find((item) => digits(item.ourNumber) === ourNumber);
-  if (/^(?:pago|liquidado)$/i.test(String(boleto?.generalStatus || '').trim()) &&
-      (!boleto.paidAt || !Number.isFinite(Number(boleto.paidAmount)) ||
-       Number(boleto.paidAmount) <= 0)) {
-    throw new Error(
-      'O Itaú lista o boleto como pago, mas a consulta básica não informa data e valor recebidos. É necessária a consulta de detalhe para liquidar na Brudam.'
-    );
+  const payerTaxId = digits(record.payer?.tax_id || record.payer?.taxId);
+  if (beneficiaryId !== digits(config.beneficiaryId) ||
+      wallet !== digits(config.wallet) || !/^\d{1,8}$/.test(ourNumber) ||
+      !payerTaxId || !Number.isFinite(Number(record.amount)) || cents(record.amount) <= 0) {
+    throw new Error('O boleto Itaú registrado não possui identificadores completos para conciliação.');
   }
-  if (!boleto?.paidAt || !settlementCovers(boleto, record.amount)) return null;
+  const response = await query({
+    beneficiaryId,
+    wallet,
+    ourNumber
+  }, { config });
+  if (!Array.isArray(response?.data)) {
+    throw new Error('A consulta detalhada Itaú não retornou uma lista de boletos válida.');
+  }
+  const matches = response.data.filter((item) =>
+    digits(item?.beneficiario?.id_beneficiario) === beneficiaryId &&
+    digits(item?.dado_boleto?.codigo_carteira) === wallet &&
+    Array.isArray(item?.dado_boleto?.dados_individuais_boleto) &&
+    item.dado_boleto.dados_individuais_boleto.some((detail) =>
+      sameOurNumber(detail?.numero_nosso_numero, ourNumber)));
+  if (matches.length > 1) {
+    throw new Error('O Itaú retornou mais de um boleto para a mesma referência; baixa automática interrompida.');
+  }
+  if (!matches.length) {
+    if (!response.data.length) return null;
+    throw new Error('O detalhe retornado pelo Itaú não corresponde ao boleto registrado.');
+  }
+  const raw = matches[0];
+  if (raw.dado_boleto.dados_individuais_boleto.length !== 1) {
+    throw new Error('O Itaú retornou boleto com várias parcelas; não é possível atribuir os pagamentos à fatura.');
+  }
+  const boleto = (dependencies.normalizeItauBankSlip || normalizeItauBankSlip)(raw);
+  if (!boleto?.id || !sameOurNumber(boleto.ourNumber, ourNumber)) {
+    throw new Error('O detalhe Itaú não possui identificador individual confiável.');
+  }
+  if (digits(boleto.payerTaxId) !== payerTaxId) {
+    throw new Error('O pagador do boleto Itaú não corresponde ao registro de emissão.');
+  }
+  if (!Number.isFinite(boleto.amount) || cents(boleto.amount) !== cents(record.amount)) {
+    throw new Error('O valor original do boleto Itaú não corresponde ao registro de emissão.');
+  }
+  if (record.dueAt && String(boleto.dueDate).slice(0, 10) !== String(record.dueAt).slice(0, 10)) {
+    throw new Error('O vencimento do boleto Itaú não corresponde ao registro de emissão.');
+  }
+  if (record.yourNumber && String(boleto.yourNumber).trim() !== String(record.yourNumber).trim()) {
+    throw new Error('O Seu Número do boleto Itaú não corresponde ao registro de emissão.');
+  }
+  const bankStatus = String(boleto.generalStatus || '').trim()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  if (!['pago', 'paga', 'liquidado', 'liquidada', 'creditado', 'creditada'].includes(bankStatus)) {
+    return null;
+  }
+  const rawPayments = raw.dado_boleto.pagamentos_cobranca;
+  if (!Array.isArray(rawPayments) || !rawPayments.length) {
+    throw new Error('O Itaú indica pagamento, mas não retornou lançamentos de pagamento.');
+  }
+  const amounts = rawPayments.map((payment) => itauAmount(payment?.valor_pago_total_cobranca));
+  if (amounts.some((amount) => !Number.isFinite(amount) || amount <= 0)) {
+    throw new Error('O Itaú retornou um lançamento de pagamento sem valor válido.');
+  }
+  const paidCents = amounts.reduce((total, amount) => total + cents(amount), 0);
+  if (boleto.payments.length !== rawPayments.length ||
+      boleto.payments.some((payment) => !validIsoDate(payment.paidAt)) ||
+      cents(boleto.paidAmount) !== paidCents) {
+    throw new Error('O Itaú retornou lançamento de pagamento sem data ou valor consistente.');
+  }
+  const paidAt = boleto.payments.map((payment) => payment.paidAt).sort().at(-1);
+  if (boleto.payments.some((payment) =>
+    payment.paidAt < issuedAt || payment.paidAt > detectedAt)) {
+    throw new Error('A data do pagamento Itaú está fora do período entre a emissão e a conferência.');
+  }
+  if (paidCents < cents(record.amount)) {
+    throw new Error('Os pagamentos confirmados pelo Itaú não cobrem integralmente o boleto.');
+  }
   return {
     bank: 'itau',
-    paidAt: boleto.paidAt,
-    paidAmount: boleto.paidAmount,
-    reference: boleto.id || record.bankSlipId
+    paidAt,
+    paidAmount: paidCents / 100,
+    reference: boleto.id,
+    beneficiaryId,
+    wallet,
+    ourNumber,
+    payerTaxId,
+    paidAtSource: 'itau_v2_payment_inclusion',
+    paidAmountSource: 'itau_v2_payments',
+    bankStatus: 'pago'
   };
 };
 
@@ -109,13 +191,53 @@ const groupedBradescoSettlements = (settlements = []) => {
       bank: 'bradesco',
       paidAt: '',
       paidAmount: 0,
-      reference: ourNumber
+      reference: ourNumber,
+      titleAmounts: [],
+      payerTaxIds: []
     };
     current.paidAt = [current.paidAt, settlement.paidAt].filter(Boolean).sort().at(-1);
     current.paidAmount = Math.round((current.paidAmount + Number(settlement.paidAmount || 0)) * 100) / 100;
+    current.titleAmounts.push(settlement.titleAmount);
+    if (digits(settlement.payerTaxId)) current.payerTaxIds.push(digits(settlement.payerTaxId));
     grouped.set(ourNumber, current);
   });
   return grouped;
+};
+
+const validateSettlementForRecord = (record, settlement) => {
+  if (settlement?.bank !== record.bank || !validIsoDate(settlement?.paidAt)) {
+    throw new Error('A confirmação bancária não corresponde ao banco ou não possui data de pagamento válida.');
+  }
+  if (record.bank === 'itau') {
+    if (digits(settlement.beneficiaryId) !== digits(record.beneficiaryId) ||
+        digits(settlement.wallet) !== digits(record.wallet) ||
+        !sameOurNumber(settlement.ourNumber, record.ourNumber) ||
+        settlement.bankStatus !== 'pago' ||
+        settlement.paidAtSource !== 'itau_v2_payment_inclusion') {
+      throw new Error('A confirmação de pagamento Itaú não corresponde ao boleto registrado.');
+    }
+    if (settlement.paidAmountSource !== 'itau_v2_payments') {
+      throw new Error('A baixa Itaú exige pagamentos confirmados pela consulta detalhada v2.');
+    }
+    const payerTaxId = digits(record.payer?.tax_id || record.payer?.taxId);
+    if (payerTaxId && digits(settlement.payerTaxId) !== payerTaxId) {
+      throw new Error('O pagador do boleto Itaú não corresponde ao registro de emissão.');
+    }
+    return;
+  }
+  if (record.bank !== 'bradesco') return;
+  if (digits(settlement.reference) !== digits(record.ourNumber)) {
+    throw new Error('O Nosso Número pago no Bradesco não corresponde ao boleto registrado.');
+  }
+  if (!Array.isArray(settlement.titleAmounts) || !settlement.titleAmounts.length ||
+      settlement.titleAmounts.some((amount) => !Number.isFinite(Number(amount)) ||
+        cents(amount) !== cents(record.amount))) {
+    throw new Error('O valor original do título pago no Bradesco não corresponde ao boleto registrado.');
+  }
+  const payerTaxId = digits(record.payer?.tax_id || record.payer?.taxId);
+  if (payerTaxId && settlement.payerTaxIds?.some((taxId) => digits(taxId) !== payerTaxId)) {
+    throw new Error('O pagador do título pago no Bradesco não corresponde ao boleto registrado.');
+  }
 };
 
 const liquidationError = (result) => {
@@ -165,6 +287,10 @@ const saveCompletedReconciliation = async (
       paidAt: settlement.paidAt,
       paidAmount: settlement.paidAmount,
       reconciledAt,
+      ...(settlement.paidAtSource ? { paidAtSource: settlement.paidAtSource } : {}),
+      ...(settlement.paidAmountSource ? { paidAmountSource: settlement.paidAmountSource } : {}),
+      ...(settlement.bankStatus ? { bankStatus: settlement.bankStatus } : {}),
+      ...(settlement.reference ? { bankReference: settlement.reference } : {}),
       ...(settlement.liquidationIds ? { liquidationIds: settlement.liquidationIds } : {})
     }
   };
@@ -174,54 +300,103 @@ const saveCompletedReconciliation = async (
 };
 
 const reconcilePaidRecord = async (record, settlement, dependencies = {}) => {
-  if (!settlementCovers(settlement, record.amount)) {
-    throw new Error('O pagamento bancário não cobre integralmente o valor registrado do boleto.');
+  const claim = dependencies.claimReconciliationLock || bankSlipStore.claimReconciliationLock;
+  const release = dependencies.releaseReconciliationLock || bankSlipStore.releaseReconciliationLock;
+  const token = await claim(record.invoiceId);
+  if (!token) return { status: 'in_progress' };
+  try {
+    const savedRecord = await (
+      dependencies.getBankSlipRecord || bankSlipStore.getBankSlipRecord
+    )(record.invoiceId);
+    if (!savedRecord || savedRecord.state !== 'ready') {
+      throw new Error('O boleto registrado mudou durante a conciliação; a baixa foi interrompida.');
+    }
+    if (savedRecord.reconciliation?.status === 'completed') {
+      return { status: 'already_settled' };
+    }
+    if (savedRecord.reconciliation?.status === 'submission_pending') {
+      const current = await exactInvoice(savedRecord.invoiceId, dependencies.fetchInvoices || fetchInvoices);
+      if (!current) throw new Error('Fatura do boleto não encontrada na Brudam.');
+      if (Number(current.status) === 1) {
+        await saveCompletedReconciliation(savedRecord, settlement, 'already_settled', dependencies);
+        return { status: 'already_settled' };
+      }
+      throw new Error('A baixa anterior pode ter sido recebida pela Brudam. Confira manualmente o lançamento antes de uma nova tentativa.');
+    }
+    validateSettlementForRecord(savedRecord, settlement);
+    if (!settlementCovers(settlement, savedRecord.amount)) {
+      throw new Error('O pagamento bancário não cobre integralmente o valor registrado do boleto.');
+    }
+    const current = await exactInvoice(savedRecord.invoiceId, dependencies.fetchInvoices || fetchInvoices);
+    if (!current) throw new Error('Fatura do boleto não encontrada na Brudam.');
+    if (Number(current.status) === 1) {
+      await saveCompletedReconciliation(savedRecord, settlement, 'already_settled', dependencies);
+      return { status: 'already_settled' };
+    }
+    if (Number(current.status) !== 0) {
+      throw new Error('A fatura não está aberta na Brudam e não pode ser liquidada automaticamente.');
+    }
+    const balance = Number(current.balance);
+    if (!Number.isFinite(balance) || balance <= 0 || !settlementCovers(settlement, balance)) {
+      throw new Error('O valor confirmado pelo banco não cobre o saldo atual da fatura na Brudam.');
+    }
+    if (savedRecord.bank === 'itau' && cents(balance) !== cents(savedRecord.amount)) {
+      throw new Error('O saldo da fatura difere do valor nominal do boleto Itaú; confira antes de liquidar.');
+    }
+    const internalId = positiveInteger(current.internalId, 'O identificador interno do lançamento');
+    const settings = (dependencies.liquidationSettings || brudamLiquidationSettings)(
+      savedRecord.bank,
+      dependencies.env || process.env
+    );
+    const request = {
+      documentos: [{
+        id_lancamento: internalId,
+        data_pagamento: settlement.paidAt,
+        forma_pagamento: settings.paymentMethodId,
+        data_credito_debito: settlement.paidAt,
+        valor_juros: Math.max(0, Math.round((settlement.paidAmount - balance) * 100) / 100),
+        valor_liquidado: Math.round(balance * 100) / 100,
+        conta_bancaria: settings.bankAccountId
+      }]
+    };
+    await (dependencies.saveBankSlipRecord || bankSlipStore.saveBankSlipRecord)(
+      savedRecord.invoiceId,
+      {
+        ...savedRecord,
+        reconciliation: {
+          ...settlement,
+          status: 'submission_pending',
+          attemptedAt: new Date().toISOString(),
+          internalId
+        }
+      }
+    );
+    const result = await (dependencies.liquidate || authenticatedPost)(
+      '/financeiro/liquidar/lancamento',
+      request
+    );
+    if (!result?.response?.ok || Number(result?.payload?.status) !== 1 ||
+        Number(result?.payload?.data?.status) !== 1) {
+      throw liquidationError(result);
+    }
+    const completedSettlement = {
+      ...settlement,
+      liquidationIds: Array.isArray(result.payload?.data?.ids)
+        ? result.payload.data.ids
+        : [internalId]
+    };
+    await saveCompletedReconciliation(savedRecord, completedSettlement, 'liquidated', dependencies);
+    return { status: 'liquidated', request };
+  } finally {
+    try {
+      await release(record.invoiceId, token);
+    } catch (error) {
+      console.error('[faturamento:conciliacao:lock]', {
+        invoiceId: record.invoiceId,
+        message: String(error.message || error).slice(0, 240)
+      });
+    }
   }
-  const current = await exactInvoice(record.invoiceId, dependencies.fetchInvoices || fetchInvoices);
-  if (!current) throw new Error('Fatura do boleto não encontrada na Brudam.');
-  if (Number(current.status) === 1 || cents(current.balance) <= 0) {
-    await saveCompletedReconciliation(record, settlement, 'already_settled', dependencies);
-    return { status: 'already_settled' };
-  }
-  if (Number(current.status) !== 0) {
-    throw new Error('A fatura não está aberta na Brudam e não pode ser liquidada automaticamente.');
-  }
-  const balance = Number(current.balance);
-  if (!Number.isFinite(balance) || balance <= 0 || !settlementCovers(settlement, balance)) {
-    throw new Error('O valor confirmado pelo banco não cobre o saldo atual da fatura na Brudam.');
-  }
-  const internalId = positiveInteger(current.internalId, 'O identificador interno do lançamento');
-  const settings = (dependencies.liquidationSettings || brudamLiquidationSettings)(
-    record.bank,
-    dependencies.env || process.env
-  );
-  const request = {
-    documentos: [{
-      id_lancamento: internalId,
-      data_pagamento: settlement.paidAt,
-      forma_pagamento: settings.paymentMethodId,
-      data_credito_debito: settlement.paidAt,
-      valor_juros: Math.max(0, Math.round((settlement.paidAmount - balance) * 100) / 100),
-      valor_liquidado: Math.round(balance * 100) / 100,
-      conta_bancaria: settings.bankAccountId
-    }]
-  };
-  const result = await (dependencies.liquidate || authenticatedPost)(
-    '/financeiro/liquidar/lancamento',
-    request
-  );
-  if (!result?.response?.ok || Number(result?.payload?.status) !== 1 ||
-      Number(result?.payload?.data?.status) !== 1) {
-    throw liquidationError(result);
-  }
-  const completedSettlement = {
-    ...settlement,
-    liquidationIds: Array.isArray(result.payload?.data?.ids)
-      ? result.payload.data.ids
-      : [internalId]
-  };
-  await saveCompletedReconciliation(record, completedSettlement, 'liquidated', dependencies);
-  return { status: 'liquidated', request };
 };
 
 const mapWithConcurrency = async (items, concurrency, mapper) => {
@@ -238,13 +413,27 @@ const mapWithConcurrency = async (items, concurrency, mapper) => {
   return results;
 };
 
+const itauReconciliationAllowlist = (env = process.env) => {
+  const value = String(env.ITAU_RECONCILIATION_INVOICE_IDS || '').trim();
+  if (value === '*') return null;
+  if (!value) return new Set();
+  const invoiceIds = value.split(',').map((item) => item.trim());
+  if (invoiceIds.some((item) => !/^\d+$/.test(item))) {
+    throw new Error('ITAU_RECONCILIATION_INVOICE_IDS deve conter números de faturas separados por vírgula ou * para todas.');
+  }
+  return new Set(invoiceIds);
+};
+
 const reconcileBankPayments = async ({ currentDate, maxRecords = 8 } = {}, dependencies = {}) => {
   if (!validIsoDate(currentDate)) throw new Error('Data da conciliação bancária inválida.');
+  const itauAllowlist = itauReconciliationAllowlist(dependencies.env || process.env);
   const records = await (dependencies.listBankSlipRecords || bankSlipStore.listBankSlipRecords)();
   const active = records.filter((record) => (
     record?.state === 'ready' &&
     BANKS.has(record.bank) &&
-    record.reconciliation?.status !== 'completed'
+    record.reconciliation?.status !== 'completed' &&
+    (record.bank !== 'itau' || record.reconciliation?.status === 'submission_pending' ||
+      itauAllowlist === null || itauAllowlist.has(String(record.invoiceId)))
   )).sort((left, right) => String(left.invoiceId).localeCompare(
     String(right.invoiceId), 'pt-BR', { numeric: true }
   ));
@@ -258,10 +447,17 @@ const reconcileBankPayments = async ({ currentDate, maxRecords = 8 } = {}, depen
   const start = Math.max(0, Number(storedCursor) || 0) % active.length;
   const rotated = [...active.slice(start), ...active.slice(0, start)];
   const selected = rotated.slice(0, Math.max(1, Math.min(Number(maxRecords) || 8, 25)));
+  const bradescoNumberCounts = new Map();
+  records.filter((record) => record?.state === 'ready' && record.bank === 'bradesco')
+    .forEach((record) => {
+      const ourNumber = digits(record.ourNumber).padStart(11, '0');
+      bradescoNumberCounts.set(ourNumber, (bradescoNumberCounts.get(ourNumber) || 0) + 1);
+    });
 
   let bradescoSettlements = new Map();
   let bradescoError = null;
-  if (selected.some((record) => record.bank === 'bradesco')) {
+  if (selected.some((record) => record.bank === 'bradesco' &&
+      record.reconciliation?.status !== 'submission_pending')) {
     try {
       const config = typeof dependencies.bradescoConfig === 'function'
         ? dependencies.bradescoConfig()
@@ -280,9 +476,16 @@ const reconcileBankPayments = async ({ currentDate, maxRecords = 8 } = {}, depen
 
   const results = await mapWithConcurrency(selected, 3, async (record) => {
     try {
-      if (record.bank === 'bradesco' && bradescoError) throw bradescoError;
-      const settlement = record.bank === 'itau'
-        ? await itauSettlementForRecord(record, dependencies)
+      if (record.bank === 'bradesco' && bradescoError &&
+          record.reconciliation?.status !== 'submission_pending') throw bradescoError;
+      if (record.bank === 'bradesco' &&
+          bradescoNumberCounts.get(digits(record.ourNumber).padStart(11, '0')) !== 1) {
+        throw new Error('Nosso Número Bradesco associado a mais de uma fatura; baixa automática interrompida.');
+      }
+      const settlement = record.reconciliation?.status === 'submission_pending'
+        ? record.reconciliation
+        : record.bank === 'itau'
+        ? await itauSettlementForRecord(record, { ...dependencies, currentDate })
         : bradescoSettlements.get(digits(record.ourNumber).padStart(11, '0')) || null;
       if (!settlement) return { invoiceId: record.invoiceId, status: 'pending' };
       const outcome = await reconcilePaidRecord(record, settlement, dependencies);
@@ -303,7 +506,7 @@ const reconcileBankPayments = async ({ currentDate, maxRecords = 8 } = {}, depen
     checked: selected.length,
     settled: results.filter((item) => item.status === 'liquidated').length,
     alreadySettled: results.filter((item) => item.status === 'already_settled').length,
-    pending: results.filter((item) => item.status === 'pending').length,
+    pending: results.filter((item) => ['pending', 'in_progress'].includes(item.status)).length,
     errors: results.filter((item) => item.status === 'error'),
     results
   };
@@ -314,6 +517,7 @@ module.exports = {
   settlementCovers,
   itauSettlementForRecord,
   groupedBradescoSettlements,
+  itauReconciliationAllowlist,
   reconcilePaidRecord,
   reconcileBankPayments
 };

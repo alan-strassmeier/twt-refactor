@@ -22,7 +22,12 @@ const {
   isBankSlipCreationEligible,
   requiresTedDocForCategory
 } = require('../server/faturamento/billing-rules');
-const { getBankSlipRecords, listBankSlipRecords } = require('../server/faturamento/boleto-store');
+const {
+  getBankSlipRecords,
+  listBankSlipRecords,
+  claimReconciliationLock,
+  releaseReconciliationLock
+} = require('../server/faturamento/boleto-store');
 
 const twtInvoice = {
   fatura: 11518,
@@ -91,6 +96,31 @@ test('lista registros bancários antigos e novos por SCAN sem depender de índic
   assert.equal(calls[0][0], 'SCAN');
   assert.equal(calls[1][0], 'MGET');
   assert.deepEqual(records.map((record) => record.invoiceId), ['11518', '11777']);
+});
+
+test('interrompe a conciliação quando a varredura Redis está incompleta', async () => {
+  await assert.rejects(listBankSlipRecords(async (...args) => {
+    if (args[0] === 'SCAN') return ['23', []];
+    throw new Error('Não deve buscar registros de uma lista incompleta.');
+  }, { maxIterations: 1 }), /excedeu o limite de varredura/);
+});
+
+test('lock de conciliação usa token e libera apenas o dono', async () => {
+  const calls = [];
+  const command = async (...args) => {
+    calls.push(args);
+    return args[0] === 'SET' ? 'OK' : 1;
+  };
+  const token = await claimReconciliationLock('11777', command);
+  assert.match(token, /^[a-f0-9-]{36}$/);
+  assert.deepEqual(calls[0].slice(0, 2), [
+    'SET', 'faturamento:boleto:twt:conciliacao-lock:11777'
+  ]);
+  assert.deepEqual(calls[0].slice(3), ['NX', 'EX', '180']);
+  await releaseReconciliationLock('11777', token, command);
+  assert.equal(calls[1][0], 'EVAL');
+  assert.equal(calls[1][3], 'faturamento:boleto:twt:conciliacao-lock:11777');
+  assert.equal(calls[1][4], token);
 });
 
 test('normaliza o pagador conforme dados obrigatórios das APIs bancárias', () => {

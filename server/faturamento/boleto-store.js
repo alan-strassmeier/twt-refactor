@@ -1,3 +1,5 @@
+const { randomUUID } = require('node:crypto');
+
 const redisConfig = () => ({
   url: String(process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL || '')
     .replace(/\/$/, ''),
@@ -32,6 +34,13 @@ const redisCommand = async (...args) => {
 
 const KEY_PREFIX = 'faturamento:boleto:twt:fatura:';
 const keyFor = (invoiceId) => `${KEY_PREFIX}${invoiceId}`;
+const reconciliationLockKeyFor = (invoiceId) =>
+  `faturamento:boleto:twt:conciliacao-lock:${invoiceId}`;
+const RELEASE_RECONCILIATION_LOCK_SCRIPT = `
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+  return redis.call('DEL', KEYS[1])
+end
+return 0`;
 
 const parseRecord = (value) => {
   if (!value) return null;
@@ -67,6 +76,12 @@ const listBankSlipRecords = async (command = redisCommand, options = {}) => {
     if (Array.isArray(result?.[1])) keys.push(...result[1]);
     iterations += 1;
   } while (cursor !== '0' && iterations < maxIterations);
+  if (cursor !== '0') {
+    throw Object.assign(new Error('A lista de boletos no Redis excedeu o limite de varredura; nenhuma conciliação foi executada.'), {
+      statusCode: 503,
+      expose: true
+    });
+  }
   const uniqueKeys = [...new Set(keys)].sort();
   if (!uniqueKeys.length) return [];
   const values = await command('MGET', ...uniqueKeys) || [];
@@ -94,6 +109,18 @@ const saveBankSlipRecord = (invoiceId, record, command = redisCommand) =>
 const releaseBankSlipClaim = (invoiceId, command = redisCommand) =>
   command('DEL', keyFor(invoiceId));
 
+const claimReconciliationLock = async (invoiceId, command = redisCommand) => {
+  const token = randomUUID();
+  const result = await command(
+    'SET', reconciliationLockKeyFor(invoiceId), token, 'NX', 'EX', '180'
+  );
+  return result === 'OK' ? token : null;
+};
+
+const releaseReconciliationLock = (invoiceId, token, command = redisCommand) =>
+  command('EVAL', RELEASE_RECONCILIATION_LOCK_SCRIPT, '1',
+    reconciliationLockKeyFor(invoiceId), token);
+
 module.exports = {
   redisCommand,
   KEY_PREFIX,
@@ -104,5 +131,7 @@ module.exports = {
   listBankSlipRecords,
   claimBankSlip,
   saveBankSlipRecord,
-  releaseBankSlipClaim
+  releaseBankSlipClaim,
+  claimReconciliationLock,
+  releaseReconciliationLock
 };
