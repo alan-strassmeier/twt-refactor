@@ -58,6 +58,8 @@ const createHandler = (dependencies = {}) => async (req, res) => {
       ourNumber
     }, { config, includeRaw: true });
     const bankData = result.raw;
+    const first = bankData?.data?.[0];
+    const firstDetail = first?.dado_boleto?.dados_individuais_boleto?.[0];
     const matches = (item) => digits(item?.beneficiario?.id_beneficiario) ===
       digits(config.beneficiaryId) &&
       digits(item?.dado_boleto?.codigo_carteira) === digits(config.wallet) &&
@@ -65,7 +67,27 @@ const createHandler = (dependencies = {}) => async (req, res) => {
         digits(detail?.numero_nosso_numero) === digits(ourNumber));
     if (!bankData || !Array.isArray(bankData.data) || bankData.data.length !== 1 ||
         !bankData.data.every(matches)) {
-      sendJson(res, 502, { message: 'A resposta do Itaú não corresponde ao boleto solicitado.' });
+      sendJson(res, 502, {
+        message: 'A resposta do Itaú não corresponde ao boleto solicitado.',
+        shape: {
+          records: Array.isArray(bankData?.data) ? bankData.data.length : null,
+          itemKeys: first && typeof first === 'object' ? Object.keys(first) : [],
+          beneficiaryKeys: first?.beneficiario && typeof first.beneficiario === 'object'
+            ? Object.keys(first.beneficiario) : [],
+          boletoKeys: first?.dado_boleto && typeof first.dado_boleto === 'object'
+            ? Object.keys(first.dado_boleto) : [],
+          individualKeys: firstDetail && typeof firstDetail === 'object'
+            ? Object.keys(firstDetail) : [],
+          beneficiaryMatches: digits(first?.beneficiario?.id_beneficiario) ===
+            digits(config.beneficiaryId),
+          walletMatches: digits(first?.dado_boleto?.codigo_carteira) === digits(config.wallet),
+          ourNumberMatches: digits(firstDetail?.numero_nosso_numero) === digits(ourNumber),
+          ourNumberLengths: {
+            returned: digits(firstDetail?.numero_nosso_numero).length,
+            registered: digits(ourNumber).length
+          }
+        }
+      });
       return;
     }
     sendJson(res, 200, {
