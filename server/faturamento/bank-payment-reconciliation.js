@@ -14,6 +14,9 @@ const billingStore = require('./cobranca-store');
 
 const BILLING_EVENTS = ['initial', 'reminder', 'overdue'];
 const BANKS = new Set(['itau', 'bradesco']);
+// Recuperação pontual da tentativa feita com o número da conta em vez do ID Brudam.
+const ITAU_MANUAL_RETRY_INVOICE_ID = '11838';
+const ITAU_MANUAL_RETRY_BANK_ACCOUNT_ID = 6;
 
 const digits = (value) => String(value || '').replace(/\D/g, '');
 const sameOurNumber = (left, right) => {
@@ -386,6 +389,14 @@ const saveCompletedReconciliation = async (
   return updated;
 };
 
+const isManualRetryAuthorized = (record) => (
+  String(record?.invoiceId) === ITAU_MANUAL_RETRY_INVOICE_ID &&
+  record?.reconciliation?.status === 'submission_pending' &&
+  Boolean(record.reconciliation.manualRetryAuthorizedAt) &&
+  record.reconciliation.manualRetryAuthorizedAt ===
+    record.reconciliationAudit?.manualRetryAuthorizedAt
+);
+
 const reconcilePaidRecord = async (record, settlement, dependencies = {}) => {
   const claim = dependencies.claimReconciliationLock || bankSlipStore.claimReconciliationLock;
   const release = dependencies.releaseReconciliationLock || bankSlipStore.releaseReconciliationLock;
@@ -408,7 +419,9 @@ const reconcilePaidRecord = async (record, settlement, dependencies = {}) => {
         await saveCompletedReconciliation(savedRecord, settlement, 'already_settled', dependencies);
         return { status: 'already_settled' };
       }
-      throw new Error('A baixa anterior pode ter sido recebida pela Brudam. Confira manualmente o lançamento antes de uma nova tentativa.');
+      if (!dependencies.allowManualRetry || !isManualRetryAuthorized(savedRecord)) {
+        throw new Error('A baixa anterior pode ter sido recebida pela Brudam. Confira manualmente o lançamento antes de uma nova tentativa.');
+      }
     }
     validateSettlementForRecord(savedRecord, settlement);
     if (!settlementCovers(settlement, savedRecord.amount)) {
@@ -501,6 +514,99 @@ const itauReconciliationAllowlist = (env = process.env) => {
   return new Set(invoiceIds);
 };
 
+const rearmItauReconciliation = async ({ invoiceId, currentDate } = {}, dependencies = {}) => {
+  const id = String(invoiceId || '').trim();
+  if (id !== ITAU_MANUAL_RETRY_INVOICE_ID || !validIsoDate(currentDate)) {
+    throw Object.assign(new Error('Esta recuperação manual não está liberada para a fatura informada.'), {
+      statusCode: 403, expose: true
+    });
+  }
+  const env = dependencies.env || process.env;
+  const allowlist = itauReconciliationAllowlist(env);
+  if (!allowlist || !allowlist.has(id)) {
+    throw Object.assign(new Error('Esta fatura não está liberada para conciliação Itaú.'), {
+      statusCode: 403, expose: true
+    });
+  }
+  const claim = dependencies.claimReconciliationLock || bankSlipStore.claimReconciliationLock;
+  const release = dependencies.releaseReconciliationLock || bankSlipStore.releaseReconciliationLock;
+  const token = await claim(id);
+  if (!token) {
+    throw Object.assign(new Error('Outra conferência desta fatura está em andamento.'), {
+      statusCode: 409, expose: true
+    });
+  }
+  try {
+    const record = await (dependencies.getBankSlipRecord || bankSlipStore.getBankSlipRecord)(id);
+    if (!record || record.state !== 'ready' || record.bank !== 'itau' ||
+        String(record.invoiceId) !== id ||
+        record.reconciliation?.status !== 'submission_pending' ||
+        record.reconciliationAudit?.manualRetryAuthorizedAt) {
+      throw Object.assign(new Error('A tentativa anterior não está apta a uma única liberação manual.'), {
+        statusCode: 409, expose: true
+      });
+    }
+    const prior = record.reconciliation;
+    const attemptedAt = Date.parse(String(prior.attemptedAt || ''));
+    if (!Number.isFinite(attemptedAt) || Date.now() - attemptedAt < 10 * 60 * 1000) {
+      throw Object.assign(new Error('A tentativa anterior ainda é recente ou não possui horário confiável.'), {
+        statusCode: 409, expose: true
+      });
+    }
+    const settlement = await itauSettlementForRecord(record, { ...dependencies, currentDate });
+    if (!settlement) {
+      throw Object.assign(new Error('O Itaú não confirma mais o pagamento integral deste boleto.'), {
+        statusCode: 409, expose: true
+      });
+    }
+    if ((prior.reference && prior.reference !== settlement.reference) ||
+        (prior.paidAt && prior.paidAt !== settlement.paidAt) ||
+        (prior.paidAmount != null && cents(prior.paidAmount) !== cents(settlement.paidAmount))) {
+      throw Object.assign(new Error('A confirmação bancária mudou desde a primeira tentativa.'), {
+        statusCode: 409, expose: true
+      });
+    }
+    const current = await exactInvoice(id, dependencies.fetchInvoices || fetchInvoices);
+    const preparation = prepareLiquidation(record, settlement, current, dependencies);
+    if (preparation.status !== 'eligible' ||
+        preparation.internalId !== Number(prior.internalId) ||
+        preparation.request.documentos[0].conta_bancaria !== ITAU_MANUAL_RETRY_BANK_ACCOUNT_ID) {
+      throw Object.assign(new Error('A fatura ou o ID interno da conta bancária mudou; liberação interrompida.'), {
+        statusCode: 409, expose: true
+      });
+    }
+    const manualRetryAuthorizedAt = new Date().toISOString();
+    await (dependencies.saveBankSlipRecord || bankSlipStore.saveBankSlipRecord)(id, {
+      ...record,
+      reconciliation: { ...prior, manualRetryAuthorizedAt },
+      reconciliationAudit: {
+        manualRetryAuthorizedAt,
+        previousAttempt: {
+          attemptedAt: prior.attemptedAt,
+          internalId: prior.internalId,
+          ...(prior.failure ? { failure: prior.failure } : {})
+        }
+      }
+    });
+    console.warn('[faturamento:conciliacao:liberacao-manual]', {
+      invoiceId: id,
+      internalId: preparation.internalId,
+      bankAccountId: ITAU_MANUAL_RETRY_BANK_ACCOUNT_ID,
+      manualRetryAuthorizedAt
+    });
+    return { invoiceId: id, status: 'rearmed', manualOnly: true };
+  } finally {
+    try {
+      await release(id, token);
+    } catch (error) {
+      console.error('[faturamento:conciliacao:lock-liberacao-manual]', {
+        invoiceId: id,
+        message: String(error.message || error).slice(0, 240)
+      });
+    }
+  }
+};
+
 const previewItauReconciliation = async ({ invoiceId, currentDate } = {}, dependencies = {}) => {
   const id = String(invoiceId || '').trim();
   if (!/^\d{1,20}$/.test(id) || !validIsoDate(currentDate)) {
@@ -520,7 +626,8 @@ const previewItauReconciliation = async ({ invoiceId, currentDate } = {}, depend
     return { ...base, status: 'completed', eligible: false,
       message: 'A conciliação deste boleto já foi concluída.' };
   }
-  if (record.reconciliation?.status === 'submission_pending') {
+  const manualRetryAuthorized = isManualRetryAuthorized(record);
+  if (record.reconciliation?.status === 'submission_pending' && !manualRetryAuthorized) {
     const failure = record.reconciliation.failure;
     let current = null;
     try {
@@ -535,6 +642,10 @@ const previewItauReconciliation = async ({ invoiceId, currentDate } = {}, depend
     const failureDetail = failure?.message
       ? ` Último erro registrado: ${failure.message}.` : '';
     return { ...base, status: 'manual_review', eligible: false,
+      rearmAvailable: id === ITAU_MANUAL_RETRY_INVOICE_ID &&
+        Boolean(allowlist?.has(id)) &&
+        Boolean(current) && Number(current.status) === 0 &&
+        !record.reconciliationAudit?.manualRetryAuthorizedAt,
       message: `Existe uma tentativa de baixa incerta; não faça novo envio.${brudamState}${failureDetail}` };
   }
 
@@ -573,15 +684,18 @@ const previewItauReconciliation = async ({ invoiceId, currentDate } = {}, depend
       paidAt: settlement.paidAt, paidAmount: settlement.paidAmount,
       message: 'O Itaú confirma o pagamento e a fatura já está liquidada na Brudam.' };
   }
+  const eligible = manualRetryAuthorized ? Boolean(allowlist?.has(id)) : autoEnabled;
   return {
     ...base,
-    status: autoEnabled ? 'eligible' : 'disabled',
-    eligible: autoEnabled,
+    status: eligible ? 'eligible' : 'disabled',
+    eligible,
     paidAt: settlement.paidAt,
     paidAmount: settlement.paidAmount,
     invoiceBalance: preparation.request.documentos[0].valor_liquidado,
-    message: autoEnabled
-      ? 'Pagamento e fatura conferidos. A próxima execução pode realizar a baixa.'
+    message: eligible
+      ? manualRetryAuthorized
+        ? 'Pagamento e fatura conferidos. Liberada uma única nova tentativa manual; o agendador permanece bloqueado.'
+        : 'Pagamento e fatura conferidos. A próxima execução pode realizar a baixa.'
       : 'Pagamento e fatura conferidos, mas a baixa automática Itaú não está liberada para esta fatura.'
   };
 };
@@ -610,12 +724,16 @@ const reconcileItauInvoice = async ({ invoiceId, currentDate } = {}, dependencie
   if (record.reconciliation?.status === 'completed') {
     return { invoiceId: id, status: 'already_settled' };
   }
-  const settlement = record.reconciliation?.status === 'submission_pending'
+  const manualRetryAuthorized = isManualRetryAuthorized(record);
+  const settlement = record.reconciliation?.status === 'submission_pending' && !manualRetryAuthorized
     ? record.reconciliation
     : await itauSettlementForRecord(record, { ...dependencies, currentDate });
   if (!settlement) return { invoiceId: id, status: 'not_paid' };
   try {
-    const result = await reconcilePaidRecord(record, settlement, dependencies);
+    const result = await reconcilePaidRecord(record, settlement, {
+      ...dependencies,
+      allowManualRetry: manualRetryAuthorized
+    });
     return { invoiceId: id, status: result.status };
   } catch (error) {
     const latest = await Promise.resolve().then(() => getRecord(id)).catch(() => null);
@@ -720,6 +838,7 @@ module.exports = {
   itauSettlementForRecord,
   groupedBradescoSettlements,
   itauReconciliationAllowlist,
+  rearmItauReconciliation,
   previewItauReconciliation,
   reconcileItauInvoice,
   reconcilePaidRecord,

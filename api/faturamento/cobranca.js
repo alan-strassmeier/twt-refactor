@@ -28,7 +28,8 @@ const {
 } = require('../../server/faturamento/bank-query-diagnostic');
 const {
   previewItauReconciliation,
-  reconcileItauInvoice
+  reconcileItauInvoice,
+  rearmItauReconciliation
 } = require('../../server/faturamento/bank-payment-reconciliation');
 const {
   getInactiveSnapshot,
@@ -582,6 +583,22 @@ const handleItauReconciliationRun = async (req, res) => {
   }));
 };
 
+const handleItauReconciliationRearm = async (req, res) => {
+  if (!requireSession(req, res)) return;
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', 'POST');
+    sendJson(res, 405, { message: 'Método não permitido.' });
+    return;
+  }
+  if (!requireSameOrigin(req, res)) return;
+  const body = await parseJsonBody(req, 512);
+  const invoiceId = String(body.invoiceId || '').trim();
+  sendJson(res, 200, await rearmItauReconciliation({
+    invoiceId,
+    currentDate: saoPauloDate()
+  }));
+};
+
 const handleProcess = async (req, res, query) => {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
@@ -742,6 +759,9 @@ module.exports = async (req, res) => {
     }
     if (query.route === 'itau-reconciliation-run') {
       return await handleItauReconciliationRun(req, res);
+    }
+    if (query.route === 'itau-reconciliation-rearm') {
+      return await handleItauReconciliationRearm(req, res);
     }
     if (query.route === 'inactive-clients') return await handleInactiveClients(req, res);
     if (query.route === 'logs') return await handleLogs(req, res, query);

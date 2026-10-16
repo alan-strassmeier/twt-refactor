@@ -359,6 +359,22 @@ autoriza esta ação direcionada. A consulta ao Itaú e à Brudam é refeita,
 aproveitando o mesmo lock e o mesmo registro `submission_pending` da rotina
 automática. Esta ação não percorre nem envia cobranças de outras faturas.
 
+### Recuperação pontual da fatura 11838
+
+A tentativa antiga da 11838 ficou em `submission_pending` sem resposta
+persistida, quando a conta Itaú estava configurada com o número físico
+`16666` em vez do ID interno Brudam `6`. A liberação dessa fatura exige
+sessão administrativa, mesma origem e botão **Liberar tentativa manual**.
+A rota `POST /api/faturamento/cobranca?route=itau-reconciliation-rearm`
+aceita somente `{"invoiceId":"11838"}` e, antes de gravar qualquer mudança,
+reconfere o pagamento no Itaú, o lançamento aberto e saldo integral na
+Brudam, o mesmo ID interno de lançamento e o ID bancário `6`. O estado
+permanece `submission_pending` para que as versões já implantadas e o
+agendador continuem sem repetir o POST. A autorização é única e fica
+registrada no histórico do boleto; somente o botão manual **Liquidar esta
+fatura** pode consumi-la, após nova prévia e novas consultas. A liberação
+em si nunca envia uma baixa financeira.
+
 ## Roteamento dos boletos
 
 O banco é definido no servidor pelo emitente confirmado nos dados da

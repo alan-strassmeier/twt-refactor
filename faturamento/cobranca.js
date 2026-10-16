@@ -14,6 +14,7 @@
     itauReconciliationPreviewForm: document.getElementById('itauReconciliationPreviewForm'),
     itauReconciliationInvoiceId: document.getElementById('itauReconciliationInvoiceId'),
     itauReconciliationPreviewResult: document.getElementById('itauReconciliationPreviewResult'),
+    itauReconciliationRearmButton: document.getElementById('itauReconciliationRearmButton'),
     itauReconciliationRunButton: document.getElementById('itauReconciliationRunButton'),
     companyCount: document.getElementById('collectionCompanyCount'),
     contactCount: document.getElementById('collectionContactCount'),
@@ -1213,9 +1214,12 @@
 
   if (elements.itauReconciliationPreviewForm) {
     const runButton = elements.itauReconciliationRunButton;
+    const rearmButton = elements.itauReconciliationRearmButton;
     elements.itauReconciliationInvoiceId.addEventListener('input', () => {
       runButton.hidden = true;
       delete runButton.dataset.invoiceId;
+      rearmButton.hidden = true;
+      delete rearmButton.dataset.invoiceId;
     });
     elements.itauReconciliationPreviewForm.addEventListener('submit', async (event) => {
       event.preventDefault();
@@ -1224,6 +1228,8 @@
       const output = elements.itauReconciliationPreviewResult;
       runButton.hidden = true;
       delete runButton.dataset.invoiceId;
+      rearmButton.hidden = true;
+      delete rearmButton.dataset.invoiceId;
       setLoading(true);
       output.textContent = `Conferindo o boleto Itaú e a fatura ${invoiceId}, sem liquidar…`;
       output.dataset.kind = '';
@@ -1241,11 +1247,41 @@
         if (result.status === 'eligible') {
           runButton.dataset.invoiceId = result.invoiceId;
           runButton.hidden = false;
+        } else if (result.status === 'manual_review' && result.rearmAvailable) {
+          rearmButton.dataset.invoiceId = result.invoiceId;
+          rearmButton.hidden = false;
         }
       } catch (error) {
         output.textContent = error.message;
         output.dataset.kind = 'error';
       } finally {
+        setLoading(false);
+      }
+    });
+
+    rearmButton.addEventListener('click', async () => {
+      const invoiceId = rearmButton.dataset.invoiceId;
+      if (invoiceId !== '11838' || invoiceId !== elements.itauReconciliationInvoiceId.value.trim()) return;
+      if (!window.confirm(
+        'Liberar uma única nova tentativa manual de baixa da fatura 11838? Esta ação não envia a baixa. O agendador continuará bloqueado; confira novamente a prévia antes de liquidar.'
+      )) return;
+      const output = elements.itauReconciliationPreviewResult;
+      rearmButton.hidden = true;
+      setLoading(true);
+      output.textContent = 'Reconfirmando o pagamento Itaú, o saldo na Brudam e o ID bancário antes da liberação…';
+      output.dataset.kind = '';
+      try {
+        await requestJson(endpoint('itau-reconciliation-rearm'), {
+          method: 'POST',
+          body: JSON.stringify({ invoiceId })
+        });
+        output.textContent = 'Tentativa manual liberada. Atualizando a prévia sem liquidar…';
+        output.dataset.kind = 'success';
+        setLoading(false);
+        elements.itauReconciliationPreviewForm.requestSubmit();
+      } catch (error) {
+        output.textContent = `Fatura ${invoiceId}: ${error.message}`;
+        output.dataset.kind = 'error';
         setLoading(false);
       }
     });
