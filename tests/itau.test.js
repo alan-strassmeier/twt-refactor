@@ -169,12 +169,6 @@ test('consulta detalhe v2 por GET com os parâmetros e cabeçalhos exigidos', as
   assert.equal(requests[1].headers.Authorization, 'Bearer token-produtivo');
   assert.equal(requests[1].headers['x-itau-apikey'], config.apiKey);
   assert.equal(requests[1].headers.auth, config.apiKey);
-  const rawResult = await queryItauBankSlipDetail({ ourNumber: '00017244' }, {
-    config, request, includeRaw: true
-  });
-  assert.deepEqual(rawResult.raw, {
-    data: [{ dado_boleto: { pagamentos_cobranca: [] } }]
-  });
   await assert.rejects(queryItauBankSlipDetail({ ourNumber: '123456789' }, { config }),
     /Identificadores do boleto Itaú inválidos/);
 });

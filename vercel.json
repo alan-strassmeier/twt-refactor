@@ -80,9 +80,6 @@
       "maxDuration": 60,
       "includeFiles": "assets/twtlogo.png"
     },
-    "api/faturamento/itau-raw.js": {
-      "maxDuration": 60
-    },
     "api/whatsapp.mjs": {
       "maxDuration": 60,
       "memory": 1024,
