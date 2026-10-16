@@ -5,6 +5,8 @@ const REQUEST_TIMEOUT_MS = 20000;
 const JSON_MAX_BYTES = 1024 * 1024;
 const TOKEN_URL = 'https://sts.itau.com.br/api/oauth/token';
 const API_BASE_URL = 'https://api.gateway.itau.com.br/cash_management/v2';
+const QUERY_API_BASE_URL = 'https://boleto.api.itau.com/boleto/v1';
+const DETAIL_API_BASE_URL = 'https://secure.api.cloud.itau.com.br/boletoscash/v2';
 const BOLETO_PATH = 'boletos';
 const ITAU_ISSUER_CNPJ = '97434690000129';
 const ITAU_ISSUER_NAME = 'DSL DO BRASIL TRANSPORTE E LOGISTICA LTDA';
@@ -61,6 +63,12 @@ const itauConfig = (env = process.env) => {
   const passphrase = String(env.ITAU_MTLS_KEY_PASSPHRASE || '');
   const tokenUrl = normalizedHttpsUrl(env.ITAU_TOKEN_URL, TOKEN_URL, 'URL de autenticação');
   const apiBaseUrl = normalizedHttpsUrl(env.ITAU_API_BASE_URL, API_BASE_URL, 'URL da API');
+  const queryApiBaseUrl = String(env.ITAU_QUERY_API_BASE_URL || QUERY_API_BASE_URL).trim();
+  const detailApiBaseUrl = normalizedHttpsUrl(
+    env.ITAU_DETAIL_API_BASE_URL,
+    DETAIL_API_BASE_URL,
+    'URL da consulta detalhada'
+  );
   const apiKey = String(env.ITAU_API_KEY || clientId).trim();
   const tokenConfigKey = createHash('sha256')
     .update(`${tokenUrl}:${clientId}:${clientSecret}:`)
@@ -76,6 +84,8 @@ const itauConfig = (env = process.env) => {
     passphrase,
     tokenUrl,
     apiBaseUrl,
+    queryApiBaseUrl,
+    detailApiBaseUrl,
     apiKey,
     tokenConfigKey
   };
@@ -347,13 +357,14 @@ const authenticatedRequest = async ({
   body = null,
   maxBytes = JSON_MAX_BYTES,
   config = itauConfig(),
+  apiBaseUrl = config.apiBaseUrl,
   request = httpsRequest
 }) => {
   const execute = async (forceRefresh = false) => {
     const token = await getAccessToken(config, forceRefresh, request);
     try {
       return await request({
-        url: new URL(path, `${config.apiBaseUrl}/`).toString(),
+        url: new URL(path, `${apiBaseUrl}/`).toString(),
         method,
         headers: {
           Authorization: `Bearer ${token}`,
@@ -498,17 +509,88 @@ const createItauBankSlip = async (payload, options = {}) => {
   return bankSlip;
 };
 
+const normalizeItauQueryBankSlip = (boleto, beneficiaryId) => {
+  if (!boleto || typeof boleto !== 'object') return null;
+  const amount = itauAmount(boleto.valor);
+  const ourNumber = digits(boleto.nossoNumero);
+  const payerTaxId = digits(boleto.pagador?.numeroDocumento);
+  const dueDate = dateOnly(boleto.dataVencimento);
+  if (!boleto.idBoleto || !ourNumber || !payerTaxId || !dueDate || !Number.isFinite(amount)) {
+    return null;
+  }
+  return {
+    id: String(boleto.idBoleto),
+    stage: 'efetivacao',
+    registered: true,
+    beneficiaryId,
+    wallet: String(boleto.codigoCarteira || '').trim(),
+    ourNumber,
+    yourNumber: String(boleto.seuNumero || '').trim(),
+    payerTaxId,
+    amount,
+    dueDate,
+    generalStatus: String(boleto.situacao || '').trim(),
+    payments: [],
+    paidAmount: 0,
+    paidAt: '',
+    digitableLine: '',
+    barCode: ''
+  };
+};
+
+const nonNegativeInteger = (value) => {
+  if (typeof value !== 'number' && !(typeof value === 'string' && /^\d+$/.test(value))) {
+    return null;
+  }
+  const number = Number(value);
+  return Number.isSafeInteger(number) && number >= 0 ? number : null;
+};
+
+const itauResponseShape = (result, response, queryApiBaseUrl, requestedPage) => {
+  const kind = (value) => Array.isArray(value) ? 'array' : value === null ? 'null' : typeof value;
+  const fieldNames = (value) => value && typeof value === 'object' && !Array.isArray(value)
+    ? Object.keys(value).filter((key) => /^[a-zA-Z][a-zA-Z0-9_]{0,39}$/.test(key)).slice(0, 12)
+    : [];
+  const pageInfo = response?.page === undefined ? response?.pagination : response?.page;
+  const rawContentType = String(result.headers?.['content-type'] || '').split(';')[0].trim().toLowerCase();
+  const contentType = /^[a-z0-9.+-]+\/[a-z0-9.+-]+$/.test(rawContentType)
+    ? rawContentType
+    : 'não informado';
+  return {
+    upstreamStatus: result.statusCode,
+    queryHost: new URL(queryApiBaseUrl).hostname,
+    contentType,
+    rootType: kind(response),
+    rootFields: fieldNames(response),
+    dataType: kind(response?.data),
+    dataLength: Array.isArray(response?.data) ? response.data.length : null,
+    firstItemFields: fieldNames(response?.data?.[0]),
+    pageType: kind(response?.page),
+    pageFields: fieldNames(response?.page),
+    paginationType: kind(response?.pagination),
+    paginationFields: fieldNames(response?.pagination),
+    requestedPage,
+    returnedPage: nonNegativeInteger(pageInfo?.page),
+    totalPages: nonNegativeInteger(pageInfo?.totalPages)
+  };
+};
+
 const queryItauBankSlips = async (criteria = {}, options = {}) => {
   const config = options.config || itauBoletoConfig();
+  const queryApiBaseUrl = normalizedHttpsUrl(
+    config.queryApiBaseUrl,
+    QUERY_API_BASE_URL,
+    'URL de consulta de boletos'
+  );
   const beneficiaryId = digits(criteria.beneficiaryId || config.beneficiaryId);
   if (beneficiaryId.length !== 12) throw configurationError('Código do beneficiário Itaú inválido.');
-  const params = new URLSearchParams({ id_beneficiario: beneficiaryId });
+  const params = new URLSearchParams({ idBeneficiario: beneficiaryId });
   const wallet = digits(criteria.wallet);
   const ourNumber = digits(criteria.ourNumber);
   const inclusionDate = String(criteria.inclusionDate || '').trim();
-  const view = String(criteria.view || 'full');
+  const view = String(criteria.view || 'full').toLowerCase();
   if (wallet && wallet.length !== 3) throw configurationError('Carteira Itaú inválida para consulta.');
-  if (ourNumber && (ourNumber.length < 8 || ourNumber.length > 16)) {
+  if (ourNumber && ourNumber.length > 8) {
     throw configurationError('Nosso número Itaú inválido para consulta.');
   }
   if (inclusionDate && !/^\d{4}-\d{2}-\d{2}$/.test(inclusionDate)) {
@@ -517,56 +599,135 @@ const queryItauBankSlips = async (criteria = {}, options = {}) => {
   if (!['basic', 'full', 'specific'].includes(view)) {
     throw configurationError('Visão inválida para consulta Itaú.');
   }
-  if (wallet) params.set('codigo_carteira', wallet);
-  if (ourNumber) params.set('nosso_numero', ourNumber);
-  if (inclusionDate) params.set('data_inclusao', inclusionDate);
-  params.set('view', view);
+  if (wallet) params.set('codigoCarteira', wallet);
+  if (ourNumber) params.set('nossoNumero', ourNumber);
+  if (inclusionDate) params.set('dataEntrada', `${inclusionDate},${inclusionDate}`);
+  params.set('view', 'BASIC');
+  params.set('pageSize', '20');
 
-  let path = `${BOLETO_PATH}?${params}`;
-  let result;
-  for (let redirects = 0; redirects <= 3; redirects += 1) {
-    result = await authenticatedRequest({
-      method: 'GET',
-      path,
-      headers: { Accept: 'application/json' },
-      ...options,
-      config
-    });
-    if (result.statusCode !== 303) break;
+  const list = [];
+  for (let page = 0; page < 20; page += 1) {
+    params.set('page', String(page));
+    let path = `${BOLETO_PATH}?${params}`;
+    let result;
+    for (let redirects = 0; redirects <= 3; redirects += 1) {
+      result = await authenticatedRequest({
+        ...options,
+        method: 'GET',
+        path,
+        headers: { Accept: 'application/json', ...options.headers },
+        config,
+        apiBaseUrl: queryApiBaseUrl
+      });
+      if (result.statusCode !== 303) break;
 
-    const location = String(result.headers?.location || '').trim();
-    if (!location || redirects === 3) {
-      throw Object.assign(new Error('O Itaú redirecionou a consulta sem informar um destino válido.'), {
+      const location = String(result.headers?.location || '').trim();
+      if (!location || redirects === 3) {
+        throw Object.assign(new Error('O Itaú redirecionou a consulta sem informar um destino válido.'), {
+          statusCode: 502,
+          receivedResponse: true,
+          upstreamStatus: 303
+        });
+      }
+      const redirectUrl = new URL(location, `${queryApiBaseUrl}/`);
+      if (redirectUrl.protocol !== 'https:' || redirectUrl.origin !== new URL(queryApiBaseUrl).origin) {
+        throw Object.assign(new Error('O Itaú retornou um redirecionamento de consulta inválido.'), {
+          statusCode: 502,
+          receivedResponse: true,
+          upstreamStatus: 303
+        });
+      }
+      path = redirectUrl.toString();
+    }
+    if (result.statusCode === 204 && page === 0) return [];
+    if (result.statusCode < 200 || result.statusCode >= 300) {
+      let errorPayload = {};
+      try {
+        errorPayload = JSON.parse(result.body.toString('utf8') || '{}');
+      } catch {
+        // O banco também pode devolver erros em texto; preserve o status HTTP.
+      }
+      throw itauHttpError(result, errorPayload, 'Não foi possível consultar o boleto no Itaú.');
+    }
+    const response = jsonFromResponse(result);
+    const pageInfo = response?.page === undefined ? response?.pagination : response?.page;
+    const totalPages = nonNegativeInteger(pageInfo?.totalPages);
+    const responsePage = nonNegativeInteger(pageInfo?.page);
+    if (!Array.isArray(response?.data) || totalPages === null ||
+        responsePage !== page ||
+        (totalPages === 0 && response.data.length)) {
+      throw Object.assign(new Error('O Itaú retornou a consulta em formato não reconhecido.'), {
         statusCode: 502,
         receivedResponse: true,
-        upstreamStatus: 303
+        responseShape: itauResponseShape(result, response, queryApiBaseUrl, page)
       });
     }
-    const redirectUrl = new URL(location, `${config.apiBaseUrl}/`);
-    if (redirectUrl.protocol !== 'https:' || redirectUrl.origin !== new URL(config.apiBaseUrl).origin) {
-      throw Object.assign(new Error('O Itaú retornou um redirecionamento de consulta inválido.'), {
+    const normalized = response.data.map((item) => normalizeItauQueryBankSlip(item, beneficiaryId));
+    if (normalized.some((item) => !item)) {
+      throw Object.assign(new Error('O Itaú retornou boletos em formato não reconhecido.'), {
         statusCode: 502,
-        receivedResponse: true,
-        upstreamStatus: 303
+        receivedResponse: true
       });
     }
-    path = redirectUrl.toString();
+    list.push(...normalized);
+    if (page + 1 >= totalPages) return list;
   }
-  if (result.statusCode === 204) return [];
-  const response = jsonFromResponse(result);
+  throw Object.assign(new Error('A consulta Itaú excedeu o limite de páginas; confira os boletos antes de emitir.'), {
+    statusCode: 502,
+    receivedResponse: true
+  });
+};
+
+const queryItauBankSlipDetail = async (criteria = {}, options = {}) => {
+  const config = options.config || itauBoletoConfig();
+  const beneficiaryId = digits(criteria.beneficiaryId || config.beneficiaryId);
+  const wallet = digits(criteria.wallet || config.wallet);
+  const ourNumber = digits(criteria.ourNumber);
+  if (beneficiaryId.length !== 12 || wallet.length !== 3 ||
+      !ourNumber || ourNumber.length > 8) {
+    throw configurationError('Identificadores do boleto Itaú inválidos para consulta detalhada.');
+  }
+  const detailApiBaseUrl = normalizedHttpsUrl(
+    config.detailApiBaseUrl,
+    DETAIL_API_BASE_URL,
+    'URL da consulta detalhada'
+  );
+  const params = new URLSearchParams({
+    id_beneficiario: beneficiaryId,
+    codigo_carteira: wallet,
+    nosso_numero: ourNumber,
+    view: 'specific'
+  });
+  const result = await authenticatedRequest({
+    ...options,
+    method: 'GET',
+    path: `${BOLETO_PATH}?${params}`,
+    headers: {
+      Accept: 'application/json',
+      auth: config.apiKey,
+      ...options.headers
+    },
+    config,
+    apiBaseUrl: detailApiBaseUrl
+  });
   if (result.statusCode < 200 || result.statusCode >= 300) {
-    throw itauHttpError(result, response, 'Não foi possível consultar o boleto no Itaú.');
+    let errorPayload = {};
+    try {
+      errorPayload = JSON.parse(result.body.toString('utf8') || '{}');
+    } catch {
+      // Algumas falhas do gateway não são JSON; mantenha o status HTTP original.
+    }
+    throw itauHttpError(result, errorPayload, 'Não foi possível consultar o detalhe do boleto no Itaú.');
   }
-  const candidates = [
-    response,
-    response?.data,
-    response?.value?.data,
-    response?.value?.value?.data
-  ];
-  const list = candidates.find(Array.isArray);
-  if (list) return list.map((item) => normalizeItauBankSlip({ data: item })).filter(Boolean);
-  const single = normalizeItauBankSlip(response);
-  return single ? [single] : [];
+  const response = jsonFromResponse(result);
+  if (!Array.isArray(response?.data)) {
+    throw Object.assign(new Error('O Itaú retornou a consulta detalhada em formato não reconhecido.'), {
+      statusCode: 502,
+      receivedResponse: true,
+      upstreamStatus: result.statusCode
+    });
+  }
+  return { upstreamStatus: result.statusCode, data: response.data };
 };
 
 const resetTokenCache = () => {
@@ -578,6 +739,8 @@ const resetTokenCache = () => {
 module.exports = {
   TOKEN_URL,
   API_BASE_URL,
+  QUERY_API_BASE_URL,
+  DETAIL_API_BASE_URL,
   BOLETO_PATH,
   REQUEST_TIMEOUT_MS,
   itauConfig,
@@ -591,5 +754,6 @@ module.exports = {
   normalizeItauBankSlip,
   createItauBankSlip,
   queryItauBankSlips,
+  queryItauBankSlipDetail,
   resetTokenCache
 };

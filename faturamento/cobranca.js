@@ -184,9 +184,19 @@
   };
 
   const bankDiagnosticMessage = (result) => {
+    const describeShape = (shape) => shape
+      ? ` [HTTP ${shape.upstreamStatus}; host ${shape.queryHost}; ${shape.contentType}; `
+        + `raiz ${shape.rootType} (${shape.rootFields.join(', ') || 'sem campos'}); `
+        + `data ${shape.dataType} (${shape.dataLength ?? '?'} registro(s), `
+        + `campos: ${shape.firstItemFields.join(', ') || 'nenhum'}); `
+        + `page ${shape.pageType} (${shape.pageFields.join(', ') || 'sem campos'}); `
+        + `pagination ${shape.paginationType} (${shape.paginationFields.join(', ') || 'sem campos'}); `
+        + `página ${shape.returnedPage ?? '?'} de ${shape.totalPages ?? '?'} `
+        + `(solicitada ${shape.requestedPage})]`
+      : '';
     const describeBank = (name, bank) => bank?.ok
       ? `${name}: consulta autorizada (${Number(bank.records || 0)} registro(s), data ${formatDate(bank.queriedDate)})`
-      : `${name}: falha — ${bank?.message || 'resposta não identificada'}`;
+      : `${name}: falha — ${bank?.message || 'resposta não identificada'}${describeShape(bank?.responseShape)}`;
     const configuration = result?.brudamConfiguration || {};
     const configured = configuration.paymentMethod
       && configuration.itauAccount

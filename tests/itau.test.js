@@ -4,6 +4,8 @@ const assert = require('node:assert/strict');
 const {
   TOKEN_URL,
   API_BASE_URL,
+  QUERY_API_BASE_URL,
+  DETAIL_API_BASE_URL,
   itauConfig,
   itauBoletoConfig,
   requestAccessToken,
@@ -12,6 +14,7 @@ const {
   normalizeItauBankSlip,
   createItauBankSlip,
   queryItauBankSlips,
+  queryItauBankSlipDetail,
   resetTokenCache
 } = require('../server/faturamento/itau');
 
@@ -33,6 +36,8 @@ test('configura os endpoints produtivos e os arquivos mTLS do Itaú', () => {
   const config = itauConfig(configEnvironment());
   assert.equal(config.tokenUrl, TOKEN_URL);
   assert.equal(config.apiBaseUrl, API_BASE_URL);
+  assert.equal(config.queryApiBaseUrl, QUERY_API_BASE_URL);
+  assert.equal(config.detailApiBaseUrl, DETAIL_API_BASE_URL);
   assert.equal(config.apiKey, 'cliente-id');
   assert.equal(config.cert.toString(), certificate);
   assert.equal(config.key.toString(), privateKey);
@@ -131,6 +136,41 @@ test('envia token, api key e identificadores de rastreio nas chamadas Itaú', as
   assert.equal(requests[1].headers['x-itau-apikey'], 'cliente-id');
   assert.match(requests[1].headers['x-itau-correlationID'], /^[0-9a-f-]{36}$/);
   assert.match(requests[1].headers['x-itau-flowID'], /^[0-9a-f-]{36}$/);
+});
+
+test('consulta detalhe v2 por GET com os parâmetros e cabeçalhos exigidos', async () => {
+  resetTokenCache();
+  const config = itauBoletoConfig(configEnvironment());
+  const requests = [];
+  const request = async (options) => {
+    requests.push(options);
+    return options.url === TOKEN_URL
+      ? { statusCode: 200, headers: {}, body: Buffer.from(JSON.stringify({
+        access_token: 'token-produtivo', expires_in: 300
+      })) }
+      : { statusCode: 200, headers: {}, body: Buffer.from(JSON.stringify({
+        data: [{ dado_boleto: { pagamentos_cobranca: [] } }]
+      })) };
+  };
+  const result = await queryItauBankSlipDetail({ ourNumber: '00017244' }, { config, request });
+  assert.equal(result.upstreamStatus, 200);
+  assert.equal(result.data.length, 1);
+  assert.equal(requests.length, 2);
+  const url = new URL(requests[1].url);
+  assert.equal(url.origin + url.pathname, `${DETAIL_API_BASE_URL}/boletos`);
+  assert.deepEqual(Object.fromEntries(url.searchParams), {
+    id_beneficiario: '150000052061',
+    codigo_carteira: '109',
+    nosso_numero: '00017244',
+    view: 'specific'
+  });
+  assert.equal(requests[1].method, 'GET');
+  assert.equal(requests[1].body, null);
+  assert.equal(requests[1].headers.Authorization, 'Bearer token-produtivo');
+  assert.equal(requests[1].headers['x-itau-apikey'], config.apiKey);
+  assert.equal(requests[1].headers.auth, config.apiKey);
+  await assert.rejects(queryItauBankSlipDetail({ ourNumber: '123456789' }, { config }),
+    /Identificadores do boleto Itaú inválidos/);
 });
 
 test('normaliza a resposta oficial de emissão, inclusive valores sem separador decimal', () => {
@@ -341,10 +381,19 @@ test('consulta boletos pelos parâmetros documentados pelo Itaú', async () => {
     return {
       statusCode: 200,
       headers: {},
-      body: Buffer.from(JSON.stringify({ value: { data: [{
-        id_boleto: 'boleto-id',
-        dado_boleto: { dados_individuais_boleto: [{ numero_nosso_numero: '00011532' }] }
-      }] } }))
+      body: Buffer.from(JSON.stringify({
+        data: [{
+          idBoleto: 'boleto-id',
+          nossoNumero: '00011532',
+          seuNumero: 'FAT11532',
+          codigoCarteira: '109',
+          dataVencimento: '2026-09-20',
+          valor: '501.87',
+          situacao: 'aberto',
+          pagador: { numeroDocumento: '28759933000186' }
+        }],
+        page: { page: 0, totalPages: 1 }
+      }))
     };
   };
   const list = await queryItauBankSlips({
@@ -354,15 +403,22 @@ test('consulta boletos pelos parâmetros documentados pelo Itaú', async () => {
     view: 'specific'
   }, { config, request });
   const url = new URL(requests[1].url);
-  assert.equal(url.searchParams.get('id_beneficiario'), '150000052061');
-  assert.equal(url.searchParams.get('codigo_carteira'), '109');
-  assert.equal(url.searchParams.get('nosso_numero'), '00011532');
-  assert.equal(url.searchParams.get('data_inclusao'), '2026-09-04');
-  assert.equal(url.searchParams.get('view'), 'specific');
+  assert.equal(url.origin, 'https://boleto.api.itau.com');
+  assert.equal(url.pathname, '/boleto/v1/boletos');
+  assert.equal(requests[1].method, 'GET');
+  assert.equal(requests[1].body, null);
+  assert.equal(url.searchParams.get('idBeneficiario'), '150000052061');
+  assert.equal(url.searchParams.get('codigoCarteira'), '109');
+  assert.equal(url.searchParams.get('nossoNumero'), '00011532');
+  assert.equal(url.searchParams.get('dataEntrada'), '2026-09-04,2026-09-04');
+  assert.equal(url.searchParams.get('view'), 'BASIC');
+  assert.equal(url.searchParams.get('page'), '0');
   assert.equal(list[0].ourNumber, '00011532');
+  assert.equal(list[0].amount, 501.87);
+  assert.equal(list[0].paidAt, '');
 });
 
-test('segue o redirecionamento 303 e aceita a lista direta documentada pelo Itaú', async () => {
+test('segue o redirecionamento 303 da consulta v1 sem mudar de domínio', async () => {
   resetTokenCache();
   const config = itauBoletoConfig(configEnvironment());
   const requests = [];
@@ -378,28 +434,24 @@ test('segue o redirecionamento 303 e aceita a lista direta documentada pelo Ita�
     if (requests.length === 2) {
       return {
         statusCode: 303,
-        headers: { location: '/cash_management/v2/boletos/consulta-processada' },
+        headers: { location: '/boleto/v1/boletos/consulta-processada' },
         body: Buffer.alloc(0)
       };
     }
     return {
       statusCode: 200,
       headers: {},
-      body: Buffer.from(JSON.stringify([{
-        id_boleto: 'boleto-redirecionado',
-        dado_boleto: {
-          pagador: {
-            pessoa: {
-              tipo_pessoa: { numero_cadastro_nacional_pessoa_juridica: '28759933000186' }
-            }
-          },
-          dados_individuais_boleto: [{
-            numero_nosso_numero: '00011532',
-            numero_linha_digitavel: '34191234567890123456789012345678901234567890123',
-            codigo_barras: '34191234567890123456789012345678901234567890'
-          }]
-        }
-      }]))
+      body: Buffer.from(JSON.stringify({
+        data: [{
+          idBoleto: 'boleto-redirecionado',
+          nossoNumero: '00011532',
+          codigoCarteira: '109',
+          dataVencimento: '2026-09-20',
+          valor: '501.87',
+          pagador: { numeroDocumento: '28759933000186' }
+        }],
+        page: { page: 0, totalPages: 1 }
+      }))
     };
   };
 
@@ -411,7 +463,219 @@ test('segue o redirecionamento 303 e aceita a lista direta documentada pelo Ita�
   }, { config, request });
 
   assert.equal(requests.length, 3);
-  assert.equal(requests[2].url, 'https://api.gateway.itau.com.br/cash_management/v2/boletos/consulta-processada');
+  assert.equal(requests[2].url, 'https://boleto.api.itau.com/boleto/v1/boletos/consulta-processada');
   assert.equal(list[0].id, 'boleto-redirecionado');
   assert.equal(list[0].payerTaxId, '28759933000186');
+});
+
+test('permite configurar somente a URL de consulta sem alterar a emissão', async () => {
+  resetTokenCache();
+  const config = itauBoletoConfig({
+    ...configEnvironment(),
+    ITAU_QUERY_API_BASE_URL: 'https://consulta.exemplo.com/boleto/v1/'
+  });
+  const requests = [];
+  const request = async (options) => {
+    requests.push(options);
+    if (options.url === TOKEN_URL) {
+      return {
+        statusCode: 200,
+        headers: {},
+        body: Buffer.from(JSON.stringify({ access_token: 'token-itau', expires_in: 300 }))
+      };
+    }
+    return {
+      statusCode: 200,
+      headers: {},
+      body: Buffer.from(JSON.stringify({ data: [], page: { page: 0, totalPages: 0 } }))
+    };
+  };
+
+  assert.deepEqual(await queryItauBankSlips({}, { config, request }), []);
+  assert.equal(requests[1].url, 'https://consulta.exemplo.com/boleto/v1/boletos?idBeneficiario=150000052061&view=BASIC&pageSize=20&page=0');
+  await authenticatedRequest({ method: 'POST', path: 'boletos', config, request });
+  assert.equal(requests[2].url, 'https://api.gateway.itau.com.br/cash_management/v2/boletos');
+  assert.equal(config.apiBaseUrl, API_BASE_URL);
+});
+
+test('aceita paginação real em pagination somente quando página e total são válidos', async () => {
+  resetTokenCache();
+  const config = itauBoletoConfig(configEnvironment());
+  const request = async (options) => options.url === TOKEN_URL
+    ? {
+      statusCode: 200,
+      headers: {},
+      body: Buffer.from(JSON.stringify({ access_token: 'token-itau', expires_in: 300 }))
+    }
+    : {
+      statusCode: 200,
+      headers: { 'content-type': 'application/json' },
+      body: Buffer.from(JSON.stringify({
+        data: [{
+          idBoleto: 'boleto-pagination',
+          nossoNumero: '00011532',
+          codigoCarteira: '109',
+          dataVencimento: '2026-09-20',
+          valor: '501.87',
+          situacao: 'aberto',
+          pagador: { numeroDocumento: '28759933000186' }
+        }],
+        pagination: { page: 0, totalPages: 1 }
+      }))
+    };
+
+  const list = await queryItauBankSlips({}, { config, request });
+  assert.equal(list.length, 1);
+  assert.equal(list[0].id, 'boleto-pagination');
+});
+
+test('não confunde uma resposta de consulta desconhecida com ausência de boletos', async () => {
+  resetTokenCache();
+  const config = itauBoletoConfig(configEnvironment());
+  const request = async (options) => options.url === TOKEN_URL
+    ? {
+      statusCode: 200,
+      headers: {},
+      body: Buffer.from(JSON.stringify({ access_token: 'token-itau', expires_in: 300 }))
+    }
+    : {
+      statusCode: 200,
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+      body: Buffer.from(JSON.stringify({
+        items: [{ pagador: 'DADO-SENSIVEL' }],
+        pageInfo: { token: 'SEGREDO' }
+      }))
+    };
+
+  await assert.rejects(
+    queryItauBankSlips({}, { config, request }),
+    (error) => {
+      assert.equal(error.statusCode, 502);
+      assert.equal(error.receivedResponse, true);
+      assert.deepEqual(error.responseShape, {
+        upstreamStatus: 200,
+        queryHost: 'boleto.api.itau.com',
+        contentType: 'application/json',
+        rootType: 'object',
+        rootFields: ['items', 'pageInfo'],
+        dataType: 'undefined',
+        dataLength: null,
+        firstItemFields: [],
+        pageType: 'undefined',
+        pageFields: [],
+        paginationType: 'undefined',
+        paginationFields: [],
+        requestedPage: 0,
+        returnedPage: null,
+        totalPages: null
+      });
+      assert.equal(JSON.stringify(error.responseShape).includes('DADO-SENSIVEL'), false);
+      assert.equal(JSON.stringify(error.responseShape).includes('SEGREDO'), false);
+      return true;
+    }
+  );
+});
+
+test('não considera metadados de paginação ausentes como zero boletos', async () => {
+  resetTokenCache();
+  const config = itauBoletoConfig(configEnvironment());
+  const request = async (options) => options.url === TOKEN_URL
+    ? {
+      statusCode: 200,
+      headers: {},
+      body: Buffer.from(JSON.stringify({ access_token: 'token-itau', expires_in: 300 }))
+    }
+    : {
+      statusCode: 200,
+      headers: {},
+      body: Buffer.from(JSON.stringify({
+        data: [],
+        pagination: { page: null, totalPages: null }
+      }))
+    };
+
+  await assert.rejects(
+    queryItauBankSlips({}, { config, request }),
+    (error) => error.statusCode === 502 &&
+      error.responseShape.paginationFields.includes('totalPages') &&
+      error.responseShape.totalPages === null
+  );
+});
+
+test('percorre todas as páginas da listagem v1 e não presume pagamento pelo status', async () => {
+  resetTokenCache();
+  const config = itauBoletoConfig(configEnvironment());
+  const pages = [];
+  const request = async (options) => {
+    if (options.url === TOKEN_URL) {
+      return {
+        statusCode: 200,
+        headers: {},
+        body: Buffer.from(JSON.stringify({ access_token: 'token-itau', expires_in: 300 }))
+      };
+    }
+    const page = Number(new URL(options.url).searchParams.get('page'));
+    pages.push(page);
+    return {
+      statusCode: 200,
+      headers: {},
+      body: Buffer.from(JSON.stringify({
+        data: [{
+          idBoleto: `boleto-${page}`,
+          nossoNumero: `0001153${page}`,
+          codigoCarteira: '109',
+          dataVencimento: '2026-09-20',
+          valor: '501.87',
+          situacao: 'pago',
+          pagador: { numeroDocumento: '28759933000186' }
+        }],
+        page: { page, totalPages: 2 }
+      }))
+    };
+  };
+
+  const list = await queryItauBankSlips({}, { config, request });
+  assert.deepEqual(pages, [0, 1]);
+  assert.deepEqual(list.map((item) => item.id), ['boleto-0', 'boleto-1']);
+  assert.equal(list[0].generalStatus, 'pago');
+  assert.equal(list[0].paidAt, '');
+  assert.equal(list[0].paidAmount, 0);
+});
+
+test('preserva HTTP 403 mesmo quando a consulta retorna erro em texto', async () => {
+  resetTokenCache();
+  const config = itauBoletoConfig(configEnvironment());
+  const request = async (options) => options.url === TOKEN_URL
+    ? {
+      statusCode: 200,
+      headers: {},
+      body: Buffer.from(JSON.stringify({ access_token: 'token-itau', expires_in: 300 }))
+    }
+    : { statusCode: 403, headers: {}, body: Buffer.from('filter failed') };
+
+  await assert.rejects(
+    queryItauBankSlips({}, { config, request }),
+    (error) => error.upstreamStatus === 403 && error.statusCode === 502
+  );
+});
+
+test('recusa paginação inconsistente para não omitir boletos', async () => {
+  resetTokenCache();
+  const config = itauBoletoConfig(configEnvironment());
+  const request = async (options) => options.url === TOKEN_URL
+    ? {
+      statusCode: 200,
+      headers: {},
+      body: Buffer.from(JSON.stringify({ access_token: 'token-itau', expires_in: 300 }))
+    }
+    : {
+      statusCode: 200,
+      headers: {},
+      body: Buffer.from(JSON.stringify({ data: [], page: { page: 1, totalPages: 2 } }))
+    };
+
+  await assert.rejects(
+    queryItauBankSlips({}, { config, request }),
+    (error) => error.statusCode === 502 && error.receivedResponse === true
+  );
 });

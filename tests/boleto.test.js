@@ -22,7 +22,12 @@ const {
   isBankSlipCreationEligible,
   requiresTedDocForCategory
 } = require('../server/faturamento/billing-rules');
-const { getBankSlipRecords, listBankSlipRecords } = require('../server/faturamento/boleto-store');
+const {
+  getBankSlipRecords,
+  listBankSlipRecords,
+  claimReconciliationLock,
+  releaseReconciliationLock
+} = require('../server/faturamento/boleto-store');
 
 const twtInvoice = {
   fatura: 11518,
@@ -91,6 +96,31 @@ test('lista registros bancários antigos e novos por SCAN sem depender de índic
   assert.equal(calls[0][0], 'SCAN');
   assert.equal(calls[1][0], 'MGET');
   assert.deepEqual(records.map((record) => record.invoiceId), ['11518', '11777']);
+});
+
+test('interrompe a conciliação quando a varredura Redis está incompleta', async () => {
+  await assert.rejects(listBankSlipRecords(async (...args) => {
+    if (args[0] === 'SCAN') return ['23', []];
+    throw new Error('Não deve buscar registros de uma lista incompleta.');
+  }, { maxIterations: 1 }), /excedeu o limite de varredura/);
+});
+
+test('lock de conciliação usa token e libera apenas o dono', async () => {
+  const calls = [];
+  const command = async (...args) => {
+    calls.push(args);
+    return args[0] === 'SET' ? 'OK' : 1;
+  };
+  const token = await claimReconciliationLock('11777', command);
+  assert.match(token, /^[a-f0-9-]{36}$/);
+  assert.deepEqual(calls[0].slice(0, 2), [
+    'SET', 'faturamento:boleto:twt:conciliacao-lock:11777'
+  ]);
+  assert.deepEqual(calls[0].slice(3), ['NX', 'EX', '180']);
+  await releaseReconciliationLock('11777', token, command);
+  assert.equal(calls[1][0], 'EVAL');
+  assert.equal(calls[1][3], 'faturamento:boleto:twt:conciliacao-lock:11777');
+  assert.equal(calls[1][4], token);
 });
 
 test('normaliza o pagador conforme dados obrigatórios das APIs bancárias', () => {
@@ -481,6 +511,40 @@ test('reconcilia uma efetivação Itaú em revisão sem repetir o POST', async (
   assert.equal(result.created, false);
   assert.equal(record.bankSlipId, '15000005206110900011518');
   assert.equal(queryCalls, 1);
+  assert.equal(createCalls, 0);
+});
+
+test('não emite boleto duplicado quando a listagem Itaú encontra o título sem código de barras', async () => {
+  let createCalls = 0;
+  const dependencies = {
+    ...billingDependencies('97434690000129'),
+    getBankSlipRecord: async () => null,
+    itauBoletoConfig: () => ({
+      stage: 'efetivacao',
+      beneficiaryId: '150000052061',
+      beneficiaryName: 'DSL DO BRASIL TRANSPORTE E LOGISTICA LTDA',
+      beneficiaryTaxId: '97434690000129',
+      wallet: '109',
+      species: '01',
+      acceptance: 'N'
+    }),
+    queryItauBankSlips: async () => [{
+      id: 'boleto-listado-v1',
+      ourNumber: '00011518',
+      payerTaxId: '28759933000186',
+      amount: 1844,
+      dueDate: '2026-08-14',
+      wallet: '109',
+      digitableLine: '',
+      barCode: ''
+    }],
+    createItauBankSlip: async () => { createCalls += 1; }
+  };
+
+  await assert.rejects(
+    generateInvoiceBankSlip('11518', dependencies),
+    (error) => error.statusCode === 409 && /já lista um boleto compatível/.test(error.message)
+  );
   assert.equal(createCalls, 0);
 });
 

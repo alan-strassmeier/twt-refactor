@@ -554,25 +554,26 @@ const findExistingItauBankSlip = async ({
     }))
   ];
   const errors = [];
-  let successfulSearches = 0;
-  let successfulFinancialSearches = 0;
 
   for (const search of searches) {
     let matches;
     try {
       matches = await query(search.criteria, { config });
-      successfulSearches += 1;
-      if (search.allowFinancialMatch) successfulFinancialSearches += 1;
     } catch (error) {
       errors.push(error);
       continue;
     }
-    const candidates = (matches || [])
-      .map((match) => normalizeRegisteredItauResponse(match, payload, config))
-      .filter((match) => (
-        validRegisteredItauResponse(match) &&
-        itauBankSlipMatchesInvoice(match, billing, payload, search.allowFinancialMatch)
-      ));
+    const matching = (matches || [])
+      .filter((match) => itauBankSlipMatchesInvoice(
+        match, billing, payload, search.allowFinancialMatch
+      ))
+      .map((match) => normalizeRegisteredItauResponse(match, payload, config));
+    if (matching.some((match) => !validRegisteredItauResponse(match))) {
+      throw Object.assign(new Error(
+        'O Itaú já lista um boleto compatível, mas esta consulta não fornece linha digitável e código de barras. Confira o título antes de emitir novamente.'
+      ), { statusCode: 409 });
+    }
+    const candidates = matching;
     if (candidates.length === 1) return candidates[0];
     if (candidates.length > 1) {
       const references = candidates.filter((match) => (
@@ -585,11 +586,7 @@ const findExistingItauBankSlip = async ({
     }
   }
 
-  if (dates.length && !successfulFinancialSearches) {
-    const financialError = errors.find((error) => error);
-    if (financialError) throw financialError;
-  }
-  if (!successfulSearches && errors.length) throw errors[0];
+  if (errors.length) throw errors[0];
   return null;
 };
 

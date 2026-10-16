@@ -59,11 +59,14 @@ ITAU_MTLS_KEY_BASE64=
 ITAU_MTLS_KEY_PASSPHRASE=
 ITAU_TOKEN_URL=https://sts.itau.com.br/api/oauth/token
 ITAU_API_BASE_URL=https://api.gateway.itau.com.br/cash_management/v2
+ITAU_QUERY_API_BASE_URL=https://boleto.api.itau.com/boleto/v1
+ITAU_DETAIL_API_BASE_URL=https://secure.api.cloud.itau.com.br/boletoscash/v2
 ITAU_API_KEY=
 ITAU_BENEFICIARY_ID=
 ITAU_BOLETO_WALLET=
 ITAU_BOLETO_STAGE=validacao
 ITAU_BOLETO_SKIP_PRECHECK=false
+ITAU_RECONCILIATION_INVOICE_IDS=
 ITAU_BOLETO_SPECIES=01
 ITAU_BOLETO_ACCEPTANCE=N
 ITAU_BENEFICIARY_NAME=DSL DO BRASIL TRANSPORTE E LOGISTICA LTDA
@@ -275,24 +278,46 @@ registrados no Redis que ainda não possuem conciliação concluída. As consult
 bancárias rodam em paralelo com as três janelas de cobrança; uma fatura é
 reconfirmada na Brudam imediatamente antes de qualquer baixa.
 
-No Itaú, a consulta usa `GET /boletos` com `view=specific`, beneficiário,
-carteira, Nosso Número e data de inclusão. A liquidação só avança quando
-`pagamentos_cobranca` possui data válida e a soma recebida cobre integralmente
-o valor do boleto. A credencial precisa ter permissão para o recurso de
-consulta de boletos.
+A baixa automática Itaú começa desabilitada: sem
+`ITAU_RECONCILIATION_INVOICE_IDS`, nenhum boleto Itaú novo é liquidado. Para
+testar apenas as faturas separadas, configure `11817,11838`; depois de
+homologar os resultados, `*` libera todas as faturas Itaú registradas. A
+conferência de uma tentativa anterior com status `submission_pending` continua
+ativa mesmo fora da lista, mas nunca repete o POST na Brudam.
+
+No Itaú, a conciliação usa `GET /boletoscash/v2/boletos` com beneficiário,
+carteira e Nosso Número do boleto registrado. Confere ainda CPF/CNPJ do
+pagador, valor original e, quando armazenados, vencimento e Seu Número. Somente
+um título identificado de forma inequívoca, com situação paga/liquidada e
+lançamentos em `pagamentos_cobranca` que cubram integralmente o valor nominal,
+fica elegível. Pagamentos parciais, respostas ambíguas ou dados divergentes
+bloqueiam a baixa. `data_pagamento` recebe a última data de
+`data_inclusao_pagamento` dos lançamentos confirmados pelo Itaú, enquanto o
+valor recebido vem da soma desses lançamentos. A data precisa estar entre a
+emissão do boleto e a conferência. O registro guarda as origens
+`itau_v2_payment_inclusion` e `itau_v2_payments` para auditoria. A listagem v1 permanece
+em uso apenas na conferência preventiva e recuperação de emissão de boletos.
 
 No Bradesco, a rotina usa `POST /boleto/cobranca-lista/v1/listar`, recurso
 **Cobrança - Listar boletos liquidados**. Como a documentação informa dados
 D-1 e permite até 60 dias, cada execução consulta os pagamentos dos 60 dias
-anteriores e cruza o Nosso Número com o registro persistido. Baixas e
+anteriores e cruza Nosso Número, valor original do título e, quando informado,
+CPF/CNPJ do pagador com o registro persistido. Números repetidos em registros
+distintos ou listagens incompletas bloqueiam a baixa automática. Baixas e
 cancelamentos não são interpretados como pagamentos.
 
 Quando o banco confirma o recebimento, o servidor consulta novamente a fatura.
 Se ela já estiver liquidada, apenas encerra a conciliação. Se estiver aberta e
 o valor cobrir o saldo, envia `POST /financeiro/liquidar/lancamento`, usando a
-data bancária em `data_pagamento` e `data_credito_debito`, o saldo como
-`valor_liquidado` e eventual excedente como `valor_juros`. Depois remove a
+data da confirmação Bradesco ou da inclusão do pagamento Itaú em `data_pagamento` e
+`data_credito_debito`, o saldo como `valor_liquidado` e eventual excedente
+bancário como `valor_juros`. No Itaú, saldo diferente do valor nominal
+impede a baixa automática. Depois remove a
 pendência de cobrança e marca os três eventos de e-mail como concluídos.
+Um lock por fatura impede duas execuções simultâneas de enviar a mesma baixa.
+Antes do POST na Brudam, a tentativa fica gravada no Redis. Em caso de timeout
+ou resposta incerta, a rotina não repete o POST: confirma novamente o status
+na Brudam e exige conferência manual enquanto a fatura continuar aberta.
 
 `BRUDAM_BANK_SLIP_PAYMENT_METHOD_ID`, `BRUDAM_ITAU_BANK_ACCOUNT_ID` e
 `BRUDAM_BRADESCO_BANK_ACCOUNT_ID` devem receber os IDs internos retornados ou
@@ -304,8 +329,13 @@ Administradores autenticados podem validar exclusivamente a permissão de
 consulta com `GET /api/faturamento/cobranca?route=bank-diagnostic`. A rota usa
 `GET /boletos` no Itaú e a listagem de títulos liquidados de D-1 no Bradesco,
 retornando somente o sucesso, a quantidade de registros e o estado de
-configuração dos IDs da Brudam. Ela não emite boleto, não liquida fatura, não
-envia e-mail e não grava estado no Redis.
+configuração dos IDs da Brudam. Se a resposta Itaú tiver formato inesperado,
+o diagnóstico inclui apenas status HTTP, host, tipo de conteúdo e nomes dos
+campos estruturais da resposta, nunca os dados dos boletos. Ela não emite
+boleto, não liquida fatura, não envia e-mail e não grava estado no Redis.
+A listagem Itaú aceita os campos de paginação `page` (coleção oficial) ou
+`pagination` (observado em produção), mas rejeita total ou número de página
+ausentes/inválidos para não confundir erro com ausência de boletos.
 
 ## Roteamento dos boletos
 
@@ -414,10 +444,11 @@ O valor do título é transmitido em 17 posições numéricas, com os dois últi
 dígitos representando os centavos, e `desconto_expresso` é enviado
 explicitamente como `false` quando esse produto não é utilizado.
 
-O cliente renova o token de acesso, envia automaticamente certificado, chave
-privada, `x-itau-apikey`, correlation ID e flow ID. A consulta documentada em
-`GET /cash_management/v2/boletos` também está implementada para conferência por
-beneficiário, carteira, nosso número e data de inclusão.
+O cliente renova o token de acesso e envia automaticamente certificado, chave
+privada, `x-itau-apikey`, correlation ID e flow ID. A listagem da API Boletos
+v1 (`GET /boleto/v1/boletos`) serve à conferência preventiva de emissão; a
+API BoletosCash v2 (`GET /boletoscash/v2/boletos`) fornece os pagamentos para
+conciliação. São APIs distintas da rota usada para emitir boletos.
 
 Converta o certificado e a chave privada para Base64 antes de cadastrá-los na
 Vercel. Execute em PowerShell, fora do repositório:
