@@ -350,6 +350,15 @@ informa se a fatura está apta, já liquidada, bloqueada ou apenas aguardando
 liberação em `ITAU_RECONCILIATION_INVOICE_IDS`. A execução efetiva sempre
 refaz as conferências; a prévia não reserva nem autoriza uma baixa.
 
+Para homologar uma fatura individual sem acionar toda a rotina de cobrança,
+após a prévia apta, o botão **Liquidar esta fatura** chama
+`POST /api/faturamento/cobranca?route=itau-reconciliation-run` com
+`{"invoiceId":"11838"}`. Exige sessão administrativa, mesma origem e inclusão
+explícita do número em `ITAU_RECONCILIATION_INVOICE_IDS`; o valor `*` não
+autoriza esta ação direcionada. A consulta ao Itaú e à Brudam é refeita,
+aproveitando o mesmo lock e o mesmo registro `submission_pending` da rotina
+automática. Esta ação não percorre nem envia cobranças de outras faturas.
+
 ## Roteamento dos boletos
 
 O banco é definido no servidor pelo emitente confirmado nos dados da

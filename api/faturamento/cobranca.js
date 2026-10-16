@@ -26,7 +26,10 @@ const {
   diagnoseItauDetailQuery,
   saoPauloDate
 } = require('../../server/faturamento/bank-query-diagnostic');
-const { previewItauReconciliation } = require('../../server/faturamento/bank-payment-reconciliation');
+const {
+  previewItauReconciliation,
+  reconcileItauInvoice
+} = require('../../server/faturamento/bank-payment-reconciliation');
 const {
   getInactiveSnapshot,
   getInactiveRefresh,
@@ -559,6 +562,26 @@ const handleItauReconciliationPreview = async (req, res, query) => {
   }));
 };
 
+const handleItauReconciliationRun = async (req, res) => {
+  if (!requireSession(req, res)) return;
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', 'POST');
+    sendJson(res, 405, { message: 'Método não permitido.' });
+    return;
+  }
+  if (!requireSameOrigin(req, res)) return;
+  const body = await parseJsonBody(req, 512);
+  const invoiceId = String(body.invoiceId || '').trim();
+  if (!/^\d{1,20}$/.test(invoiceId) || Number(invoiceId) <= 0) {
+    sendJson(res, 422, { message: 'Número da fatura inválido.' });
+    return;
+  }
+  sendJson(res, 200, await reconcileItauInvoice({
+    invoiceId: invoiceId.replace(/^0+(?=\d)/, ''),
+    currentDate: saoPauloDate()
+  }));
+};
+
 const handleProcess = async (req, res, query) => {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
@@ -716,6 +739,9 @@ module.exports = async (req, res) => {
     if (query.route === 'itau-v2-diagnostic') return await handleItauDetailDiagnostic(req, res, query);
     if (query.route === 'itau-reconciliation-preview') {
       return await handleItauReconciliationPreview(req, res, query);
+    }
+    if (query.route === 'itau-reconciliation-run') {
+      return await handleItauReconciliationRun(req, res);
     }
     if (query.route === 'inactive-clients') return await handleInactiveClients(req, res);
     if (query.route === 'logs') return await handleLogs(req, res, query);

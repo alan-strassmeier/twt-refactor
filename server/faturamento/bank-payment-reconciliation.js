@@ -510,6 +510,46 @@ const previewItauReconciliation = async ({ invoiceId, currentDate } = {}, depend
   };
 };
 
+const reconcileItauInvoice = async ({ invoiceId, currentDate } = {}, dependencies = {}) => {
+  const id = String(invoiceId || '').trim();
+  if (!/^\d{1,20}$/.test(id) || !validIsoDate(currentDate)) {
+    throw new Error('Fatura ou data inválida para a baixa Itaú.');
+  }
+  const allowlist = itauReconciliationAllowlist(dependencies.env || process.env);
+  if (!allowlist || !allowlist.has(id)) {
+    throw Object.assign(new Error('Esta fatura não está liberada para baixa Itaú direcionada.'), {
+      statusCode: 403,
+      expose: true
+    });
+  }
+  const getRecord = dependencies.getBankSlipRecord || bankSlipStore.getBankSlipRecord;
+  const record = await getRecord(id);
+  if (!record || record.bank !== 'itau' || record.state !== 'ready' ||
+      String(record.invoiceId || id) !== id) {
+    throw Object.assign(new Error('Não há boleto Itaú pronto registrado para esta fatura.'), {
+      statusCode: 409,
+      expose: true
+    });
+  }
+  if (record.reconciliation?.status === 'completed') {
+    return { invoiceId: id, status: 'already_settled' };
+  }
+  const settlement = record.reconciliation?.status === 'submission_pending'
+    ? record.reconciliation
+    : await itauSettlementForRecord(record, { ...dependencies, currentDate });
+  if (!settlement) return { invoiceId: id, status: 'not_paid' };
+  try {
+    const result = await reconcilePaidRecord(record, settlement, dependencies);
+    return { invoiceId: id, status: result.status };
+  } catch (error) {
+    const latest = await Promise.resolve().then(() => getRecord(id)).catch(() => null);
+    if (latest?.reconciliation?.status === 'submission_pending') {
+      return { invoiceId: id, status: 'manual_review' };
+    }
+    throw error;
+  }
+};
+
 const reconcileBankPayments = async ({ currentDate, maxRecords = 8 } = {}, dependencies = {}) => {
   if (!validIsoDate(currentDate)) throw new Error('Data da conciliação bancária inválida.');
   const itauAllowlist = itauReconciliationAllowlist(dependencies.env || process.env);
@@ -605,6 +645,7 @@ module.exports = {
   groupedBradescoSettlements,
   itauReconciliationAllowlist,
   previewItauReconciliation,
+  reconcileItauInvoice,
   reconcilePaidRecord,
   reconcileBankPayments
 };

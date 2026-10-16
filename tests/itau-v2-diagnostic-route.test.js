@@ -36,3 +36,19 @@ test('prévia de baixa Itaú exige sessão antes de consultar banco ou Brudam', 
   assert.equal(JSON.parse(response.body).message,
     'Faça login para acessar a cobrança de faturas.');
 });
+
+test('baixa direcionada Itaú exige sessão antes de qualquer operação', async () => {
+  const response = {
+    setHeader() {},
+    end(body) { this.body = body; }
+  };
+  await handler({
+    method: 'POST',
+    url: '/api/faturamento/cobranca?route=itau-reconciliation-run',
+    headers: { host: 'example.test' }
+  }, response);
+
+  assert.equal(response.statusCode, 401);
+  assert.equal(JSON.parse(response.body).message,
+    'Faça login para acessar a cobrança de faturas.');
+});

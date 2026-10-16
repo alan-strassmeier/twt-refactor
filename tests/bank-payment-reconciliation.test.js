@@ -6,6 +6,7 @@ const {
   itauSettlementForRecord,
   itauReconciliationAllowlist,
   previewItauReconciliation,
+  reconcileItauInvoice,
   reconcilePaidRecord,
   reconcileBankPayments
 } = require('../server/faturamento/bank-payment-reconciliation');
@@ -432,6 +433,59 @@ test('prévia Itaú bloqueia saldo divergente e tentativa de baixa incerta', asy
   }, dependencies);
   assert.equal(uncertain.status, 'manual_review');
   assert.equal(bankQueries, 1);
+});
+
+test('baixa direcionada Itaú exige lista explícita e não consulta outras faturas', async () => {
+  let record = {
+    state: 'ready', invoiceId: '11838', bank: 'itau', amount: 128.81,
+    beneficiaryId: '060200166662', wallet: '109', ourNumber: '00011838',
+    payer: { tax_id: '35640442000187' }, issuedAt: '2026-09-28',
+    dueAt: '2026-10-13', yourNumber: 'FAT11838'
+  };
+  const calls = [];
+  const dependencies = {
+    env: { ITAU_RECONCILIATION_INVOICE_IDS: '11838' },
+    getBankSlipRecord: async (id) => {
+      calls.push(`get:${id}`);
+      return record;
+    },
+    saveBankSlipRecord: async (id, updated) => { record = updated; calls.push(`save:${id}`); },
+    claimReconciliationLock: async () => 'token',
+    releaseReconciliationLock: async () => {},
+    itauConfig: { beneficiaryId: '060200166662', wallet: '109' },
+    queryItauBankSlipDetail: async () => itauDetail({
+      beneficiaryId: '060200166662', wallet: '109', ourNumber: '11838',
+      payerTaxId: '35640442000187', amount: '128.81', paymentAmounts: ['128.81'],
+      paymentDate: '2026-10-13T11:44:37', dueAt: '2026-10-13', yourNumber: 'FAT11838'
+    }),
+    fetchInvoices: async ({ id }) => {
+      calls.push(`brudam:${id}`);
+      return { invoices: [{ id, internalId: 42, status: 0, balance: 128.81 }] };
+    },
+    liquidationSettings: () => ({ paymentMethodId: 7, bankAccountId: 321 }),
+    liquidate: async (path, body) => {
+      calls.push({ path, body });
+      return { response: { ok: true }, payload: { status: 1, data: { status: 1, ids: [42] } } };
+    },
+    removePending: async () => {},
+    markBillingEventCompleted: async () => {}
+  };
+  await assert.rejects(reconcileItauInvoice({
+    invoiceId: '11817', currentDate: '2026-10-16'
+  }, dependencies), /não está liberada/);
+  assert.deepEqual(calls, []);
+  dependencies.env.ITAU_RECONCILIATION_INVOICE_IDS = '*';
+  await assert.rejects(reconcileItauInvoice({
+    invoiceId: '11838', currentDate: '2026-10-16'
+  }, dependencies), /não está liberada/);
+  assert.deepEqual(calls, []);
+  dependencies.env.ITAU_RECONCILIATION_INVOICE_IDS = '11838';
+  const first = await reconcileItauInvoice({ invoiceId: '11838', currentDate: '2026-10-16' }, dependencies);
+  const second = await reconcileItauInvoice({ invoiceId: '11838', currentDate: '2026-10-16' }, dependencies);
+  assert.deepEqual(first, { invoiceId: '11838', status: 'liquidated' });
+  assert.deepEqual(second, { invoiceId: '11838', status: 'already_settled' });
+  assert.equal(calls.filter((call) => typeof call === 'object').length, 1);
+  assert.deepEqual(calls.filter((call) => String(call).startsWith('brudam:')), ['brudam:11838']);
 });
 
 test('Itaú não baixa pagamento parcial, ausente ou malformado mesmo com status Paga', async () => {
