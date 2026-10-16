@@ -37,7 +37,7 @@ const dependencies = (overrides = {}) => ({
       beneficiario: { id_beneficiario: '060200166662' },
       dado_boleto: {
         codigo_carteira: '109',
-        dados_individuais_boleto: [{ numero_nosso_numero: '00011817' }]
+        dados_individuais_boleto: [{ numero_nosso_numero: '11817' }]
       }
     }], page: { totalElements: 1 } }
   }),
@@ -123,7 +123,7 @@ test('diagnóstico bruto devolve o JSON integral do boleto correspondente', asyn
         beneficiario: { id_beneficiario: '060200166662' },
         dado_boleto: {
           codigo_carteira: '109',
-          dados_individuais_boleto: [{ numero_nosso_numero: '00011817' }]
+          dados_individuais_boleto: [{ numero_nosso_numero: '11817' }]
         }
       }],
       page: { totalElements: 1 }

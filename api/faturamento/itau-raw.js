@@ -9,6 +9,7 @@ const {
 const TEST_INVOICE_IDS = new Set(['11817', '11838']);
 const DIAGNOSTIC_EXPIRES_AT = Date.parse('2026-10-18T00:00:00Z');
 const digits = (value) => String(value || '').replace(/\D/g, '');
+const normalizedOurNumber = (value) => digits(value).replace(/^0+/, '') || '0';
 
 const createHandler = (dependencies = {}) => async (req, res) => {
   const env = dependencies.env || process.env;
@@ -64,7 +65,7 @@ const createHandler = (dependencies = {}) => async (req, res) => {
       digits(config.beneficiaryId) &&
       digits(item?.dado_boleto?.codigo_carteira) === digits(config.wallet) &&
       item?.dado_boleto?.dados_individuais_boleto?.some((detail) =>
-        digits(detail?.numero_nosso_numero) === digits(ourNumber));
+        normalizedOurNumber(detail?.numero_nosso_numero) === normalizedOurNumber(ourNumber));
     if (!bankData || !Array.isArray(bankData.data) || bankData.data.length !== 1 ||
         !bankData.data.every(matches)) {
       sendJson(res, 502, {
@@ -81,7 +82,8 @@ const createHandler = (dependencies = {}) => async (req, res) => {
           beneficiaryMatches: digits(first?.beneficiario?.id_beneficiario) ===
             digits(config.beneficiaryId),
           walletMatches: digits(first?.dado_boleto?.codigo_carteira) === digits(config.wallet),
-          ourNumberMatches: digits(firstDetail?.numero_nosso_numero) === digits(ourNumber),
+          ourNumberMatches: normalizedOurNumber(firstDetail?.numero_nosso_numero) ===
+            normalizedOurNumber(ourNumber),
           ourNumberLengths: {
             returned: digits(firstDetail?.numero_nosso_numero).length,
             registered: digits(ourNumber).length
