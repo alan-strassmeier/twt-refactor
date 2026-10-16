@@ -529,6 +529,92 @@ test('aceita paginação real em pagination somente quando página e total são 
   assert.equal(list[0].id, 'boleto-pagination');
 });
 
+test('aceita totalPages zero como índice da última página quando a contagem real fecha', async () => {
+  resetTokenCache();
+  const config = itauBoletoConfig(configEnvironment());
+  const request = async (options) => options.url === TOKEN_URL
+    ? {
+      statusCode: 200,
+      headers: {},
+      body: Buffer.from(JSON.stringify({ access_token: 'token-itau', expires_in: 300 }))
+    }
+    : {
+      statusCode: 200,
+      headers: { 'content-type': 'application/json' },
+      body: Buffer.from(JSON.stringify({
+        data: ['boleto-1', 'boleto-2'].map((id) => ({
+          idBoleto: id,
+          nossoNumero: id === 'boleto-1' ? '00011817' : '00011838',
+          codigoCarteira: '109',
+          dataVencimento: '2026-10-20',
+          valor: '128.81',
+          pagador: { numeroDocumento: '28759933000186' }
+        })),
+        pagination: { page: 0, totalPages: 0, totalElements: 2, pageSize: 20 }
+      }))
+    };
+
+  const list = await queryItauBankSlips({}, { config, request });
+  assert.deepEqual(list.map((item) => item.id), ['boleto-1', 'boleto-2']);
+});
+
+test('percorre paginação Itaú de índice zero até a última página', async () => {
+  resetTokenCache();
+  const config = itauBoletoConfig(configEnvironment());
+  const requestedPages = [];
+  const request = async (options) => {
+    if (options.url === TOKEN_URL) {
+      return {
+        statusCode: 200, headers: {},
+        body: Buffer.from(JSON.stringify({ access_token: 'token-itau', expires_in: 300 }))
+      };
+    }
+    const page = Number(new URL(options.url).searchParams.get('page'));
+    requestedPages.push(page);
+    const numbers = page === 0 ? Array.from({ length: 20 }, (_, index) => index + 1) : [21];
+    return {
+      statusCode: 200, headers: {},
+      body: Buffer.from(JSON.stringify({
+        data: numbers.map((number) => ({
+          idBoleto: `boleto-${number}`,
+          nossoNumero: String(number).padStart(8, '0'),
+          codigoCarteira: '109',
+          dataVencimento: '2026-10-20',
+          valor: '128.81',
+          pagador: { numeroDocumento: '28759933000186' }
+        })),
+        pagination: { page, totalPages: 1, totalElements: 21, pageSize: 20 }
+      }))
+    };
+  };
+
+  const list = await queryItauBankSlips({}, { config, request });
+  assert.deepEqual(requestedPages, [0, 1]);
+  assert.equal(list.length, 21);
+});
+
+test('rejeita totalPages zero se o Itaú indicar registros além da página retornada', async () => {
+  resetTokenCache();
+  const config = itauBoletoConfig(configEnvironment());
+  const request = async (options) => options.url === TOKEN_URL
+    ? {
+      statusCode: 200, headers: {},
+      body: Buffer.from(JSON.stringify({ access_token: 'token-itau', expires_in: 300 }))
+    }
+    : {
+      statusCode: 200, headers: {},
+      body: Buffer.from(JSON.stringify({
+        data: [{ idBoleto: 'boleto-1' }],
+        pagination: { page: 0, totalPages: 0, totalElements: 2, pageSize: 20 }
+      }))
+    };
+
+  await assert.rejects(
+    queryItauBankSlips({}, { config, request }),
+    (error) => error.statusCode === 502 && error.responseShape.totalPages === 0
+  );
+});
+
 test('não confunde uma resposta de consulta desconhecida com ausência de boletos', async () => {
   resetTokenCache();
   const config = itauBoletoConfig(configEnvironment());
@@ -567,7 +653,9 @@ test('não confunde uma resposta de consulta desconhecida com ausência de bolet
         paginationFields: [],
         requestedPage: 0,
         returnedPage: null,
-        totalPages: null
+        totalPages: null,
+        totalElements: null,
+        pageSize: null
       });
       assert.equal(JSON.stringify(error.responseShape).includes('DADO-SENSIVEL'), false);
       assert.equal(JSON.stringify(error.responseShape).includes('SEGREDO'), false);

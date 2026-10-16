@@ -546,6 +546,28 @@ const nonNegativeInteger = (value) => {
   return Number.isSafeInteger(number) && number >= 0 ? number : null;
 };
 
+const itauPageCount = (pageInfo, items, requestedPage) => {
+  const returnedPage = nonNegativeInteger(pageInfo?.page);
+  const totalPages = nonNegativeInteger(pageInfo?.totalPages);
+  if (returnedPage !== requestedPage || totalPages === null) return null;
+
+  const totalElements = nonNegativeInteger(pageInfo?.totalElements);
+  const pageSize = nonNegativeInteger(pageInfo?.pageSize);
+  if (totalElements !== null && pageSize !== null && pageSize > 0) {
+    const expectedPages = Math.ceil(totalElements / pageSize);
+    if (totalPages !== expectedPages &&
+        totalPages !== Math.max(0, expectedPages - 1)) return null;
+    const seen = requestedPage * pageSize + items.length;
+    if (items.length > pageSize || seen > totalElements ||
+        (requestedPage + 1 < expectedPages && items.length !== pageSize) ||
+        (requestedPage + 1 >= expectedPages && seen !== totalElements)) return null;
+    return expectedPages;
+  }
+
+  if (totalPages === 0 && items.length) return null;
+  return totalPages;
+};
+
 const itauResponseShape = (result, response, queryApiBaseUrl, requestedPage) => {
   const kind = (value) => Array.isArray(value) ? 'array' : value === null ? 'null' : typeof value;
   const fieldNames = (value) => value && typeof value === 'object' && !Array.isArray(value)
@@ -571,7 +593,9 @@ const itauResponseShape = (result, response, queryApiBaseUrl, requestedPage) => 
     paginationFields: fieldNames(response?.pagination),
     requestedPage,
     returnedPage: nonNegativeInteger(pageInfo?.page),
-    totalPages: nonNegativeInteger(pageInfo?.totalPages)
+    totalPages: nonNegativeInteger(pageInfo?.totalPages),
+    totalElements: nonNegativeInteger(pageInfo?.totalElements),
+    pageSize: nonNegativeInteger(pageInfo?.pageSize)
   };
 };
 
@@ -651,11 +675,10 @@ const queryItauBankSlips = async (criteria = {}, options = {}) => {
     }
     const response = jsonFromResponse(result);
     const pageInfo = response?.page === undefined ? response?.pagination : response?.page;
-    const totalPages = nonNegativeInteger(pageInfo?.totalPages);
-    const responsePage = nonNegativeInteger(pageInfo?.page);
-    if (!Array.isArray(response?.data) || totalPages === null ||
-        responsePage !== page ||
-        (totalPages === 0 && response.data.length)) {
+    const totalPages = Array.isArray(response?.data)
+      ? itauPageCount(pageInfo, response.data, page)
+      : null;
+    if (totalPages === null) {
       throw Object.assign(new Error('O Itaú retornou a consulta em formato não reconhecido.'), {
         statusCode: 502,
         receivedResponse: true,
