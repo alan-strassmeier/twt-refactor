@@ -334,8 +334,11 @@ o diagnóstico inclui apenas status HTTP, host, tipo de conteúdo e nomes dos
 campos estruturais da resposta, nunca os dados dos boletos. Ela não emite
 boleto, não liquida fatura, não envia e-mail e não grava estado no Redis.
 A listagem Itaú aceita os campos de paginação `page` (coleção oficial) ou
-`pagination` (observado em produção), mas rejeita total ou número de página
-ausentes/inválidos para não confundir erro com ausência de boletos.
+`pagination` (observado em produção). Quando `totalElements` e `pageSize`
+estão presentes, aceita `totalPages` tanto como quantidade de páginas quanto
+como índice da última página (zero para uma página), desde que a contagem de
+registros feche. Rejeita metadados ausentes ou inconsistentes para não
+confundir erro com ausência de boletos.
 
 ## Roteamento dos boletos
 
