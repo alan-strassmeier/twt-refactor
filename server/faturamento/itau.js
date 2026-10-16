@@ -727,7 +727,11 @@ const queryItauBankSlipDetail = async (criteria = {}, options = {}) => {
       upstreamStatus: result.statusCode
     });
   }
-  return { upstreamStatus: result.statusCode, data: response.data };
+  return {
+    upstreamStatus: result.statusCode,
+    data: response.data,
+    ...(options.includeRaw ? { raw: response } : {})
+  };
 };
 
 const resetTokenCache = () => {
