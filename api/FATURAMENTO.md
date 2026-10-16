@@ -340,6 +340,25 @@ como índice da última página (zero para uma página), desde que a contagem de
 registros feche. Rejeita metadados ausentes ou inconsistentes para não
 confundir erro com ausência de boletos.
 
+Antes de habilitar a baixa automática Itaú, a seção de cobrança oferece
+**Prévia de baixa Itaú** por número de fatura. A rota autenticada
+`GET /api/faturamento/cobranca?route=itau-reconciliation-preview&id=11838`
+consulta o boleto na API v2 e a fatura atual na Brudam. Ela usa as mesmas
+validações de identidade, pagamento, saldo e IDs internos da baixa, mas não
+grava no Redis nem chama `POST /financeiro/liquidar/lancamento`. O resultado
+informa se a fatura está apta, já liquidada, bloqueada ou apenas aguardando
+liberação em `ITAU_RECONCILIATION_INVOICE_IDS`. A execução efetiva sempre
+refaz as conferências; a prévia não reserva nem autoriza uma baixa.
+
+Para homologar uma fatura individual sem acionar toda a rotina de cobrança,
+após a prévia apta, o botão **Liquidar esta fatura** chama
+`POST /api/faturamento/cobranca?route=itau-reconciliation-run` com
+`{"invoiceId":"11838"}`. Exige sessão administrativa, mesma origem e inclusão
+explícita do número em `ITAU_RECONCILIATION_INVOICE_IDS`; o valor `*` não
+autoriza esta ação direcionada. A consulta ao Itaú e à Brudam é refeita,
+aproveitando o mesmo lock e o mesmo registro `submission_pending` da rotina
+automática. Esta ação não percorre nem envia cobranças de outras faturas.
+
 ## Roteamento dos boletos
 
 O banco é definido no servidor pelo emitente confirmado nos dados da

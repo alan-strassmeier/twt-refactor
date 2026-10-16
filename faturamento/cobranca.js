@@ -11,6 +11,10 @@
     message: document.getElementById('collectionMessage'),
     runButton: document.getElementById('runCollectionButton'),
     bankDiagnosticButton: document.getElementById('bankDiagnosticButton'),
+    itauReconciliationPreviewForm: document.getElementById('itauReconciliationPreviewForm'),
+    itauReconciliationInvoiceId: document.getElementById('itauReconciliationInvoiceId'),
+    itauReconciliationPreviewResult: document.getElementById('itauReconciliationPreviewResult'),
+    itauReconciliationRunButton: document.getElementById('itauReconciliationRunButton'),
     companyCount: document.getElementById('collectionCompanyCount'),
     contactCount: document.getElementById('collectionContactCount'),
     pendingCount: document.getElementById('collectionPendingCount'),
@@ -1201,6 +1205,80 @@
         setMessage(bankDiagnosticMessage(result), result.ok ? 'success' : 'warning');
       } catch (error) {
         setMessage(error.message, 'error');
+      } finally {
+        setLoading(false);
+      }
+    });
+  }
+
+  if (elements.itauReconciliationPreviewForm) {
+    const runButton = elements.itauReconciliationRunButton;
+    elements.itauReconciliationInvoiceId.addEventListener('input', () => {
+      runButton.hidden = true;
+      delete runButton.dataset.invoiceId;
+    });
+    elements.itauReconciliationPreviewForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const invoiceId = elements.itauReconciliationInvoiceId.value.trim();
+      if (!/^\d{1,20}$/.test(invoiceId)) return;
+      const output = elements.itauReconciliationPreviewResult;
+      runButton.hidden = true;
+      delete runButton.dataset.invoiceId;
+      setLoading(true);
+      output.textContent = `Conferindo o boleto Itaú e a fatura ${invoiceId}, sem liquidar…`;
+      output.dataset.kind = '';
+      try {
+        const result = await requestJson(endpoint('itau-reconciliation-preview', { id: invoiceId }));
+        const payment = result.paidAt
+          ? ` Pagamento de ${formatMoney(result.paidAmount)} em ${formatDate(result.paidAt)}.`
+          : '';
+        const balance = Number.isFinite(Number(result.invoiceBalance))
+          ? ` Saldo confirmado na Brudam: ${formatMoney(result.invoiceBalance)}.`
+          : '';
+        output.textContent = `Fatura ${result.invoiceId}: ${result.message}${payment}${balance}`;
+        output.dataset.kind = result.status === 'eligible' || result.status === 'already_settled'
+          ? 'success' : 'warning';
+        if (result.status === 'eligible') {
+          runButton.dataset.invoiceId = result.invoiceId;
+          runButton.hidden = false;
+        }
+      } catch (error) {
+        output.textContent = error.message;
+        output.dataset.kind = 'error';
+      } finally {
+        setLoading(false);
+      }
+    });
+
+    runButton.addEventListener('click', async () => {
+      const invoiceId = runButton.dataset.invoiceId;
+      if (!invoiceId || invoiceId !== elements.itauReconciliationInvoiceId.value.trim()) return;
+      if (!window.confirm(
+        `Confirma a baixa da fatura ${invoiceId} na Brudam? O servidor verificará novamente o pagamento e o saldo antes de gravar.`
+      )) return;
+      const output = elements.itauReconciliationPreviewResult;
+      runButton.hidden = true;
+      setLoading(true);
+      output.textContent = `Reconfirmando e liquidando a fatura ${invoiceId}…`;
+      output.dataset.kind = '';
+      try {
+        const result = await requestJson(endpoint('itau-reconciliation-run'), {
+          method: 'POST',
+          body: JSON.stringify({ invoiceId })
+        });
+        const messages = {
+          liquidated: 'Baixa confirmada na Brudam.',
+          already_settled: 'A fatura já estava liquidada na Brudam; nenhuma nova baixa foi enviada.',
+          not_paid: 'O Itaú não confirmou pagamento integral; nenhuma baixa foi enviada.',
+          in_progress: 'Outra execução está conferindo esta fatura.',
+          manual_review: 'O resultado da tentativa exige conferência manual na Brudam. A baixa não será repetida automaticamente.'
+        };
+        output.textContent = `Fatura ${invoiceId}: ${messages[result.status] || 'Resultado não reconhecido; confira na Brudam.'}`;
+        output.dataset.kind = result.status === 'liquidated' || result.status === 'already_settled'
+          ? 'success' : 'warning';
+      } catch (error) {
+        output.textContent = `Fatura ${invoiceId}: ${error.message}`;
+        output.dataset.kind = 'error';
       } finally {
         setLoading(false);
       }

@@ -1481,6 +1481,49 @@ body.modal-open {
   background: #fff4f5;
 }
 
+.itau-reconciliation-check {
+  padding: 12px 14px;
+  border: 1px solid #d8e4ed;
+  border-radius: 11px;
+  background: #fff;
+}
+
+.itau-reconciliation-check summary {
+  color: var(--navy-800);
+  font-size: .85rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.itau-reconciliation-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.itau-reconciliation-form label {
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font-size: .75rem;
+  font-weight: 800;
+}
+
+.itau-reconciliation-form input {
+  width: 154px;
+  min-height: 39px;
+  padding: 8px 10px;
+  border: 1px solid #cbd9e4;
+  border-radius: 9px;
+  font: inherit;
+}
+
+.itau-reconciliation-check .collection-message:not(:empty) {
+  margin: 12px 0 0;
+}
+
 .collection-summary {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
