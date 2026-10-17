@@ -35,6 +35,10 @@ const {
   markBillingEventCompleted,
   getBillingQueueCursor,
   saveBillingQueueCursor,
+  getRecentIssuedCursor,
+  saveRecentIssuedCursor,
+  getOpenInvoiceCursor,
+  saveOpenInvoiceCursor,
   claimProcessingRun,
   releaseProcessingRun
 } = require('../server/faturamento/cobranca-store');
@@ -582,6 +586,25 @@ test('varre páginas, ignora saldo zerado e calcula o lembrete sem depender do f
   assert.equal(addDays('2026-09-10', 2), '2026-09-12');
 });
 
+test('varredura com cursor revisita a primeira página e deduplica faturas', async () => {
+  const calls = [];
+  const result = await scanInvoices({ status: '0' }, {
+    startSkip: 100,
+    maxPages: 2,
+    refreshFirstPage: true,
+    fetch: async ({ skip }) => {
+      calls.push(skip);
+      return {
+        invoices: [{ id: skip === 0 ? 'novo' : skip === 100 ? 'novo' : 'antigo', status: 0, balance: 100 }],
+        pagination: { hasMore: skip !== 200 }
+      };
+    }
+  });
+  assert.deepEqual(calls, [0, 100, 200]);
+  assert.deepEqual(result.invoices.map((invoice) => invoice.id), ['novo', 'antigo']);
+  assert.equal(result.nextSkip, 0);
+});
+
 test('repete uma consulta quando a conexão externa expira', async () => {
   const waits = [];
   let attempts = 0;
@@ -672,7 +695,7 @@ test('mantém somente o evento mais urgente para cada fatura', () => {
       { invoiceId: '10630', issuedAt: '2025-05-07', dueAt: '2025-07-07' },
       { invoiceId: '11780', issuedAt: '2026-09-10', dueAt: '2026-09-13' }
     ],
-    today: [
+    recent: [
       { id: '11781', issuedAt: '2026-09-11', dueAt: '2026-10-01' },
       { id: '11782', issuedAt: '2026-09-11', dueAt: '2026-09-13' }
     ],
@@ -716,6 +739,24 @@ test('persiste a posição da fila de cobrança no Redis', async () => {
   assert.equal(await getBillingQueueCursor(command), 0);
   await saveBillingQueueCursor(13, command);
   assert.equal(await getBillingQueueCursor(command), 13);
+});
+
+test('mantém cursores independentes para emissões recentes e faturas abertas', async () => {
+  const values = new Map();
+  const command = async (operation, key, value) => {
+    if (operation === 'SET') {
+      values.set(key, value);
+      return 'OK';
+    }
+    if (operation === 'GET') return values.get(key) || null;
+    throw new Error(`Comando inesperado: ${operation}`);
+  };
+  assert.deepEqual(await getRecentIssuedCursor(command), { from: '', skip: 0 });
+  assert.equal(await getOpenInvoiceCursor(command), 0);
+  await saveRecentIssuedCursor({ from: '2026-10-14', skip: 200 }, command);
+  await saveOpenInvoiceCursor(500, command);
+  assert.deepEqual(await getRecentIssuedCursor(command), { from: '2026-10-14', skip: 200 });
+  assert.equal(await getOpenInvoiceCursor(command), 500);
 });
 
 test('registra em um único comando todas as faturas descobertas', async () => {
@@ -777,10 +818,11 @@ test('marca e consulta eventos concluídos sem misturar etapas da mesma fatura',
 test('persiste toda a descoberta antes de limitar o lote de processamento', async () => {
   const queued = [];
   const pendingUpdates = [];
+  const scanOrder = [];
   const now = new Date();
   const today = logDate(now);
   const invoices = [
-    { id: '11839', status: 0, balance: 470.29, issuedAt: today, dueAt: addDays(today, 60), clientDocument: '35820448008110' },
+    { id: '11839', status: 0, balance: 470.29, issuedAt: addDays(today, -1), dueAt: addDays(today, 60), clientDocument: '35820448008110' },
     { id: '11840', status: 0, balance: 1385.65, issuedAt: today, dueAt: addDays(today, 15), clientDocument: '41870054000276' }
   ];
   const result = await runBillingCollection({
@@ -791,18 +833,23 @@ test('persiste toda a descoberta antes de limitar o lote de processamento', asyn
     config: { maxInvoices: 1, maxPages: 1, deadlineMs: 55000 },
     listPending: async () => [],
     getBillingQueueCursor: async () => 0,
-    getOverdueCursor: async () => 0,
+    getRecentIssuedCursor: async () => ({ from: '', skip: 0 }),
+    getOpenInvoiceCursor: async () => 0,
     getReconciliationCursor: async () => 0,
-    saveOverdueCursor: async () => {},
+    saveRecentIssuedCursor: async () => {},
+    saveOpenInvoiceCursor: async () => {},
     saveReconciliationCursor: async () => {},
     saveBillingQueueCursor: async () => {},
     reconcileBankPayments: async () => ({ checked: 0, settled: 0, alreadySettled: 0, pending: 0, errors: [] }),
-    fetchInvoices: async (filters) => ({
-      invoices: filters['emissao[eq]'] || Object.keys(filters).every((key) => ['status', 'limit', 'skip'].includes(key))
-        ? invoices
-        : [],
-      pagination: { hasMore: false }
-    }),
+    fetchInvoices: async (filters) => {
+      scanOrder.push(filters['emissao[gte]'] ? 'recentes' : 'abertas');
+      return {
+        invoices: filters['emissao[gte]'] || Object.keys(filters).every((key) => ['status', 'limit', 'skip'].includes(key))
+          ? invoices
+          : [],
+        pagination: { hasMore: false }
+      };
+    },
     fetchPendingInvoice: async ({ id }) => ({
       invoices: invoices.filter((invoice) => String(invoice.id) === String(id))
     }),
@@ -820,11 +867,60 @@ test('persiste toda a descoberta antes de limitar o lote de processamento', asyn
     transport: {}
   });
   assert.deepEqual(queued.map((record) => record.invoiceId), ['11839', '11840']);
+  assert.deepEqual(scanOrder, ['recentes', 'abertas']);
   assert.equal(pendingUpdates[0].invoiceId, '11839');
   assert.equal(pendingUpdates[0].reason, 'doccob');
   assert.equal(result.processed, 1);
   assert.equal(result.remaining, 1);
   assert.equal(result.stoppedByLimit, true);
+});
+
+test('prioriza emissões em 72h e só agenda avisos elegíveis da lista de abertas', async () => {
+  const now = new Date('2026-10-17T15:00:00Z');
+  const queued = [];
+  const calls = [];
+  const invoice = (id, issuedAt, dueAt) => ({
+    id, status: 0, balance: 100, issuedAt, dueAt, clientDocument: '41870054000276'
+  });
+  const recent = [
+    invoice('recent', '2026-10-14', '2026-11-17'),
+    invoice('old', '2026-10-13', '2026-11-17')
+  ];
+  const open = [
+    invoice('reminder', '2026-09-01', '2026-10-19'),
+    invoice('overdue', '2026-09-01', '2026-10-14'),
+    invoice('distant', '2026-09-01', '2026-11-17')
+  ];
+  const result = await runBillingCollection({
+    currentTime: now,
+    now: () => now,
+    config: { maxInvoices: 0, maxPages: 1, deadlineMs: 55000 },
+    listPending: async () => [],
+    getRecentIssuedCursor: async () => ({ from: '2026-10-13', skip: 100 }),
+    getOpenInvoiceCursor: async () => 0,
+    saveRecentIssuedCursor: async (cursor) => { assert.deepEqual(cursor, { from: '2026-10-14', skip: 0 }); },
+    saveOpenInvoiceCursor: async (skip) => { assert.equal(skip, 0); },
+    reconcileBankPayments: async () => ({ checked: 0, settled: 0, alreadySettled: 0, pending: 0, errors: [] }),
+    fetchInvoices: async (filters) => {
+      calls.push(filters);
+      return {
+        invoices: filters['emissao[gte]'] ? recent : open,
+        pagination: { hasMore: Boolean(filters['emissao[gte]'] && filters.skip === 0) }
+      };
+    },
+    listBlockedInvoiceIds: async () => [],
+    getCompletedBillingEvents: async () => new Set(),
+    savePendingBatch: async (records) => { queued.push(...records); },
+    emailConfig: { fromName: 'TWT', fromEmail: 'faturamento@twt.com.br' },
+    transport: {}
+  });
+  assert.deepEqual(calls.map((filters) => filters['emissao[gte]'] ? 'recentes' : 'abertas'),
+    ['recentes', 'recentes', 'abertas']);
+  assert.deepEqual(calls.map((filters) => filters.skip), [0, 100, 0]);
+  assert.equal(calls[0]['emissao[gte]'], '2026-10-14');
+  assert.equal(calls[0]['emissao[lte]'], '2026-10-17');
+  assert.deepEqual(queued.map((record) => record.invoiceId), ['recent', 'reminder', 'overdue']);
+  assert.equal(result.scanned, 3);
 });
 
 test('continuação drena somente itens ainda não examinados sem repetir a varredura', async () => {
@@ -847,9 +943,11 @@ test('continuação drena somente itens ainda não examinados sem repetir a varr
       { invoiceId: '11838', reason: 'doccob', clientCnpj: '35640442000187', issuedAt: '2026-09-28', dueAt: '2026-10-13' }
     ],
     getBillingQueueCursor: async () => 19,
-    getOverdueCursor: async () => 100,
+    getRecentIssuedCursor: async () => ({ from: '', skip: 100 }),
+    getOpenInvoiceCursor: async () => 100,
     getReconciliationCursor: async () => 100,
-    saveOverdueCursor: async () => { scanCursorSaves += 1; },
+    saveRecentIssuedCursor: async () => { scanCursorSaves += 1; },
+    saveOpenInvoiceCursor: async () => { scanCursorSaves += 1; },
     saveReconciliationCursor: async () => { scanCursorSaves += 1; },
     saveBillingQueueCursor: async () => { queueCursorSaves += 1; },
     reconcileBankPayments: async () => ({ checked: 0, settled: 0, alreadySettled: 0, pending: 0, errors: [] }),
@@ -920,8 +1018,10 @@ test('verificação normal preserva fila descoberta e ignora pendências técnic
       }
     ],
     removePendingBatch: async (invoiceIds) => { removedQueued.push(...invoiceIds); },
-    getOverdueCursor: async () => 0,
-    saveOverdueCursor: async () => {},
+    getRecentIssuedCursor: async () => ({ from: '', skip: 0 }),
+    getOpenInvoiceCursor: async () => 0,
+    saveRecentIssuedCursor: async () => {},
+    saveOpenInvoiceCursor: async () => {},
     reconcileBankPayments: async () => ({ checked: 0, settled: 0, alreadySettled: 0, pending: 0, errors: [] }),
     fetchInvoices: async () => {
       scanCalls += 1;
@@ -943,7 +1043,7 @@ test('verificação normal preserva fila descoberta e ignora pendências técnic
     emailConfig: { fromName: 'TWT', fromEmail: 'faturamento@twt.com.br' },
     transport: {}
   });
-  assert.equal(scanCalls, 3);
+  assert.equal(scanCalls, 2);
   assert.equal(pendingLookups, 1);
   assert.deepEqual(removedQueued, []);
   assert.equal(pendingUpdates[0].reason, 'doccob');
@@ -963,11 +1063,13 @@ test('rodada automática seguinte processa o item restante mesmo sem nova descob
     source: 'automatic',
     config: { maxInvoices: 1, maxPages: 1, deadlineMs: 55000 },
     listPending: async () => [...pending.values()],
-    getOverdueCursor: async () => 0,
-    saveOverdueCursor: async () => {},
+    getRecentIssuedCursor: async () => ({ from: '', skip: 0 }),
+    getOpenInvoiceCursor: async () => 0,
+    saveRecentIssuedCursor: async () => {},
+    saveOpenInvoiceCursor: async () => {},
     reconcileBankPayments: async () => ({ checked: 0, settled: 0, alreadySettled: 0, pending: 0, errors: [] }),
     fetchInvoices: async (filters) => ({
-      invoices: filters['emissao[eq]'] === firstDay ? invoices : [],
+      invoices: filters['emissao[gte]'] && firstDay >= filters['emissao[gte]'] ? invoices : [],
       pagination: { hasMore: false }
     }),
     fetchPendingInvoice: async ({ id }) => ({
@@ -1000,7 +1102,9 @@ test('rodada automática seguinte processa o item restante mesmo sem nova descob
     currentTime: new Date('2026-10-09T12:00:00Z')
   });
   assert.equal(second.processed, 1);
-  assert.equal(second.remaining, 0);
+  // A fatura anterior ainda está na janela de 72h e poderá ser revalidada
+  // numa próxima rodada; a fila antiga deve ter sido processada primeiro.
+  assert.equal(second.remaining, 1);
   assert.deepEqual(processed, ['12001', '12002']);
   assert.equal(pending.get('12002').reason, 'doccob');
 });

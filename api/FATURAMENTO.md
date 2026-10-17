@@ -202,16 +202,16 @@ essa cópia e são identificados como conteúdo indisponível.
 
 Em cada execução o servidor:
 
-1. consulta faturas em aberto emitidas no dia e reprocessa as que aguardavam
-   DOCCOB;
+1. consulta primeiro as faturas em aberto emitidas nas últimas 72 horas
+   (incluindo o dia da borda, pois a Brudam filtra emissão apenas por data);
 2. envia o aviso inicial somente quando consegue montar o PDF da fatura e, para
    pagamentos que não sejam TED/DOC, anexar também o boleto. Para faturas DSL,
    reúne e anexa em um único PDF todos os DACTEs vinculados no DOCCOB;
-3. consulta as faturas em aberto com vencimento dois dias depois e envia o
-   aviso **Perto do vencimento** com prioridade alta;
-4. consulta faturas ainda em aberto dois dias depois do vencimento e envia o
-   aviso de vencida com prioridade alta. No primeiro dia após o vencimento não
-   há envio automático de aviso vencido;
+3. em seguida percorre as faturas em aberto e envia **Perto do vencimento**
+   quando faltam até dois dias, com prioridade alta;
+4. nessa mesma lista, envia aviso de vencida a partir de dois dias após o
+   vencimento, com prioridade alta. No primeiro dia após o vencimento não há
+   envio automático de aviso vencido;
 5. envia uma mensagem separada para `BILLING_ALERT_EMAIL` nos avisos próximos
    do vencimento e vencidos, sem incluir o endereço em cópia nas mensagens dos
    clientes.
@@ -237,10 +237,13 @@ Timeouts durante a transmissão e falhas ao registrar um aceite continuam como
 Registros antigos de conferência não são liberados automaticamente após a
 atualização, pois não é possível provar retroativamente se o SMTP os aceitou.
 
-O botão **Verificar agora** e as quatro rotinas automáticas consultam somente
-três grupos: faturas emitidas no dia, faturas que entram na janela de aviso de
-vencimento e faturas vencidas. Essa rotina não percorre mais a Central de
-pendências nem realiza uma consulta geral de todas as faturas em aberto.
+O botão **Verificar agora** e as quatro rotinas automáticas consultam primeiro
+as emissões recentes e depois todas as faturas em aberto, em páginas com
+cursores separados no Redis. A primeira página é revisitada em cada rodada
+para captar novas faturas; as páginas seguintes avançam nas execuções
+posteriores. Itens descobertos que excedem o limite de processamento ficam
+registrados na fila. A rotina não percorre a Central de pendências; na
+varredura geral só entram na fila faturas elegíveis para aviso de vencimento.
 
 O botão **Atualizar** da Central de pendências possui um fluxo separado. Para
 cada item visível ele consulta primeiro a situação financeira atual na Brudam.
