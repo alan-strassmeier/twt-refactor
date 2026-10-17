@@ -5,6 +5,7 @@ const {
   brudamLiquidationSettings,
   itauSettlementForRecord,
   itauReconciliationAllowlist,
+  rearmItauReconciliation,
   previewItauReconciliation,
   reconcileItauInvoice,
   reconcilePaidRecord,
@@ -44,8 +45,8 @@ const itauDetail = ({
 test('exige IDs internos distintos das contas bancárias físicas para liquidar na Brudam', () => {
   assert.deepEqual(brudamLiquidationSettings('itau', {
     BRUDAM_BANK_SLIP_PAYMENT_METHOD_ID: '7',
-    BRUDAM_ITAU_BANK_ACCOUNT_ID: '16666'
-  }), { paymentMethodId: 7, bankAccountId: 16666 });
+    BRUDAM_ITAU_BANK_ACCOUNT_ID: '6'
+  }), { paymentMethodId: 7, bankAccountId: 6 });
   assert.throws(
     () => brudamLiquidationSettings('bradesco', {
       BRUDAM_BANK_SLIP_PAYMENT_METHOD_ID: '7'
@@ -692,12 +693,94 @@ test('resposta incerta da Brudam bloqueia outro POST e conclui após confirmaç�
   };
   await assert.rejects(reconcilePaidRecord(record, settlement, dependencies), /Timeout/);
   assert.equal(record.reconciliation.status, 'submission_pending');
+  assert.equal(record.reconciliation.failure.kind, 'transport_error');
+  assert.match(record.reconciliation.failure.message, /Timeout/);
   await assert.rejects(reconcilePaidRecord(record, settlement, dependencies), /Confira manualmente/);
   assert.equal(liquidations, 1);
   settled = true;
   const result = await reconcilePaidRecord(record, settlement, dependencies);
   assert.equal(result.status, 'already_settled');
   assert.equal(record.reconciliation.status, 'completed');
+  assert.equal(liquidations, 1);
+});
+
+test('resposta recusada da Brudam fica diagnosticada sem liberar segunda baixa', async () => {
+  let record = {
+    state: 'ready', invoiceId: '11838', bank: 'itau', amount: 128.81,
+    beneficiaryId: '060200166662', wallet: '109', ourNumber: '00011838'
+  };
+  const settlement = {
+    bank: 'itau', paidAt: '2026-10-13', paidAmount: 128.81,
+    ourNumber: '00011838', beneficiaryId: '060200166662', wallet: '109',
+    bankStatus: 'pago', paidAtSource: 'itau_v2_payment_inclusion',
+    paidAmountSource: 'itau_v2_payments'
+  };
+  let liquidations = 0;
+  const dependencies = {
+    claimReconciliationLock: async () => 'token',
+    releaseReconciliationLock: async () => {},
+    getBankSlipRecord: async () => record,
+    saveBankSlipRecord: async (_invoiceId, updated) => { record = updated; },
+    fetchInvoices: async () => ({ invoices: [{
+      id: '11838', internalId: 21408, status: 0, balance: 128.81
+    }] }),
+    liquidationSettings: () => ({ paymentMethodId: 7, bankAccountId: 2 }),
+    liquidate: async () => {
+      liquidations += 1;
+      return {
+        response: { ok: false, status: 400 },
+        payload: { status: 0, message: 'Dados inválidos', data: ['Conta bancária inválida'] }
+      };
+    }
+  };
+  await assert.rejects(reconcilePaidRecord(record, settlement, dependencies), /Conta bancária inválida/);
+  assert.equal(record.reconciliation.status, 'submission_pending');
+  assert.deepEqual(record.reconciliation.failure, {
+    kind: 'rejected_response', httpStatus: 400, apiStatus: 0,
+    dataStatus: null, code: '', message: 'Dados inválidos: Conta bancária inválida'
+  });
+  const preview = await previewItauReconciliation({
+    invoiceId: '11838', currentDate: '2026-10-16'
+  }, dependencies);
+  assert.equal(preview.status, 'manual_review');
+  assert.equal(preview.eligible, false);
+  assert.match(preview.message, /ainda informa a fatura em aberto/);
+  assert.match(preview.message, /Conta bancária inválida/);
+  await assert.rejects(reconcilePaidRecord(record, settlement, dependencies), /Confira manualmente/);
+  assert.equal(liquidations, 1);
+});
+
+test('HTTP 200 sem confirmação explícita da Brudam não é tratado como baixa concluída', async () => {
+  let record = {
+    state: 'ready', invoiceId: '11777', bank: 'bradesco',
+    ourNumber: '00000021311', amount: 100
+  };
+  let liquidations = 0;
+  const dependencies = {
+    claimReconciliationLock: async () => 'token',
+    releaseReconciliationLock: async () => {},
+    getBankSlipRecord: async () => record,
+    saveBankSlipRecord: async (_invoiceId, updated) => { record = updated; },
+    fetchInvoices: async () => ({ invoices: [{
+      id: '11777', internalId: 12, status: 0, balance: 100
+    }] }),
+    liquidationSettings: () => ({ paymentMethodId: 7, bankAccountId: 321 }),
+    liquidate: async () => {
+      liquidations += 1;
+      return { response: { ok: true, status: 200 }, payload: { status: 1, data: { ids: [12] } } };
+    }
+  };
+  const settlement = {
+    bank: 'bradesco', reference: '00000021311', paidAt: '2026-09-29',
+    paidAmount: 100, titleAmounts: [100], payerTaxIds: []
+  };
+  await assert.rejects(reconcilePaidRecord(record, settlement, dependencies), /não confirmou/);
+  assert.equal(record.reconciliation.status, 'submission_pending');
+  assert.equal(record.reconciliation.failure.kind, 'unconfirmed_response');
+  assert.equal(record.reconciliation.failure.httpStatus, 200);
+  assert.equal(record.reconciliation.failure.apiStatus, 1);
+  assert.equal(record.reconciliation.failure.dataStatus, null);
+  await assert.rejects(reconcilePaidRecord(record, settlement, dependencies), /Confira manualmente/);
   assert.equal(liquidations, 1);
 });
 
@@ -856,4 +939,115 @@ test('tentativa Itaú antiga pendente só confere a Brudam e nunca repete a baix
     }
     assert.equal(liquidations, 0);
   }
+});
+
+test('liberação pontual da 11838 mantém o agendador bloqueado e permite uma baixa manual', async () => {
+  let liquidations = 0;
+  let record = {
+    state: 'ready', invoiceId: '11838', bank: 'itau', amount: 200,
+    beneficiaryId: '150000052061', wallet: '109', ourNumber: '00011518',
+    payer: { tax_id: '33378996846' }, createdAt: '2026-09-20T12:00:00Z',
+    dueAt: '2026-10-10', yourNumber: 'FAT11518',
+    reconciliation: {
+      status: 'submission_pending', bank: 'itau', paidAt: '2026-09-29',
+      paidAmount: 200, reference: '37393662-6632-3261-2d30-6662632d3464',
+      attemptedAt: '2026-09-29T12:00:00Z', internalId: 789
+    }
+  };
+  const dependencies = {
+    env: { ITAU_RECONCILIATION_INVOICE_IDS: '11838' },
+    claimReconciliationLock: async () => 'token',
+    releaseReconciliationLock: async () => {},
+    getBankSlipRecord: async () => record,
+    saveBankSlipRecord: async (_invoiceId, updated) => { record = updated; },
+    queryItauBankSlipDetail: async () => itauDetail(),
+    itauConfig: { beneficiaryId: '150000052061', wallet: '109' },
+    fetchInvoices: async () => ({ invoices: [{
+      id: '11838', status: 0, balance: 200, internalId: 789
+    }] }),
+    liquidationSettings: () => ({ paymentMethodId: 2, bankAccountId: 6 }),
+    liquidate: async () => {
+      liquidations += 1;
+      return { response: { ok: true, status: 200 },
+        payload: { status: 1, data: { status: 1, ids: [789] } } };
+    },
+    removePending: async () => {},
+    markBillingEventCompleted: async () => {}
+  };
+  const before = await previewItauReconciliation({
+    invoiceId: '11838', currentDate: '2026-10-16'
+  }, dependencies);
+  assert.equal(before.status, 'manual_review');
+  assert.equal(before.rearmAvailable, true);
+  const released = await rearmItauReconciliation({
+    invoiceId: '11838', currentDate: '2026-10-16'
+  }, dependencies);
+  assert.equal(released.status, 'rearmed');
+  assert.equal(liquidations, 0);
+  assert.equal(record.reconciliation.status, 'submission_pending');
+  assert.equal(record.reconciliationAudit.previousAttempt.internalId, 789);
+  assert.ok(record.reconciliation.manualRetryAuthorizedAt);
+  await assert.rejects(reconcilePaidRecord(record, record.reconciliation, dependencies),
+    /Confira manualmente/);
+  assert.equal(liquidations, 0);
+  const preview = await previewItauReconciliation({
+    invoiceId: '11838', currentDate: '2026-10-16'
+  }, dependencies);
+  assert.equal(preview.status, 'eligible');
+  assert.match(preview.message, /tentativa manual/);
+  const result = await reconcileItauInvoice({
+    invoiceId: '11838', currentDate: '2026-10-16'
+  }, dependencies);
+  assert.equal(result.status, 'liquidated');
+  assert.equal(liquidations, 1);
+  assert.equal(record.reconciliation.status, 'completed');
+  assert.ok(record.reconciliationAudit.manualRetryAuthorizedAt);
+});
+
+test('liberação da 11838 falha se o ID interno da conta Itaú ainda estiver errado', async () => {
+  let saved = false;
+  const record = {
+    state: 'ready', invoiceId: '11838', bank: 'itau', amount: 200,
+    beneficiaryId: '150000052061', wallet: '109', ourNumber: '00011518',
+    payer: { tax_id: '33378996846' }, createdAt: '2026-09-20T12:00:00Z',
+    dueAt: '2026-10-10', yourNumber: 'FAT11518',
+    reconciliation: {
+      status: 'submission_pending', bank: 'itau', paidAt: '2026-09-29',
+      paidAmount: 200, attemptedAt: '2026-09-29T12:00:00Z', internalId: 789
+    }
+  };
+  await assert.rejects(rearmItauReconciliation({
+    invoiceId: '11838', currentDate: '2026-10-16'
+  }, {
+    env: { ITAU_RECONCILIATION_INVOICE_IDS: '11838' },
+    claimReconciliationLock: async () => 'token',
+    releaseReconciliationLock: async () => {},
+    getBankSlipRecord: async () => record,
+    saveBankSlipRecord: async () => { saved = true; },
+    queryItauBankSlipDetail: async () => itauDetail(),
+    itauConfig: { beneficiaryId: '150000052061', wallet: '109' },
+    fetchInvoices: async () => ({ invoices: [{
+      id: '11838', status: 0, balance: 200, internalId: 789
+    }] }),
+    liquidationSettings: () => ({ paymentMethodId: 2, bankAccountId: 16666 })
+  }), /ID interno da conta bancária/);
+  assert.equal(saved, false);
+});
+
+test('recuperação da 11838 não pode ser autorizada pela segunda vez', async () => {
+  let bankQueries = 0;
+  await assert.rejects(rearmItauReconciliation({
+    invoiceId: '11838', currentDate: '2026-10-16'
+  }, {
+    env: { ITAU_RECONCILIATION_INVOICE_IDS: '11838' },
+    claimReconciliationLock: async () => 'token',
+    releaseReconciliationLock: async () => {},
+    getBankSlipRecord: async () => ({
+      state: 'ready', invoiceId: '11838', bank: 'itau',
+      reconciliation: { status: 'submission_pending' },
+      reconciliationAudit: { manualRetryAuthorizedAt: '2026-10-16T12:00:00Z' }
+    }),
+    queryItauBankSlipDetail: async () => { bankQueries += 1; }
+  }), /única liberação manual/);
+  assert.equal(bankQueries, 0);
 });
