@@ -17,6 +17,7 @@ const {
 const { fetchInvoices } = require('../../server/faturamento/brudam');
 const { findDoccobForInvoice } = require('../../server/faturamento/r2-doccob');
 const { getBankSlipRecord } = require('../../server/faturamento/boleto-store');
+const { listLiquidationLog } = require('../../server/faturamento/liquidation-log');
 const {
   analyzePaymentImport,
   approvePaymentImport
@@ -515,6 +516,16 @@ const handlePaymentImport = async (req, res, query) => {
   sendJson(res, 405, { message: 'Método não permitido.' });
 };
 
+const handleLiquidationLog = async (req, res) => {
+  if (!requireSession(req, res)) return;
+  if (req.method !== 'GET') {
+    res.setHeader('Allow', 'GET');
+    sendJson(res, 405, { message: 'Método não permitido.' });
+    return;
+  }
+  sendJson(res, 200, { entries: await listLiquidationLog() });
+};
+
 const handleBankDiagnostic = async (req, res) => {
   if (!requireSession(req, res)) return;
   if (req.method !== 'GET') {
@@ -752,6 +763,7 @@ module.exports = async (req, res) => {
     if (query.route === 'invoice-detail') return await handleInvoiceDetail(req, res, query);
     if (query.route === 'invoice-block') return await handleInvoiceBlock(req, res);
     if (query.route === 'payment-import') return await handlePaymentImport(req, res, query);
+    if (query.route === 'liquidation-log') return await handleLiquidationLog(req, res);
     if (query.route === 'bank-diagnostic') return await handleBankDiagnostic(req, res);
     if (query.route === 'itau-v2-diagnostic') return await handleItauDetailDiagnostic(req, res, query);
     if (query.route === 'itau-reconciliation-preview') {

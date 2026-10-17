@@ -3,6 +3,7 @@ const { parsePaymentXlsx } = require('./payment-import-xlsx');
 const { findDoccobInvoicesByTransportReferences } = require('./r2-doccob');
 const { fetchInvoices, authenticatedPost } = require('./brudam');
 const store = require('./cobranca-store');
+const liquidationLog = require('./liquidation-log');
 const { DSL_TED_DOC_LIQUIDATION } = require('./billing-rules');
 
 const APPROVAL_EVENTS = ['initial', 'reminder', 'overdue'];
@@ -274,6 +275,21 @@ const approveCandidate = async (record, candidate, dependencies = {}) => {
       throw liquidationError(result);
     }
     const approvedAt = new Date().toISOString();
+    try {
+      await (dependencies.recordLiquidation || liquidationLog.recordPaymentLiquidation)({
+        invoiceId: candidate.invoiceId,
+        paidAt: paymentDate,
+        amount: candidate.importedAmount,
+        completedAt: approvedAt
+      });
+    } catch (logError) {
+      // A Brudam já confirmou a baixa. Falha no histórico não pode transformar
+      // a operação em erro e induzir uma segunda tentativa de liquidação.
+      console.error('[faturamento:pagamentos:historico]', {
+        invoiceId: candidate.invoiceId,
+        message: String(logError?.message || logError).slice(0, 240)
+      });
+    }
     await closeBillingForSettledInvoice(record, candidate, approvedAt, dependencies);
     return {
       invoiceId: candidate.invoiceId,
