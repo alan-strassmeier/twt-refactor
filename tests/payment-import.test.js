@@ -143,6 +143,7 @@ test('aprovação reconfere a fatura e envia o contrato oficial de liquidação 
         payload: { status: 1, data: { status: 1, ids: [84583298] } }
       };
     },
+    recordLiquidation: async (entry) => { calls.log = entry; },
     removePending: async () => { calls.removed += 1; },
     markCompleted: async (event) => { calls.completed.push(event); }
   });
@@ -160,6 +161,9 @@ test('aprovação reconfere a fatura e envia o contrato oficial de liquidação 
     }]
   });
   assert.equal(calls.removed, 1);
+  assert.equal(calls.log.invoiceId, '11840');
+  assert.equal(calls.log.paidAt, '2026-09-29');
+  assert.equal(calls.log.amount, 1385.65);
   assert.deepEqual(calls.completed.sort(), ['initial', 'overdue', 'reminder']);
   assert.equal(calls.released, 1);
 });

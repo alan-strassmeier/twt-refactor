@@ -2759,7 +2759,13 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(html, /data-collection-section="collectionContactsSection"/);
   assert.match(html, /data-collection-section="pendingDoccobSection"/);
   assert.match(html, /data-collection-section="collectionLogsSection"/);
-  assert.match(html, /data-collection-section="paymentImportSection"/);
+  assert.match(html, /data-billing-area="liquidation"/);
+  assert.match(html, /data-billing-area="collection"[\s\S]*data-billing-area="liquidation"[\s\S]*data-billing-area="inactive"/);
+  assert.match(html, /id="liquidationWorkspace"/);
+  assert.match(html, /id="liquidationLogRows"/);
+  assert.match(html, /id="refreshLiquidationLog"/);
+  assert.match(html, /id="focusLiquidationButton"/);
+  assert.doesNotMatch(html, /data-collection-section="paymentImportSection"/);
   assert.match(html, /id="paymentImportForm"/);
   assert.match(html, /id="approveAllPayments"/);
   assert.match(html, /id="bankDiagnosticButton"/);
@@ -2797,6 +2803,7 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(source, /endpoint\('itau-reconciliation-preview'/);
   assert.match(source, /endpoint\('itau-reconciliation-rearm'/);
   assert.match(source, /endpoint\('itau-reconciliation-run'/);
+  assert.match(source, /endpoint\('liquidation-log'/);
   assert.match(source, /describeBank\('Itaú'/);
   assert.match(source, /describeBank\('Bradesco'/);
   assert.match(source, /billing:open-documents/);
@@ -2817,6 +2824,7 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(apiSource, /query\.route === 'invoice-detail'/);
   assert.match(apiSource, /query\.route === 'invoice-block'/);
   assert.match(apiSource, /query\.route === 'payment-import'/);
+  assert.match(apiSource, /query\.route === 'liquidation-log'/);
   assert.match(apiSource, /query\.route === 'bank-diagnostic'/);
   assert.match(apiSource, /query\.route === 'itau-reconciliation-preview'/);
   assert.match(apiSource, /query\.route === 'itau-reconciliation-rearm'/);

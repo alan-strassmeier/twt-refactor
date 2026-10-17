@@ -343,7 +343,7 @@ como índice da última página (zero para uma página), desde que a contagem de
 registros feche. Rejeita metadados ausentes ou inconsistentes para não
 confundir erro com ausência de boletos.
 
-Antes de habilitar a baixa automática Itaú, a seção de cobrança oferece
+Na área **Liquidar Faturas**, a seção de boletos oferece
 **Prévia de baixa Itaú** por número de fatura. A rota autenticada
 `GET /api/faturamento/cobranca?route=itau-reconciliation-preview&id=11838`
 consulta o boleto na API v2 e a fatura atual na Brudam. Ela usa as mesmas
@@ -377,6 +377,18 @@ agendador continuem sem repetir o POST. A autorização é única e fica
 registrada no histórico do boleto; somente o botão manual **Liquidar esta
 fatura** pode consumi-la, após nova prévia e novas consultas. A liberação
 em si nunca envia uma baixa financeira.
+
+### Histórico de liquidações
+
+`GET /api/faturamento/cobranca?route=liquidation-log` exige sessão e retorna
+as 100 liquidações mais recentes para a nova área, sem executar conciliação
+nem alterar a Brudam. As baixas Itaú e Bradesco já concluídas vêm dos
+registros de boleto no Redis; o resultado distingue `liquidated` de
+`already_settled`. Aprovações de planilhas White Martins são registradas em
+uma lista persistente no Redis a partir desta versão, somente após resposta
+de sucesso da Brudam. A falha ao escrever o histórico não transforma uma
+baixa já aceita em erro que induza novo envio. Importações antigas expiradas
+não podem ser reconstruídas por esse histórico.
 
 ## Roteamento dos boletos
 

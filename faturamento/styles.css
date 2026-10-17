@@ -1342,6 +1342,15 @@ body.modal-open {
   gap: 24px;
 }
 
+.liquidation-workspace {
+  display: grid;
+  gap: 24px;
+}
+
+.liquidation-log-table {
+  min-width: 710px;
+}
+
 .inactive-workspace {
   display: grid;
   gap: 24px;

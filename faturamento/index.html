@@ -7,10 +7,10 @@
   <meta name="theme-color" content="#112a40">
   <title>Faturamento | TWT Airpack</title>
   <link rel="icon" href="/favicon.ico">
-  <link rel="stylesheet" href="/faturamento/styles.css?v=18">
+  <link rel="stylesheet" href="/faturamento/styles.css?v=19">
   <script src="/faturamento/sort.js?v=1" defer></script>
   <script src="/faturamento/app.js?v=21" defer></script>
-  <script src="/faturamento/cobranca.js?v=7" defer></script>
+  <script src="/faturamento/cobranca.js?v=8" defer></script>
   <script src="/faturamento/clientes-inativos.js?v=2" defer></script>
 </head>
 <body>
@@ -64,6 +64,9 @@
           </button>
           <button class="area-tab" type="button" data-billing-area="collection" aria-pressed="false">
             Cobrança de faturas
+          </button>
+          <button class="area-tab" type="button" data-billing-area="liquidation" aria-pressed="false">
+            Liquidar Faturas
           </button>
           <button class="area-tab" type="button" data-billing-area="inactive" aria-pressed="false">
             Clientes Inativos
@@ -330,25 +333,6 @@
 
           <p class="dashboard-message collection-message" id="collectionMessage" role="status" aria-live="polite"></p>
 
-          <details class="itau-reconciliation-check">
-            <summary>Prévia de baixa Itaú</summary>
-            <form id="itauReconciliationPreviewForm" class="itau-reconciliation-form">
-              <label for="itauReconciliationInvoiceId">Número da fatura
-                <input id="itauReconciliationInvoiceId" name="invoiceId" type="text"
-                  inputmode="numeric" pattern="[0-9]+" maxlength="20" required autocomplete="off">
-              </label>
-              <button class="button button-quiet" type="submit">Conferir sem liquidar</button>
-              <button class="button button-quiet" id="itauReconciliationRearmButton" type="button" hidden>
-                Liberar tentativa manual
-              </button>
-              <button class="button button-primary" id="itauReconciliationRunButton" type="button" hidden>
-                Liquidar esta fatura
-              </button>
-            </form>
-            <p class="dashboard-message collection-message" id="itauReconciliationPreviewResult"
-              role="status" aria-live="polite"></p>
-          </details>
-
           <nav class="collection-quick-nav" aria-label="Seções da cobrança" role="tablist">
             <span>Exibir</span>
             <button class="collection-section-tab is-active" type="button" role="tab"
@@ -360,9 +344,6 @@
             <button class="collection-section-tab" type="button" role="tab"
               data-collection-section="collectionLogsSection" aria-controls="collectionLogsSection"
               aria-selected="false" tabindex="-1">Logs de envio</button>
-            <button class="collection-section-tab" type="button" role="tab"
-              data-collection-section="paymentImportSection" aria-controls="paymentImportSection"
-              aria-selected="false" tabindex="-1">Importar pagamentos</button>
           </nav>
 
           <section class="collection-summary" aria-label="Resumo das cobranças">
@@ -402,61 +383,6 @@
             <div class="collection-empty" id="categoryEmpty" hidden>
               <strong>Nenhuma empresa cadastrada</strong>
               <p>Adicione uma empresa pelo formulário acima.</p>
-            </div>
-          </section>
-
-          <section class="collection-card collection-anchor-target" id="paymentImportSection"
-            role="tabpanel" aria-labelledby="paymentImportTitle" hidden>
-            <div class="collection-card-heading">
-              <div>
-                <h2 id="paymentImportTitle">Importar pagamentos da White Martins</h2>
-                <p>Envie a planilha XLSX, confira os vínculos entre CT-e, DOCCOB e fatura e só então aprove a liquidação na Brudam.</p>
-              </div>
-            </div>
-            <div class="payment-import-warning" role="note">
-              <strong>Nenhuma baixa é automática.</strong>
-              <span>Somente faturas abertas de CNPJs com a marca “White Martins” no cadastro podem ser aprovadas.</span>
-              <span>A coluna “Vencimento” da planilha será usada como data do pagamento, independentemente do vencimento da fatura.</span>
-              <span>Forma fixa: Transferência TED/DOC · Conta: ITAÚ-DSL, ag. 0602-0, c/c 16666-2.</span>
-            </div>
-            <form class="collection-form payment-import-form" id="paymentImportForm">
-              <label class="payment-file-field">Planilha de pagamentos (.xlsx)
-                <input name="file" type="file"
-                  accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required>
-                <small>Máximo de 2 MB. “Referência” deve conter o CT-e e “Vencimento”, a data do pagamento.</small>
-              </label>
-              <button class="button button-primary" type="submit">Analisar arquivo</button>
-            </form>
-            <div id="paymentImportResult" hidden>
-              <div class="payment-import-heading">
-                <div>
-                  <strong id="paymentImportFilename">Importação analisada</strong>
-                  <span id="paymentImportExpiration"></span>
-                </div>
-                <button class="button button-primary" id="approveAllPayments" type="button">
-                  Aprovar todas as aptas
-                </button>
-              </div>
-              <section class="payment-import-summary" aria-label="Resumo da importação">
-                <article><span>Linhas lidas</span><strong id="paymentRowsCount">0</strong></article>
-                <article><span>Faturas encontradas</span><strong id="paymentInvoicesCount">0</strong></article>
-                <article><span>Aptas para liquidar</span><strong id="paymentEligibleCount">0</strong></article>
-                <article><span>Valor apto</span><strong id="paymentEligibleAmount">R$ 0,00</strong></article>
-              </section>
-              <div class="table-scroll collection-table-scroll">
-                <table class="collection-table payment-import-table">
-                  <thead><tr><th>Fatura</th><th>Cliente</th><th>CT-e(s)</th><th>Data do pagamento</th><th>Valor importado</th><th>Saldo Brudam</th><th>Verificação</th><th>Ação</th></tr></thead>
-                  <tbody id="paymentImportRows"></tbody>
-                </table>
-                <div class="collection-empty" id="paymentImportEmpty" hidden>
-                  <strong>Nenhuma fatura foi vinculada</strong>
-                  <p>Confira os números de CT-e e a disponibilidade dos DOCCOBs.</p>
-                </div>
-              </div>
-              <details class="payment-rejected" id="paymentRejected" hidden>
-                <summary id="paymentRejectedSummary">Linhas que exigem correção</summary>
-                <ul id="paymentRejectedRows"></ul>
-              </details>
             </div>
           </section>
 
@@ -517,6 +443,118 @@
                 <span id="logPageIndicator">Página 1 de 1 · 0 registros</span>
                 <button class="button button-quiet" id="nextLogPage" type="button" disabled>Próxima</button>
               </nav>
+            </div>
+          </section>
+        </section>
+
+        <section class="liquidation-workspace" id="liquidationWorkspace" hidden>
+          <div class="dashboard-heading collection-heading">
+            <div>
+              <span class="eyebrow">Conciliação financeira</span>
+              <h1>Liquidar Faturas</h1>
+              <p>Confira o pagamento e o saldo antes de registrar uma baixa na Brudam.</p>
+            </div>
+            <button class="button button-primary" id="focusLiquidationButton" type="button">Liquidar fatura</button>
+          </div>
+          <p class="dashboard-message collection-message" id="liquidationMessage" role="status" aria-live="polite"></p>
+
+          <section class="collection-card" id="liquidationManualSection">
+            <div class="collection-card-heading">
+              <div>
+                <h2>Liquidar boleto Itaú</h2>
+                <p>A conferência não grava a baixa. O botão de liquidar só aparece após validar pagamento e saldo.</p>
+              </div>
+            </div>
+            <div class="itau-reconciliation-check">
+              <form id="itauReconciliationPreviewForm" class="itau-reconciliation-form">
+                <label for="itauReconciliationInvoiceId">Número da fatura
+                  <input id="itauReconciliationInvoiceId" name="invoiceId" type="text"
+                    inputmode="numeric" pattern="[0-9]+" maxlength="20" required autocomplete="off">
+                </label>
+                <button class="button button-quiet" type="submit">Conferir sem liquidar</button>
+                <button class="button button-quiet" id="itauReconciliationRearmButton" type="button" hidden>
+                  Liberar tentativa manual
+                </button>
+                <button class="button button-primary" id="itauReconciliationRunButton" type="button" hidden>
+                  Liquidar esta fatura
+                </button>
+              </form>
+              <p class="dashboard-message collection-message" id="itauReconciliationPreviewResult"
+                role="status" aria-live="polite"></p>
+            </div>
+          </section>
+
+          <section class="collection-card" aria-labelledby="liquidationLogTitle">
+            <div class="collection-card-heading">
+              <div>
+                <h2 id="liquidationLogTitle">Histórico de liquidações</h2>
+                <p>Baixas de boletos registradas no Redis e aprovações de planilhas feitas a partir desta versão.</p>
+              </div>
+              <button class="button button-quiet" id="refreshLiquidationLog" type="button">Atualizar log</button>
+            </div>
+            <div class="table-scroll collection-table-scroll">
+              <table class="collection-table liquidation-log-table">
+                <thead><tr><th>Concluída em</th><th>Fatura</th><th>Origem</th><th>Data do pagamento</th><th>Valor pago</th><th>Resultado</th></tr></thead>
+                <tbody id="liquidationLogRows"></tbody>
+              </table>
+              <div class="collection-empty" id="liquidationLogEmpty" hidden>
+                <strong>Nenhuma liquidação registrada</strong>
+                <p>O histórico será preenchido quando uma baixa for confirmada na Brudam.</p>
+              </div>
+            </div>
+          </section>
+
+          <section class="collection-card" id="paymentImportSection" aria-labelledby="paymentImportTitle">
+            <div class="collection-card-heading">
+              <div>
+                <h2 id="paymentImportTitle">Importar pagamentos da White Martins</h2>
+                <p>Envie a planilha XLSX, confira os vínculos entre CT-e, DOCCOB e fatura e só então aprove a liquidação na Brudam.</p>
+              </div>
+            </div>
+            <div class="payment-import-warning" role="note">
+              <strong>Nenhuma baixa é automática.</strong>
+              <span>Somente faturas abertas de CNPJs com a marca “White Martins” no cadastro podem ser aprovadas.</span>
+              <span>A coluna “Vencimento” da planilha será usada como data do pagamento, independentemente do vencimento da fatura.</span>
+              <span>Forma fixa: Transferência TED/DOC · Conta: ITAÚ-DSL, ag. 0602-0, c/c 16666-2.</span>
+            </div>
+            <form class="collection-form payment-import-form" id="paymentImportForm">
+              <label class="payment-file-field">Planilha de pagamentos (.xlsx)
+                <input name="file" type="file"
+                  accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required>
+                <small>Máximo de 2 MB. “Referência” deve conter o CT-e e “Vencimento”, a data do pagamento.</small>
+              </label>
+              <button class="button button-primary" type="submit">Analisar arquivo</button>
+            </form>
+            <div id="paymentImportResult" hidden>
+              <div class="payment-import-heading">
+                <div>
+                  <strong id="paymentImportFilename">Importação analisada</strong>
+                  <span id="paymentImportExpiration"></span>
+                </div>
+                <button class="button button-primary" id="approveAllPayments" type="button">
+                  Aprovar todas as aptas
+                </button>
+              </div>
+              <section class="payment-import-summary" aria-label="Resumo da importação">
+                <article><span>Linhas lidas</span><strong id="paymentRowsCount">0</strong></article>
+                <article><span>Faturas encontradas</span><strong id="paymentInvoicesCount">0</strong></article>
+                <article><span>Aptas para liquidar</span><strong id="paymentEligibleCount">0</strong></article>
+                <article><span>Valor apto</span><strong id="paymentEligibleAmount">R$ 0,00</strong></article>
+              </section>
+              <div class="table-scroll collection-table-scroll">
+                <table class="collection-table payment-import-table">
+                  <thead><tr><th>Fatura</th><th>Cliente</th><th>CT-e(s)</th><th>Data do pagamento</th><th>Valor importado</th><th>Saldo Brudam</th><th>Verificação</th><th>Ação</th></tr></thead>
+                  <tbody id="paymentImportRows"></tbody>
+                </table>
+                <div class="collection-empty" id="paymentImportEmpty" hidden>
+                  <strong>Nenhuma fatura foi vinculada</strong>
+                  <p>Confira os números de CT-e e a disponibilidade dos DOCCOBs.</p>
+                </div>
+              </div>
+              <details class="payment-rejected" id="paymentRejected" hidden>
+                <summary id="paymentRejectedSummary">Linhas que exigem correção</summary>
+                <ul id="paymentRejectedRows"></ul>
+              </details>
             </div>
           </section>
         </section>

@@ -5,6 +5,7 @@
     areaButtons: [...document.querySelectorAll('[data-billing-area]')],
     invoiceWorkspace: document.getElementById('invoiceWorkspace'),
     collectionWorkspace: document.getElementById('collectionWorkspace'),
+    liquidationWorkspace: document.getElementById('liquidationWorkspace'),
     inactiveWorkspace: document.getElementById('inactiveWorkspace'),
     collectionSectionButtons: [...document.querySelectorAll('[data-collection-section]')],
     collectionSectionPanels: [...document.querySelectorAll('.collection-anchor-target')],
@@ -16,6 +17,11 @@
     itauReconciliationPreviewResult: document.getElementById('itauReconciliationPreviewResult'),
     itauReconciliationRearmButton: document.getElementById('itauReconciliationRearmButton'),
     itauReconciliationRunButton: document.getElementById('itauReconciliationRunButton'),
+    focusLiquidationButton: document.getElementById('focusLiquidationButton'),
+    liquidationMessage: document.getElementById('liquidationMessage'),
+    refreshLiquidationLog: document.getElementById('refreshLiquidationLog'),
+    liquidationLogRows: document.getElementById('liquidationLogRows'),
+    liquidationLogEmpty: document.getElementById('liquidationLogEmpty'),
     companyCount: document.getElementById('collectionCompanyCount'),
     contactCount: document.getElementById('collectionContactCount'),
     pendingCount: document.getElementById('collectionPendingCount'),
@@ -71,8 +77,11 @@
   if (!elements.collectionWorkspace) return;
 
   const state = {
+    area: 'invoices',
     loaded: false,
     loading: false,
+    liquidationLogLoaded: false,
+    liquidationLogLoading: false,
     collectionSection: 'collectionContactsSection',
     categories: [],
     pendingFilter: 'all',
@@ -175,14 +184,16 @@
   };
 
   const setMessage = (message, kind = '') => {
-    elements.message.textContent = message;
-    elements.message.dataset.kind = kind;
+    const target = state.area === 'liquidation' ? elements.liquidationMessage : elements.message;
+    target.textContent = message;
+    target.dataset.kind = kind;
   };
 
   const setLoading = (loading) => {
     state.loading = loading;
-    elements.collectionWorkspace.querySelectorAll('button, input, select').forEach((control) => {
-      control.disabled = loading;
+    document.querySelectorAll('#collectionWorkspace button, #collectionWorkspace input, #collectionWorkspace select, '
+      + '#liquidationWorkspace button, #liquidationWorkspace input, #liquidationWorkspace select').forEach((control) => {
+      control.disabled = loading || (control === elements.refreshLiquidationLog && state.liquidationLogLoading);
     });
     elements.previousLogPage.disabled = loading || state.logPage <= 1;
     elements.nextLogPage.disabled = loading || state.logPage >= state.logTotalPages;
@@ -951,6 +962,7 @@
       });
       renderPaymentImport(result.import);
       await loadPending();
+      await loadLiquidationLog();
       setMessage(result.message || 'Aprovação concluída.', result.results?.some(
         (item) => item.status === 'error' || item.status === 'busy'
       ) ? 'warning' : 'success');
@@ -959,6 +971,54 @@
     } finally {
       setLoading(false);
       renderPaymentImport(state.paymentImport);
+    }
+  }
+
+  const renderLiquidationLog = (entries) => {
+    const sourceNames = {
+      itau: 'Boleto Itaú',
+      bradesco: 'Boleto Bradesco',
+      white_martins_spreadsheet: 'Planilha White Martins'
+    };
+    const rows = entries.map((entry) => {
+      const row = document.createElement('tr');
+      appendCell(row, formatDateTime(entry.completedAt));
+      appendInvoiceNavigationCell(row, entry.invoiceId);
+      appendCell(row, sourceNames[entry.source] || '—');
+      appendCell(row, formatDate(entry.paidAt));
+      appendCell(row, formatMoney(entry.amount));
+      appendCell(row, entry.outcome === 'liquidated'
+        ? 'Liquidada pelo sistema' : 'Já liquidada na Brudam');
+      return row;
+    });
+    elements.liquidationLogRows.replaceChildren(...rows);
+    elements.liquidationLogEmpty.hidden = rows.length > 0;
+  };
+
+  async function loadLiquidationLog() {
+    if (state.liquidationLogLoading) return;
+    state.liquidationLogLoading = true;
+    elements.refreshLiquidationLog.disabled = true;
+    elements.refreshLiquidationLog.textContent = 'Atualizando…';
+    if (state.area === 'liquidation' && !state.loading) {
+      elements.liquidationMessage.textContent = 'Carregando histórico de liquidações…';
+      elements.liquidationMessage.dataset.kind = '';
+    }
+    try {
+      const result = await requestJson(endpoint('liquidation-log'));
+      renderLiquidationLog(Array.isArray(result.entries) ? result.entries : []);
+      state.liquidationLogLoaded = true;
+      if (state.area === 'liquidation' && !state.loading) {
+        elements.liquidationMessage.textContent = '';
+        elements.liquidationMessage.dataset.kind = '';
+      }
+    } catch (error) {
+      elements.liquidationMessage.textContent = error.message;
+      elements.liquidationMessage.dataset.kind = 'error';
+    } finally {
+      state.liquidationLogLoading = false;
+      elements.refreshLiquidationLog.disabled = state.loading;
+      elements.refreshLiquidationLog.textContent = 'Atualizar log';
     }
   }
 
@@ -978,9 +1038,11 @@
   };
 
   const setArea = (area) => {
+    state.area = area;
     const collection = area === 'collection';
     elements.invoiceWorkspace.hidden = area !== 'invoices';
     elements.collectionWorkspace.hidden = !collection;
+    elements.liquidationWorkspace.hidden = area !== 'liquidation';
     if (elements.inactiveWorkspace) elements.inactiveWorkspace.hidden = area !== 'inactive';
     elements.areaButtons.forEach((button) => {
       const active = button.dataset.billingArea === area;
@@ -989,6 +1051,7 @@
     });
     elements.backToTopButton.hidden = true;
     if (collection && !state.loaded) loadCollection();
+    if (area === 'liquidation' && !state.liquidationLogLoaded) loadLiquidationLog();
   };
 
   const setCollectionSection = (sectionId, { focus = false } = {}) => {
@@ -1012,6 +1075,11 @@
   elements.areaButtons.forEach((button) => {
     button.addEventListener('click', () => setArea(button.dataset.billingArea));
   });
+  elements.focusLiquidationButton.addEventListener('click', () => {
+    document.getElementById('liquidationManualSection').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    elements.itauReconciliationInvoiceId.focus();
+  });
+  elements.refreshLiquidationLog.addEventListener('click', () => loadLiquidationLog());
 
   elements.collectionSectionButtons.forEach((button, index) => {
     button.addEventListener('click', () => setCollectionSection(button.dataset.collectionSection));
@@ -1312,6 +1380,9 @@
         output.textContent = `Fatura ${invoiceId}: ${messages[result.status] || 'Resultado não reconhecido; confira na Brudam.'}`;
         output.dataset.kind = result.status === 'liquidated' || result.status === 'already_settled'
           ? 'success' : 'warning';
+        if (result.status === 'liquidated' || result.status === 'already_settled') {
+          await loadLiquidationLog();
+        }
       } catch (error) {
         output.textContent = `Fatura ${invoiceId}: ${error.message}`;
         output.dataset.kind = 'error';
