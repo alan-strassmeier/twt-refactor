@@ -30,7 +30,10 @@ const {
 const {
   previewItauReconciliation,
   reconcileItauInvoice,
-  rearmItauReconciliation
+  rearmItauReconciliation,
+  previewBankReconciliation,
+  reconcileBankInvoice,
+  reconcileBankPayments
 } = require('../../server/faturamento/bank-payment-reconciliation');
 const {
   getInactiveSnapshot,
@@ -610,6 +613,77 @@ const handleItauReconciliationRearm = async (req, res) => {
   }));
 };
 
+const handleBankReconciliationPreview = async (req, res, query) => {
+  if (!requireSession(req, res)) return;
+  if (req.method !== 'GET') {
+    res.setHeader('Allow', 'GET');
+    sendJson(res, 405, { message: 'Método não permitido.' });
+    return;
+  }
+  const invoiceId = String(query.id || '').trim();
+  if (!/^\d{1,20}$/.test(invoiceId) || Number(invoiceId) <= 0) {
+    sendJson(res, 422, { message: 'Número da fatura inválido.' });
+    return;
+  }
+  sendJson(res, 200, await previewBankReconciliation({
+    invoiceId: invoiceId.replace(/^0+(?=\d)/, ''),
+    currentDate: saoPauloDate()
+  }));
+};
+
+const handleBankReconciliationInvoice = async (req, res) => {
+  if (!requireSession(req, res)) return;
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', 'POST');
+    sendJson(res, 405, { message: 'Método não permitido.' });
+    return;
+  }
+  if (!requireSameOrigin(req, res)) return;
+  const body = await parseJsonBody(req, 512);
+  const invoiceId = String(body.invoiceId || '').trim();
+  if (!/^\d{1,20}$/.test(invoiceId) || Number(invoiceId) <= 0) {
+    sendJson(res, 422, { message: 'Número da fatura inválido.' });
+    return;
+  }
+  sendJson(res, 200, await reconcileBankInvoice({
+    invoiceId: invoiceId.replace(/^0+(?=\d)/, ''),
+    currentDate: saoPauloDate()
+  }));
+};
+
+const handleBankReconciliationBatch = async (req, res) => {
+  if (!requireSession(req, res)) return;
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', 'POST');
+    sendJson(res, 405, { message: 'Método não permitido.' });
+    return;
+  }
+  if (!requireSameOrigin(req, res)) return;
+  const body = await parseJsonBody(req, 512);
+  const afterInvoiceId = String(body.afterInvoiceId || '').trim();
+  if (afterInvoiceId && !/^\d{1,20}$/.test(afterInvoiceId)) {
+    sendJson(res, 422, { message: 'Cursor de liquidação inválido.' });
+    return;
+  }
+  const runId = randomUUID();
+  if (!await store.claimProcessingRun(runId)) {
+    sendJson(res, 409, { message: 'Outra verificação financeira está em andamento. Tente novamente em instantes.' });
+    return;
+  }
+  try {
+    sendJson(res, 200, await reconcileBankPayments({
+      currentDate: saoPauloDate(),
+      maxRecords: 8,
+      manualFullScan: true,
+      afterInvoiceId
+    }));
+  } finally {
+    await store.releaseProcessingRun(runId).catch((error) => {
+      console.error('[faturamento:liquidacao:liberacao]', error);
+    });
+  }
+};
+
 const handleProcess = async (req, res, query) => {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
@@ -774,6 +848,15 @@ module.exports = async (req, res) => {
     }
     if (query.route === 'itau-reconciliation-rearm') {
       return await handleItauReconciliationRearm(req, res);
+    }
+    if (query.route === 'bank-reconciliation-preview') {
+      return await handleBankReconciliationPreview(req, res, query);
+    }
+    if (query.route === 'bank-reconciliation-invoice') {
+      return await handleBankReconciliationInvoice(req, res);
+    }
+    if (query.route === 'bank-reconciliation-batch') {
+      return await handleBankReconciliationBatch(req, res);
     }
     if (query.route === 'inactive-clients') return await handleInactiveClients(req, res);
     if (query.route === 'logs') return await handleLogs(req, res, query);

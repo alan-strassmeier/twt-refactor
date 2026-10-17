@@ -8,6 +8,8 @@ const {
   rearmItauReconciliation,
   previewItauReconciliation,
   reconcileItauInvoice,
+  previewBankReconciliation,
+  reconcileBankInvoice,
   reconcilePaidRecord,
   reconcileBankPayments
 } = require('../server/faturamento/bank-payment-reconciliation');
@@ -642,6 +644,148 @@ test('consulta liquidações Bradesco em janela D-1 de 60 dias', async () => {
     paymentDateTo: '2026-09-29'
   });
   assert.equal(result.pending, 1);
+});
+
+test('varredura manual percorre todos os boletos prontos sem mover o cursor automático', async () => {
+  const records = ['11901', '11902', '11903'].map((invoiceId, index) => ({
+    state: 'ready', invoiceId, bank: 'bradesco', amount: 100,
+    ourNumber: String(21000 + index)
+  }));
+  records.push({ state: 'ready', invoiceId: '11904', bank: 'bradesco', amount: 100,
+    ourNumber: '21004', reconciliation: { status: 'completed' } });
+  let cursorReads = 0;
+  let cursorWrites = 0;
+  let criteria;
+  const dependencies = {
+    env: { ITAU_RECONCILIATION_INVOICE_IDS: '' },
+    listBankSlipRecords: async () => records,
+    getReconciliationCursor: async () => { cursorReads += 1; return 0; },
+    saveReconciliationCursor: async () => { cursorWrites += 1; },
+    bradescoConfig: {},
+    listBradescoSettledBankSlips: async (received) => { criteria = received; return []; }
+  };
+  const first = await reconcileBankPayments({ currentDate: '2026-10-16',
+    manualFullScan: true, maxRecords: 2 }, dependencies);
+  const second = await reconcileBankPayments({ currentDate: '2026-10-16',
+    manualFullScan: true, maxRecords: 2, afterInvoiceId: first.nextCursor }, dependencies);
+  assert.deepEqual(first.results.map((item) => item.invoiceId), ['11901', '11902']);
+  assert.deepEqual(second.results.map((item) => item.invoiceId), ['11903']);
+  assert.equal(first.hasMore, true);
+  assert.equal(second.hasMore, false);
+  assert.equal(first.totalCandidates, 3);
+  assert.equal(cursorReads, 0);
+  assert.equal(cursorWrites, 0);
+  assert.deepEqual(criteria, { paymentDateFrom: '2026-08-17', paymentDateTo: '2026-10-15' });
+});
+
+test('varredura manual inclui Itaú fora da lista restrita do agendador', async () => {
+  let bankQueries = 0;
+  const result = await reconcileBankPayments({ currentDate: '2026-10-16',
+    manualFullScan: true }, {
+    env: { ITAU_RECONCILIATION_INVOICE_IDS: '' },
+    listBankSlipRecords: async () => [{
+      state: 'ready', invoiceId: '11838', bank: 'itau', amount: 128.81,
+      beneficiaryId: '060200166662', wallet: '109', ourNumber: '00011838',
+      payer: { tax_id: '35640442000187' }, issuedAt: '2026-09-28'
+    }],
+    itauConfig: { beneficiaryId: '060200166662', wallet: '109' },
+    queryItauBankSlipDetail: async () => {
+      bankQueries += 1;
+      return itauDetail({ status: 'Aberto', beneficiaryId: '060200166662',
+        ourNumber: '11838', payerTaxId: '35640442000187', amount: '128.81' });
+    }
+  });
+  assert.equal(bankQueries, 1);
+  assert.equal(result.checked, 1);
+  assert.equal(result.pending, 1);
+  assert.equal(result.hasMore, false);
+});
+
+test('baixa manual Bradesco exige confirmação, faz prévia sem gravar e não duplica lançamento', async () => {
+  let record = { state: 'ready', invoiceId: '11901', bank: 'bradesco',
+    amount: 100, ourNumber: '00000021311' };
+  let liquidations = 0;
+  let bankPaid = false;
+  const dependencies = {
+    getBankSlipRecord: async () => record,
+    listBankSlipRecords: async () => [record],
+    listBradescoSettledBankSlips: async () => bankPaid ? [{
+      ourNumber: '00000021311', paidAt: '2026-10-15', paidAmount: 100, titleAmount: 100
+    }] : [],
+    bradescoConfig: {},
+    fetchInvoices: async () => ({ invoices: [{
+      id: '11901', internalId: 12, status: 0, balance: 100
+    }] }),
+    liquidationSettings: () => ({ paymentMethodId: 7, bankAccountId: 2 }),
+    claimReconciliationLock: async () => 'token',
+    releaseReconciliationLock: async () => {},
+    saveBankSlipRecord: async (_id, updated) => { record = updated; },
+    liquidate: async () => {
+      liquidations += 1;
+      return { response: { ok: true }, payload: { status: 1, data: { status: 1, ids: [12] } } };
+    },
+    removePending: async () => {},
+    markBillingEventCompleted: async () => {}
+  };
+  const unpaid = await previewBankReconciliation({ invoiceId: '11901',
+    currentDate: '2026-10-16' }, dependencies);
+  assert.equal(unpaid.status, 'not_paid');
+  assert.equal(liquidations, 0);
+  bankPaid = true;
+  const preview = await previewBankReconciliation({ invoiceId: '11901',
+    currentDate: '2026-10-16' }, dependencies);
+  assert.equal(preview.bank, 'bradesco');
+  assert.equal(preview.status, 'eligible');
+  assert.equal(preview.invoiceBalance, 100);
+  assert.equal(liquidations, 0);
+  const first = await reconcileBankInvoice({ invoiceId: '11901',
+    currentDate: '2026-10-16' }, dependencies);
+  const second = await reconcileBankInvoice({ invoiceId: '11901',
+    currentDate: '2026-10-16' }, dependencies);
+  assert.equal(first.status, 'liquidated');
+  assert.equal(second.status, 'already_settled');
+  assert.equal(liquidations, 1);
+});
+
+test('baixa manual Itaú aceita boleto fora da lista automática, mantendo validação bancária', async () => {
+  let record = {
+    state: 'ready', invoiceId: '11838', bank: 'itau', amount: 128.81,
+    beneficiaryId: '060200166662', wallet: '109', ourNumber: '00011838',
+    payer: { tax_id: '35640442000187' }, issuedAt: '2026-09-28',
+    dueAt: '2026-10-13', yourNumber: 'FAT11838'
+  };
+  let liquidations = 0;
+  const dependencies = {
+    env: { ITAU_RECONCILIATION_INVOICE_IDS: '' },
+    getBankSlipRecord: async () => record,
+    saveBankSlipRecord: async (_id, updated) => { record = updated; },
+    claimReconciliationLock: async () => 'token',
+    releaseReconciliationLock: async () => {},
+    itauConfig: { beneficiaryId: '060200166662', wallet: '109' },
+    queryItauBankSlipDetail: async () => itauDetail({
+      beneficiaryId: '060200166662', wallet: '109', ourNumber: '11838',
+      payerTaxId: '35640442000187', amount: '128.81', paymentAmounts: ['128.81'],
+      paymentDate: '2026-10-13T11:44:37', dueAt: '2026-10-13', yourNumber: 'FAT11838'
+    }),
+    fetchInvoices: async () => ({ invoices: [{ id: '11838', internalId: 42,
+      status: 0, balance: 128.81 }] }),
+    liquidationSettings: () => ({ paymentMethodId: 7, bankAccountId: 6 }),
+    liquidate: async () => {
+      liquidations += 1;
+      return { response: { ok: true }, payload: { status: 1, data: { status: 1, ids: [42] } } };
+    },
+    removePending: async () => {},
+    markBillingEventCompleted: async () => {}
+  };
+  const preview = await previewBankReconciliation({ invoiceId: '11838',
+    currentDate: '2026-10-16' }, dependencies);
+  assert.equal(preview.status, 'eligible');
+  assert.equal(preview.autoEnabled, false);
+  assert.equal(liquidations, 0);
+  const run = await reconcileBankInvoice({ invoiceId: '11838',
+    currentDate: '2026-10-16' }, dependencies);
+  assert.equal(run.status, 'liquidated');
+  assert.equal(liquidations, 1);
 });
 
 test('fatura cancelada com saldo zero nunca é tratada como liquidada', async () => {

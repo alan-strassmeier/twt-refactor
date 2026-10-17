@@ -2696,9 +2696,10 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(source, /panel\.hidden = panel\.id !== sectionId/);
   assert.match(source, /setCollectionSection\(state\.collectionSection\)/);
   assert.match(source, /endpoint\('bank-diagnostic'\)/);
-  assert.match(source, /endpoint\('itau-reconciliation-preview'/);
+  assert.match(source, /endpoint\('bank-reconciliation-preview'/);
   assert.match(source, /endpoint\('itau-reconciliation-rearm'/);
-  assert.match(source, /endpoint\('itau-reconciliation-run'/);
+  assert.match(source, /endpoint\('bank-reconciliation-invoice'/);
+  assert.match(source, /endpoint\('bank-reconciliation-batch'/);
   assert.match(source, /endpoint\('liquidation-log'/);
   assert.match(source, /describeBank\('Itaú'/);
   assert.match(source, /describeBank\('Bradesco'/);
@@ -2725,6 +2726,9 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(apiSource, /query\.route === 'itau-reconciliation-preview'/);
   assert.match(apiSource, /query\.route === 'itau-reconciliation-rearm'/);
   assert.match(apiSource, /query\.route === 'itau-reconciliation-run'/);
+  assert.match(apiSource, /query\.route === 'bank-reconciliation-preview'/);
+  assert.match(apiSource, /query\.route === 'bank-reconciliation-invoice'/);
+  assert.match(apiSource, /query\.route === 'bank-reconciliation-batch'/);
   assert.match(apiSource, /store\.dismissIssue\(issue\.id, issue\.updatedAt\)/);
   assert.match(apiSource, /query\.route === 'resend'/);
   assert.match(apiSource, /req\.method === 'GET' \|\| req\.method === 'HEAD'/);

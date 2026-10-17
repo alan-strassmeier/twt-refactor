@@ -340,24 +340,33 @@ como índice da última página (zero para uma página), desde que a contagem de
 registros feche. Rejeita metadados ausentes ou inconsistentes para não
 confundir erro com ausência de boletos.
 
-Na área **Liquidar Faturas**, a seção de boletos oferece
-**Prévia de baixa Itaú** por número de fatura. A rota autenticada
-`GET /api/faturamento/cobranca?route=itau-reconciliation-preview&id=11838`
-consulta o boleto na API v2 e a fatura atual na Brudam. Ela usa as mesmas
-validações de identidade, pagamento, saldo e IDs internos da baixa, mas não
-grava no Redis nem chama `POST /financeiro/liquidar/lancamento`. O resultado
-informa se a fatura está apta, já liquidada, bloqueada ou apenas aguardando
-liberação em `ITAU_RECONCILIATION_INVOICE_IDS`. A execução efetiva sempre
-refaz as conferências; a prévia não reserva nem autoriza uma baixa.
+Na área **Liquidar Faturas**, o botão **Liquidar fatura** inicia uma varredura
+manual dos boletos prontos registrados no Redis, ainda não conciliados. A rota
+autenticada `POST /api/faturamento/cobranca?route=bank-reconciliation-batch`
+recebe `{"afterInvoiceId":""}` e devolve lotes de até oito faturas, com
+`hasMore` e `nextCursor`. A interface continua a paginação até o fim (ou
+oferece **Continuar liquidação** após cem lotes), sem mover o cursor do
+agendador nem acionar o envio de cobranças. A varredura manual inclui os
+boletos Itaú independentemente da lista temporária
+`ITAU_RECONCILIATION_INVOICE_IDS`; isso não altera a restrição do agendador.
+Cada baixa ainda exige pagamento integral confirmado pelo banco, identidade
+do boleto e fatura aberta com saldo compatível na Brudam. A consulta
+Bradesco permanece na janela D-1 documentada pelo banco. O servidor exige
+sessão administrativa, mesma origem e trava contra outra execução financeira.
+Tentativas de baixa com resultado incerto nunca são repetidas automaticamente.
 
-Para homologar uma fatura individual sem acionar toda a rotina de cobrança,
-após a prévia apta, o botão **Liquidar esta fatura** chama
-`POST /api/faturamento/cobranca?route=itau-reconciliation-run` com
-`{"invoiceId":"11838"}`. Exige sessão administrativa, mesma origem e inclusão
-explícita do número em `ITAU_RECONCILIATION_INVOICE_IDS`; o valor `*` não
-autoriza esta ação direcionada. A consulta ao Itaú e à Brudam é refeita,
-aproveitando o mesmo lock e o mesmo registro `submission_pending` da rotina
-automática. Esta ação não percorre nem envia cobranças de outras faturas.
+A seção **Liquidar boleto manualmente** aceita número de fatura com boleto
+Itaú ou Bradesco. `GET /api/faturamento/cobranca?route=bank-reconciliation-preview&id=11838`
+consulta o banco correspondente e a fatura atual na Brudam, mas não grava no
+Redis nem chama `POST /financeiro/liquidar/lancamento`. Após uma prévia apta,
+**Liquidar esta fatura** chama
+`POST /api/faturamento/cobranca?route=bank-reconciliation-invoice` com
+`{"invoiceId":"11838"}`. Exige sessão administrativa e mesma origem. A
+execução refaz as conferências e usa os mesmos locks e controles de
+idempotência da rotina automática. Não percorre outras faturas nem envia
+cobranças. As rotas antigas `itau-reconciliation-preview` e
+`itau-reconciliation-run` permanecem para compatibilidade e preservam a
+restrição por lista explícita do Itaú.
 
 ### Recuperação pontual da fatura 11838
 
