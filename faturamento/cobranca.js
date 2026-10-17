@@ -1373,7 +1373,7 @@
       await Promise.all([loadPending(), loadLogs()]);
       const incomplete = Boolean(result?.stoppedByLimit && Number(result.remaining || 0) > 0);
       setMessage(
-        `Verificação concluída em ${round} lote(s): ${totals.reconciled} boleto(s) conferido(s), ${totals.bankSettled} fatura(s) liquidada(s) automaticamente, ${totals.processed} fatura(s) emitida(s) hoje, perto do vencimento ou vencida(s) examinada(s), ${totals.discovered} nova(s) fatura(s) registrada(s), ${totals.sent} e-mail(s) enviado(s), ${totals.retryable} envio(s) não aceito(s) para nova tentativa, ${totals.review} resultado(s) em conferência, ${totals.pendingDoccob} aguardando DOCCOB, ${totals.blocked} fatura(s) bloqueada(s) e ${totals.errors.length} outro(s) erro(s).${incomplete ? ` ${result.remaining || 0} fatura(s) continuarão na próxima verificação.` : ''}`,
+        `Verificação concluída em ${round} lote(s): ${totals.reconciled} boleto(s) conferido(s), ${totals.bankSettled} fatura(s) liquidada(s) automaticamente, ${totals.processed} fatura(s) da fila examinada(s), ${totals.discovered} nova(s) fatura(s) registrada(s), ${totals.sent} e-mail(s) enviado(s), ${totals.retryable} envio(s) não aceito(s) para nova tentativa, ${totals.review} resultado(s) em conferência, ${totals.pendingDoccob} aguardando DOCCOB, ${totals.blocked} fatura(s) bloqueada(s) e ${totals.errors.length} outro(s) erro(s).${incomplete ? ` ${result.remaining || 0} fatura(s) continuarão na próxima verificação.` : ''}`,
         totals.errors.length || totals.retryable || totals.review || incomplete ? 'warning' : 'success'
       );
     } catch (error) {
