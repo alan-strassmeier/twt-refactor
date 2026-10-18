@@ -239,6 +239,53 @@ const sendBillingEmail = async ({
   };
 };
 
+const jointBillingSubject = 'faturas em aberto';
+
+const jointBillingText = ({ companyName, invoiceIds, paymentMethod, totalBalance }) => [
+  `Aviso de Faturamento das faturas ${invoiceIds.join(', ')}`,
+  '',
+  `Prezado(a) ${companyName}`,
+  'Segue faturas em anexo.',
+  `Forma de pagamento: ${paymentMethod}`,
+  `Valor Total: ${formatCurrency(totalBalance)}`
+].join('\n');
+
+const jointBillingHtml = ({ companyName, invoiceIds, paymentMethod, totalBalance }) => `<!doctype html>
+<html lang="pt-BR"><body style="font-family:Arial,sans-serif;color:#1a3145">
+<h1>Aviso de Faturamento das faturas ${htmlEscape(invoiceIds.join(', '))}</h1>
+<p>Prezado(a) ${htmlEscape(companyName)}</p>
+<p>Segue faturas em anexo.</p>
+<p>Forma de pagamento: ${htmlEscape(paymentMethod)}<br>Valor Total: ${htmlEscape(formatCurrency(totalBalance))}</p>
+</body></html>`;
+
+const sendJointBillingEmail = async ({
+  recipients, companyName, invoiceIds, paymentMethod, totalBalance,
+  attachments, clientReference, transport, config = zohoConfig()
+}) => {
+  const activeTransport = transport || createZohoTransport(config);
+  const content = { companyName, invoiceIds, paymentMethod, totalBalance };
+  const info = await activeTransport.sendMail({
+    disableFileAccess: true,
+    disableUrlAccess: true,
+    from: { name: config.fromName, address: config.fromEmail },
+    to: recipients.map((contact) => ({
+      name: [contact.firstName, contact.lastName].filter(Boolean).join(' '),
+      address: contact.email
+    })),
+    headers: { 'X-TM-CLIENT-REF': clientReference },
+    subject: jointBillingSubject,
+    text: jointBillingText(content),
+    html: jointBillingHtml(content),
+    attachments
+  });
+  return {
+    messageId: String(info.messageId || ''),
+    accepted: Array.isArray(info.accepted) ? info.accepted.map(String) : [],
+    rejected: Array.isArray(info.rejected) ? info.rejected.map(String) : [],
+    response: String(info.response || '')
+  };
+};
+
 module.exports = {
   DEFAULT_ALERT_EMAIL,
   LEGACY_ALERT_EMAIL,
@@ -256,5 +303,9 @@ module.exports = {
   billingHtml,
   billingAttachments,
   billingEmailPreview,
-  sendBillingEmail
+  sendBillingEmail,
+  jointBillingSubject,
+  jointBillingText,
+  jointBillingHtml,
+  sendJointBillingEmail
 };

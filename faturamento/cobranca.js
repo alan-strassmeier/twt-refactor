@@ -11,7 +11,16 @@
     collectionSectionPanels: [...document.querySelectorAll('.collection-anchor-target')],
     message: document.getElementById('collectionMessage'),
     runButton: document.getElementById('runCollectionButton'),
-    bankDiagnosticButton: document.getElementById('bankDiagnosticButton'),
+    categorySearchForm: document.getElementById('categorySearchForm'),
+    categorySearchInput: document.getElementById('categorySearchInput'),
+    jointSearchForm: document.getElementById('jointBillingSearchForm'),
+    jointMatches: document.getElementById('jointBillingMatches'),
+    jointPreview: document.getElementById('jointBillingPreview'),
+    jointCompany: document.getElementById('jointBillingCompany'),
+    jointRecipients: document.getElementById('jointBillingRecipients'),
+    jointTotal: document.getElementById('jointBillingTotal'),
+    jointRows: document.getElementById('jointBillingRows'),
+    jointSendButton: document.getElementById('sendJointBillingButton'),
     itauReconciliationPreviewForm: document.getElementById('itauReconciliationPreviewForm'),
     itauReconciliationInvoiceId: document.getElementById('itauReconciliationInvoiceId'),
     itauReconciliationPreviewResult: document.getElementById('itauReconciliationPreviewResult'),
@@ -91,7 +100,8 @@
     paymentImport: null,
     categoryToDelete: null,
     categoryDeleteTrigger: null,
-    emailLogTrigger: null
+    emailLogTrigger: null,
+    jointPreview: null
   };
   const endpoint = (route, query = {}) => {
     const params = new URLSearchParams({ route, ...query });
@@ -197,31 +207,6 @@
     });
     elements.previousLogPage.disabled = loading || state.logPage <= 1;
     elements.nextLogPage.disabled = loading || state.logPage >= state.logTotalPages;
-  };
-
-  const bankDiagnosticMessage = (result) => {
-    const describeShape = (shape) => shape
-      ? ` [HTTP ${shape.upstreamStatus}; host ${shape.queryHost}; ${shape.contentType}; `
-        + `raiz ${shape.rootType} (${shape.rootFields.join(', ') || 'sem campos'}); `
-        + `data ${shape.dataType} (${shape.dataLength ?? '?'} registro(s), `
-        + `campos: ${shape.firstItemFields.join(', ') || 'nenhum'}); `
-        + `page ${shape.pageType} (${shape.pageFields.join(', ') || 'sem campos'}); `
-        + `pagination ${shape.paginationType} (${shape.paginationFields.join(', ') || 'sem campos'}); `
-        + `página ${shape.returnedPage ?? '?'} de ${shape.totalPages ?? '?'} `
-        + `(solicitada ${shape.requestedPage})]`
-      : '';
-    const describeBank = (name, bank) => bank?.ok
-      ? `${name}: consulta autorizada (${Number(bank.records || 0)} registro(s), data ${formatDate(bank.queriedDate)})`
-      : `${name}: falha — ${bank?.message || 'resposta não identificada'}${describeShape(bank?.responseShape)}`;
-    const configuration = result?.brudamConfiguration || {};
-    const configured = configuration.paymentMethod
-      && configuration.itauAccount
-      && configuration.bradescoAccount;
-    return [
-      describeBank('Itaú', result?.banks?.itau),
-      describeBank('Bradesco', result?.banks?.bradesco),
-      `Brudam: ${configured ? 'IDs configurados' : 'configuração incompleta'}`
-    ].join(' · ');
   };
 
   const deleteContact = async (cnpj, id) => {
@@ -576,6 +561,65 @@
     renderCategories(await requestJson(endpoint('categories')));
   };
 
+  const searchKey = (value) => String(value || '').normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('pt-BR').trim();
+  const matchingCategories = (term) => {
+    const normalized = searchKey(term);
+    const numeric = String(term || '').replace(/\D/g, '');
+    return state.categories.filter((category) =>
+      searchKey(category.name).includes(normalized)
+      || (numeric.length >= 3 && String(category.cnpj).includes(numeric)));
+  };
+
+  const renderJointPreview = (preview) => {
+    state.jointPreview = preview;
+    elements.jointPreview.hidden = false;
+    elements.jointCompany.textContent = `${preview.company.name} · ${formatCnpj(preview.company.cnpj)}`;
+    elements.jointRecipients.textContent = `${preview.recipients.length} destinatário(s) ativo(s)`;
+    elements.jointTotal.textContent = `Total em aberto: ${formatMoney(preview.totalBalance)}`;
+    elements.jointRows.replaceChildren(...preview.invoices.map((invoice) => {
+      const row = document.createElement('tr');
+      appendInvoiceNavigationCell(row, invoice.id);
+      appendCell(row, formatDate(invoice.issuedAt));
+      appendCell(row, formatDate(invoice.dueAt));
+      appendCell(row, formatMoney(invoice.balance));
+      appendCell(row, invoice.blocked ? 'Bloqueado'
+        : invoice.jointSent ? 'Já enviado em conjunto' : 'Disponível');
+      return row;
+    }));
+    elements.jointSendButton.disabled = preview.invoices.length === 0
+      || preview.recipients.length === 0 || preview.blockedCount > 0 || preview.jointSentCount > 0;
+    if (preview.blockedCount) {
+      setMessage(`${preview.blockedCount} fatura(s) com envio bloqueado. O envio conjunto requer que todas estejam disponíveis.`, 'warning');
+    } else if (preview.jointSentCount) {
+      setMessage(`${preview.jointSentCount} fatura(s) já reservadas ou enviadas em conjunto. Confira os logs antes de repetir.`, 'warning');
+    } else if (!preview.invoices.length) {
+      setMessage('Esta empresa não possui faturas em aberto elegíveis para envio.', 'warning');
+    } else if (!preview.recipients.length) {
+      setMessage('Cadastre ao menos um destinatário ativo antes de enviar.', 'warning');
+    } else {
+      setMessage(`${preview.invoices.length} fatura(s) em aberto encontradas. Confira antes do envio.`, 'success');
+    }
+  };
+
+  const loadJointCompany = async (category) => {
+    setLoading(true);
+    setMessage(`Buscando faturas em aberto de ${category.name}…`);
+    elements.jointPreview.hidden = true;
+    state.jointPreview = null;
+    try {
+      const preview = await requestJson(endpoint('joint-billing', { cnpj: category.cnpj }));
+      renderJointPreview(preview);
+    } catch (error) {
+      setMessage(error.message, 'error');
+    } finally {
+      setLoading(false);
+      elements.jointSendButton.disabled = !state.jointPreview?.invoices?.length
+        || !state.jointPreview?.recipients?.length || state.jointPreview.blockedCount > 0
+        || state.jointPreview.jointSentCount > 0;
+    }
+  };
+
   const renderPending = (payload) => {
     const allIssues = Array.isArray(payload.issues) ? payload.issues : [];
     const issues = state.pendingFilter === 'all'
@@ -746,7 +790,8 @@
   const EVENT_LABELS = {
     initial: 'Envio inicial',
     reminder: 'Perto do vencimento',
-    overdue: 'Fatura vencida'
+    overdue: 'Fatura vencida',
+    joint: 'Envio em conjunto'
   };
   const STATUS_LABELS = {
     accepted: 'Aguardando confirmação',
@@ -1158,6 +1203,82 @@
     }
   });
 
+  elements.categorySearchForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const matches = matchingCategories(elements.categorySearchInput.value);
+    if (!matches.length) {
+      setMessage('Nenhuma empresa cadastrada corresponde à busca.', 'warning');
+      return;
+    }
+    const card = [...elements.categoryList.querySelectorAll('.category-card')]
+      .find((item) => item.dataset.cnpj === matches[0].cnpj);
+    if (!card) return;
+    card.open = true;
+    card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    card.querySelector('summary')?.focus();
+    setMessage(matches.length > 1
+      ? `${matches.length} empresas encontradas. Mostrando a primeira: ${matches[0].name}.`
+      : `Empresa encontrada: ${matches[0].name}.`, 'success');
+  });
+
+  elements.jointSearchForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const matches = matchingCategories(elements.jointSearchForm.elements.company.value);
+    elements.jointMatches.replaceChildren();
+    elements.jointPreview.hidden = true;
+    state.jointPreview = null;
+    if (!matches.length) {
+      setMessage('Nenhuma empresa cadastrada corresponde à busca.', 'warning');
+      return;
+    }
+    if (matches.length === 1) {
+      loadJointCompany(matches[0]);
+      return;
+    }
+    const prompt = document.createElement('p');
+    prompt.textContent = `${matches.length} empresas encontradas. Escolha uma:`;
+    elements.jointMatches.appendChild(prompt);
+    for (const category of matches) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'button button-quiet';
+      button.textContent = `${category.name} · ${formatCnpj(category.cnpj)}`;
+      button.addEventListener('click', () => {
+        elements.jointMatches.replaceChildren();
+        loadJointCompany(category);
+      });
+      elements.jointMatches.appendChild(button);
+    }
+    setMessage('Selecione a empresa para consultar as faturas.', '');
+  });
+
+  elements.jointSendButton.addEventListener('click', async () => {
+    const preview = state.jointPreview;
+    if (!preview?.invoices?.length || !preview.recipients?.length
+      || preview.blockedCount || preview.jointSentCount) return;
+    const invoiceIds = preview.invoices.map((invoice) => invoice.id);
+    if (!window.confirm(`Enviar uma única cobrança para ${preview.company.name}, com ${invoiceIds.length} fatura(s) e anexos, a ${preview.recipients.length} destinatário(s)?`)) return;
+    setLoading(true);
+    setMessage('Preparando anexos e reconfirmando os saldos na Brudam…');
+    try {
+      const result = await requestJson(endpoint('joint-billing'), {
+        method: 'POST',
+        body: JSON.stringify({ cnpj: preview.company.cnpj, invoiceIds })
+      });
+      state.jointPreview = null;
+      elements.jointSendButton.disabled = true;
+      setMessage(result.message, result.status === 'review' ? 'warning' : 'success');
+      try { await loadLogs({ page: 1 }); } catch {
+        setMessage(`${result.message} Os logs não puderam ser atualizados agora.`, 'warning');
+      }
+    } catch (error) {
+      setMessage(error.message, 'error');
+    } finally {
+      setLoading(false);
+      elements.jointSendButton.disabled = !state.jointPreview;
+    }
+  });
+
   elements.logsForm.addEventListener('submit', async (event) => {
     event.preventDefault();
     const filters = logFilters();
@@ -1264,21 +1385,6 @@
       setLoading(false);
     }
   });
-
-  if (elements.bankDiagnosticButton) {
-    elements.bankDiagnosticButton.addEventListener('click', async () => {
-      setLoading(true);
-      setMessage('Consultando Itaú e Bradesco em modo somente leitura…');
-      try {
-        const result = await requestJson(endpoint('bank-diagnostic'));
-        setMessage(bankDiagnosticMessage(result), result.ok ? 'success' : 'warning');
-      } catch (error) {
-        setMessage(error.message, 'error');
-      } finally {
-        setLoading(false);
-      }
-    });
-  }
 
   if (elements.itauReconciliationPreviewForm) {
     const runButton = elements.itauReconciliationRunButton;

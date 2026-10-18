@@ -262,40 +262,70 @@ const processWebhookPayload = async (payload, dependencies = {}) => {
 
     try {
       const current = await store.getDelivery(reference.event, reference.invoiceId, reference.email) || {};
-      const currentTimestamp = Date.parse(current.providerEventAt || '');
+      const recipientEmail = String(event.email || '').trim().toLocaleLowerCase('pt-BR');
+      const previousEvent = reference.jointBilling && recipientEmail
+        ? current.recipientEvents?.[recipientEmail] : current;
+      const currentTimestamp = Date.parse(previousEvent?.providerEventAt || '');
       const nextTimestamp = Date.parse(event.providerEventAt || '');
       if (Number.isFinite(currentTimestamp) && Number.isFinite(nextTimestamp) && nextTimestamp < currentTimestamp) {
         summary.ignored += 1;
         continue;
       }
       const receivedAt = now().toISOString();
+      const recipientEvents = reference.jointBilling && recipientEmail ? {
+        ...(current.recipientEvents || {}),
+        [recipientEmail]: {
+          status: event.status,
+          ...(event.providerEventAt ? { providerEventAt: event.providerEventAt } : {})
+        }
+      } : null;
+      const expectedEmails = Array.isArray(reference.recipientEmails)
+        ? reference.recipientEmails.map((email) => String(email).toLocaleLowerCase('pt-BR')) : [];
+      const jointState = recipientEvents
+        ? expectedEmails.length && expectedEmails.every((email) => recipientEvents[email]?.status === 'delivered')
+          ? 'delivered'
+          : expectedEmails.some((email) => ['soft_bounce', 'hard_bounce', 'bounced'].includes(
+            recipientEvents[email]?.status
+          )) ? 'review' : current.state || 'sent'
+        : reference.jointBilling ? 'review' : event.status;
+      const loggedStatus = reference.jointBilling && !recipientEmail ? 'review' : event.status;
       const record = {
         ...current,
-        state: event.status,
-        webhookStatus: event.status,
+        state: jointState,
+        webhookStatus: loggedStatus,
         webhookUpdatedAt: receivedAt,
+        ...(recipientEvents ? { recipientEvents } : {}),
         ...(event.providerEventAt ? { providerEventAt: event.providerEventAt } : {}),
         ...(event.emailReference ? { emailReference: event.emailReference } : {}),
         ...(event.diagnostic ? { diagnostic: event.diagnostic } : {})
       };
       await store.saveDelivery(reference.event, reference.invoiceId, reference.email, record);
-      await store.addLog({
-        createdAt: receivedAt,
-        event: reference.billingEvent || reference.event,
-        status: event.status,
-        invoiceId: String(reference.invoiceId),
-        clientCnpj: reference.clientCnpj,
-        clientName: reference.clientName,
-        contactName: reference.contactName,
-        email: reference.email || event.email,
-        ...(reference.manualResend ? { manualResend: true } : {}),
-        ...(reference.recipientRole ? { recipientRole: reference.recipientRole } : {}),
-        clientReference: event.clientReference,
-        ...(reference.emailPreview ? { emailPreview: reference.emailPreview } : {}),
-        ...(event.emailReference ? { emailReference: event.emailReference } : {}),
-        ...(event.providerEventAt ? { providerEventAt: event.providerEventAt } : {}),
-        message: statusMessage(event.status, event.diagnostic)
-      });
+      const invoiceIds = reference.jointBilling && Array.isArray(reference.invoiceIds)
+        ? reference.invoiceIds : [reference.invoiceId];
+      for (const invoiceId of invoiceIds) {
+        await store.addLog({
+          createdAt: receivedAt,
+          event: reference.billingEvent || reference.event,
+          status: loggedStatus,
+          invoiceId: String(invoiceId),
+          clientCnpj: reference.clientCnpj,
+          clientName: reference.clientName,
+          contactName: reference.contactName,
+          email: reference.jointBilling
+            ? event.email || (reference.recipientEmails || []).join(', ')
+            : reference.email || event.email,
+          ...(reference.jointBilling ? { jointBilling: true, invoiceIds } : {}),
+          ...(reference.manualResend ? { manualResend: true } : {}),
+          ...(reference.recipientRole ? { recipientRole: reference.recipientRole } : {}),
+          clientReference: event.clientReference,
+          ...(reference.emailPreview ? { emailPreview: reference.emailPreview } : {}),
+          ...(event.emailReference ? { emailReference: event.emailReference } : {}),
+          ...(event.providerEventAt ? { providerEventAt: event.providerEventAt } : {}),
+          message: reference.jointBilling && !recipientEmail
+            ? 'O provedor não informou qual destinatário recebeu o evento. Confira a entrega manualmente.'
+            : statusMessage(event.status, event.diagnostic)
+        });
+      }
       summary.processed += 1;
     } catch (error) {
       try {
