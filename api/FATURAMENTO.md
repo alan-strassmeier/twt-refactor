@@ -202,16 +202,16 @@ essa cópia e são identificados como conteúdo indisponível.
 
 Em cada execução o servidor:
 
-1. consulta faturas em aberto emitidas no dia e reprocessa as que aguardavam
-   DOCCOB;
+1. consulta primeiro as faturas em aberto emitidas nas últimas 72 horas
+   (incluindo o dia da borda, pois a Brudam filtra emissão apenas por data);
 2. envia o aviso inicial somente quando consegue montar o PDF da fatura e, para
    pagamentos que não sejam TED/DOC, anexar também o boleto. Para faturas DSL,
    reúne e anexa em um único PDF todos os DACTEs vinculados no DOCCOB;
-3. consulta as faturas em aberto com vencimento dois dias depois e envia o
-   aviso **Perto do vencimento** com prioridade alta;
-4. consulta faturas ainda em aberto dois dias depois do vencimento e envia o
-   aviso de vencida com prioridade alta. No primeiro dia após o vencimento não
-   há envio automático de aviso vencido;
+3. em seguida percorre as faturas em aberto e envia **Perto do vencimento**
+   quando faltam até dois dias, com prioridade alta;
+4. nessa mesma lista, envia aviso de vencida a partir de dois dias após o
+   vencimento, com prioridade alta. No primeiro dia após o vencimento não há
+   envio automático de aviso vencido;
 5. envia uma mensagem separada para `BILLING_ALERT_EMAIL` nos avisos próximos
    do vencimento e vencidos, sem incluir o endereço em cópia nas mensagens dos
    clientes.
@@ -237,10 +237,13 @@ Timeouts durante a transmissão e falhas ao registrar um aceite continuam como
 Registros antigos de conferência não são liberados automaticamente após a
 atualização, pois não é possível provar retroativamente se o SMTP os aceitou.
 
-O botão **Verificar agora** e as quatro rotinas automáticas consultam somente
-três grupos: faturas emitidas no dia, faturas que entram na janela de aviso de
-vencimento e faturas vencidas. Essa rotina não percorre mais a Central de
-pendências nem realiza uma consulta geral de todas as faturas em aberto.
+O botão **Verificar agora** e as quatro rotinas automáticas consultam primeiro
+as emissões recentes e depois todas as faturas em aberto, em páginas com
+cursores separados no Redis. A primeira página é revisitada em cada rodada
+para captar novas faturas; as páginas seguintes avançam nas execuções
+posteriores. Itens descobertos que excedem o limite de processamento ficam
+registrados na fila. A rotina não percorre a Central de pendências; na
+varredura geral só entram na fila faturas elegíveis para aviso de vencimento.
 
 O botão **Atualizar** da Central de pendências possui um fluxo separado. Para
 cada item visível ele consulta primeiro a situação financeira atual na Brudam.
@@ -252,8 +255,16 @@ intervalos entre consultas para respeitar o limite da API da Brudam.
 
 O plano Hobby da Vercel não executa vários crons diários. O diretório
 `cloudflare/billing-cron` contém um Worker da Cloudflare configurado para chamar
-a rotina às **07:00, 12:00, 16:00 e 22:00**, no horário de São Paulo. O cron do
-Cloudflare está expresso em UTC como `0 1,10,15,19 * * *`. Troque o domínio em
+a rotina **de hora em hora, de segunda a sexta-feira**, no horário de São Paulo.
+Os crons do Cloudflare estão expressos em UTC como `0 3-23 * * mon-fri` e
+`0 0-2 * * tue-sat`, com uma verificação adicional do dia local no Worker.
+Cada disparo faz primeiro a conciliação completa dos boletos em lotes de até
+25 via `route=bank-reconciliation-cron`. O cursor persiste no Redis entre
+horários; se houver falhas ou a lista exceder 20 lotes, a cobrança é adiada
+até uma execução completar a conferência. Só então o Worker chama
+`route=process&bankReconciled=1`, passando os totais da conferência para o
+resumo da execução sem repetir as consultas bancárias.
+Troque o domínio em
 `wrangler.jsonc` somente se o domínio de produção deixar de ser `www.twt.com.br`.
 Configure na Vercel um `BILLING_CRON_SECRET` aleatório com pelo menos 32 caracteres e
 cadastre exatamente o mesmo valor no Worker:
@@ -267,23 +278,31 @@ npx wrangler deploy
 O botão **Verificar agora** usa a sessão administrativa e executa o mesmo fluxo
 sem depender do agendamento. Quando a fila ultrapassa o limite seguro de uma
 função da Vercel, o navegador continua automaticamente em novos lotes. Somente
-a primeira rodada consulta as três janelas na Brudam; as continuações tratam
+a primeira rodada consulta emissões recentes e faturas abertas na Brudam; as continuações tratam
 apenas os registros **Aguardando processamento** descobertos pela mesma
 execução, sem absorver pendências antigas de DOCCOB, contato ou pagamento.
 
 ### Conciliação bancária e liquidação na Brudam
 
-Antes de cada verificação normal, o sistema percorre em lotes os boletos
-registrados no Redis que ainda não possuem conciliação concluída. As consultas
-bancárias rodam em paralelo com as três janelas de cobrança; uma fatura é
-reconfirmada na Brudam imediatamente antes de qualquer baixa.
+No agendamento, o Worker termina a varredura de todos os boletos registrados
+no Redis que ainda não possuem conciliação concluída antes de iniciar a
+cobrança. A rota `bank-reconciliation-cron` exige o segredo do agendador,
+mantém um cursor próprio no Redis e usa a mesma validação do botão de
+liquidação. Em uma verificação manual de cobrança, a conciliação limitada
+também termina antes da leitura da fila. Cada fatura é reconfirmada na
+Brudam imediatamente antes de qualquer baixa.
 
-A baixa automática Itaú começa desabilitada: sem
+A conciliação limitada da rota geral `route=process`, quando chamada sem a
+conferência prévia do Worker (por exemplo, por **Verificar agora**), mantém
+a restrição Itaú: sem
 `ITAU_RECONCILIATION_INVOICE_IDS`, nenhum boleto Itaú novo é liquidado. Para
 testar apenas as faturas separadas, configure `11817,11838`; depois de
 homologar os resultados, `*` libera todas as faturas Itaú registradas. A
 conferência de uma tentativa anterior com status `submission_pending` continua
-ativa mesmo fora da lista, mas nunca repete o POST na Brudam.
+ativa mesmo fora da lista, mas nunca repete o POST na Brudam. A varredura
+completa do Worker, tal como o botão **Liquidar fatura**, não usa essa lista:
+inclui todos os boletos Itaú e Bradesco prontos, com as mesmas validações de
+pagamento, saldo e idempotência.
 
 No Itaú, a conciliação usa `GET /boletoscash/v2/boletos` com beneficiário,
 carteira e Nosso Número do boleto registrado. Confere ainda CPF/CNPJ do

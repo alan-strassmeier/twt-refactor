@@ -168,7 +168,7 @@ const shouldDeferHistoricalInvoice = (invoice, currentDate) => (
 
 const buildBillingQueue = ({
   pending = [],
-  today = [],
+  recent = [],
   reminder = [],
   overdue = [],
   reconciliation = [],
@@ -207,18 +207,17 @@ const buildBillingQueue = ({
   }));
   const actionablePending = pendingInvoices.filter((_invoice, index) => pending[index]?.reason !== 'queued');
   const queuedPending = pendingInvoices.filter((_invoice, index) => pending[index]?.reason === 'queued');
-  // Faturas recém-emitidas e lembretes do dia entram primeiro. Logo depois,
-  // pendências já conhecidas são revalidadas antes da fila técnica acumulada.
-  today.forEach((invoice) => {
+  // A fila técnica já descoberta precisa avançar antes de redescobrir a mesma
+  // janela de 72h; cada item será revalidado por ID antes de qualquer envio.
+  queuedPending.forEach((invoice) => {
+    enqueue(automaticBillingEventForInvoice(invoice, currentDate), [invoice], true);
+  });
+  // Depois vêm as emissões recentes e os avisos da lista de abertas.
+  recent.forEach((invoice) => {
     enqueue(automaticBillingEventForInvoice(invoice, currentDate), [invoice]);
   });
   enqueue(EVENT_TYPES.reminder, reminder);
   actionablePending.forEach((invoice) => {
-    enqueue(automaticBillingEventForInvoice(invoice, currentDate), [invoice], true);
-  });
-  // A fila técnica já descoberta não deve depender de outra varredura da Brudam.
-  // Cada item será revalidado por ID antes de qualquer envio.
-  queuedPending.forEach((invoice) => {
     enqueue(automaticBillingEventForInvoice(invoice, currentDate), [invoice], true);
   });
   enqueue(EVENT_TYPES.overdue, overdue);
@@ -343,24 +342,42 @@ const scanInvoicesSafely = async (scope, filters, options) => {
 const scanInvoices = async (filters, {
   startSkip = 0,
   maxPages = 2,
+  refreshFirstPage = false,
   fetch = fetchInvoiceScanPage
 } = {}) => {
   const invoices = [];
+  const seen = new Set();
   const expected = new URLSearchParams();
   Object.entries(filters).forEach(([key, value]) => expected.set(key, String(value)));
   let skip = startSkip;
   let hasMore = false;
   let pages = 0;
+  const collect = (result) => {
+    const page = Array.isArray(result.invoices) ? result.invoices : [];
+    page.filter((invoice) => invoiceMatchesQuery(invoice, expected))
+      .filter(isPendingInvoice)
+      .forEach((invoice) => {
+        const id = String(invoice.id || '');
+        if (!seen.has(id)) {
+          seen.add(id);
+          invoices.push(invoice);
+        }
+      });
+    return Boolean(result.pagination?.hasMore);
+  };
+  // A primeira página contém emissões/alterações novas. O cursor continua
+  // percorrendo as páginas antigas sem depender apenas de um deslocamento fixo.
+  if (refreshFirstPage && startSkip > 0) {
+    hasMore = collect(await fetch({ ...filters, limit: PAGE_SIZE, skip: 0 }));
+    pages += 1;
+    if (!hasMore) return { invoices, pages, hasMore: false, nextSkip: 0 };
+  }
   do {
     const result = await fetch({ ...filters, limit: PAGE_SIZE, skip });
-    const page = Array.isArray(result.invoices) ? result.invoices : [];
-    invoices.push(...page
-      .filter((invoice) => invoiceMatchesQuery(invoice, expected))
-      .filter(isPendingInvoice));
-    hasMore = Boolean(result.pagination?.hasMore);
+    hasMore = collect(result);
     pages += 1;
     skip += PAGE_SIZE;
-  } while (hasMore && pages < maxPages);
+  } while (hasMore && pages < maxPages + (refreshFirstPage && startSkip > 0 ? 1 : 0));
   return { invoices, pages, hasMore, nextSkip: hasMore ? skip : 0 };
 };
 
@@ -1414,20 +1431,16 @@ const runBillingCollection = async (dependencies = {}) => {
   const nowFactory = dependencies.now || (() => new Date());
   const startedAt = nowFactory();
   const deadline = startedAt.getTime() + config.deadlineMs;
-  const [pending, overdueStart] = await Promise.all([
-    (dependencies.listPending || store.listPending)(),
-    (dependencies.getOverdueCursor || store.getOverdueCursor)()
-  ]);
-  const currentPending = pending;
-  const pendingByInvoice = new Map(
-    currentPending.map((record) => [String(record.invoiceId), record])
-  );
-  const fetch = dependencies.fetchInvoices || fetchInvoiceScanPage;
-
-  const emptyScan = { invoices: [], pages: 0, hasMore: false, nextSkip: 0 };
-  const bankReconciliationPromise = continuation
-    ? Promise.resolve({ checked: 0, settled: 0, alreadySettled: 0, pending: 0, errors: [] })
-    : (dependencies.reconcileBankPayments || reconcileBankPayments)({
+  const recentFrom = saoPauloDate(new Date(
+    new Date(dependencies.currentTime || new Date()).getTime() - 72 * 60 * 60 * 1000
+  ));
+  // A baixa bancária termina antes de ler a fila ou buscar faturas na Brudam.
+  // Assim, a cobrança usa o estado financeiro atualizado nesta execução.
+  const bankReconciliation = continuation
+    ? { checked: 0, settled: 0, alreadySettled: 0, pending: 0, errors: [] }
+    : dependencies.bankReconciliationSummary
+    ? { ...dependencies.bankReconciliationSummary, errors: [] }
+    : await (dependencies.reconcileBankPayments || reconcileBankPayments)({
       currentDate,
       maxRecords: config.maxBankReconciliations
     }, dependencies).catch((error) => ({
@@ -1441,47 +1454,67 @@ const runBillingCollection = async (dependencies = {}) => {
         message: String(error.message || error).slice(0, 300)
       }]
     }));
-  const scanResults = continuation
-    ? [
-      { scan: emptyScan, error: null },
-      { scan: emptyScan, error: null },
-      { scan: emptyScan, error: null }
-    ]
-    : await Promise.all([
-      scanInvoicesSafely('faturas emitidas hoje', { 'emissao[eq]': currentDate, status: '0' }, {
-        maxPages: config.maxPages,
-        fetch
-      }),
-      scanInvoicesSafely('faturas perto do vencimento', {
-        'vencimento[eq]': addDays(currentDate, 2),
-        status: '0'
-      }, { maxPages: config.maxPages, fetch }),
-      scanInvoicesSafely('faturas vencidas', {
-        'vencimento[lte]': addDays(currentDate, -2),
-        status: '0'
-      }, {
-        startSkip: overdueStart,
-        maxPages: config.maxPages,
-        fetch
-      })
-    ]);
-  const bankReconciliation = await bankReconciliationPromise;
-  const [todayResult, reminderResult, overdueResult] = scanResults;
-  const todayScan = todayResult.scan;
-  const reminderScan = reminderResult.scan;
-  const overdueScan = overdueResult.scan;
+  const [pending, recentCursor, openStart] = await Promise.all([
+    (dependencies.listPending || store.listPending)(),
+    continuation ? { from: recentFrom, skip: 0 } :
+      (dependencies.getRecentIssuedCursor || store.getRecentIssuedCursor)(),
+    continuation ? 0 : (dependencies.getOpenInvoiceCursor || store.getOpenInvoiceCursor)()
+  ]);
+  const currentPending = pending;
+  const pendingByInvoice = new Map(
+    currentPending.map((record) => [String(record.invoiceId), record])
+  );
+  const fetch = dependencies.fetchInvoices || fetchInvoiceScanPage;
+
+  const emptyScan = { invoices: [], pages: 0, hasMore: false, nextSkip: 0 };
+  let recentResult = { scan: emptyScan, error: null };
+  let openResult = { scan: emptyScan, error: null };
+  if (!continuation) {
+    // A Brudam filtra emissão por data, não por hora. Incluímos todo o dia
+    // da borda de 72h para que nenhuma fatura dessa janela seja omitida.
+    recentResult = await scanInvoicesSafely('faturas emitidas nas últimas 72 horas', {
+      'emissao[gte]': recentFrom,
+      'emissao[lte]': currentDate,
+      status: '0'
+    }, {
+      // O cursor não volta ao início à meia-noite: com muitas emissões,
+      // reiniciá-lo diariamente deixaria as páginas finais sem leitura.
+      startSkip: recentCursor.skip,
+      maxPages: config.maxPages,
+      refreshFirstPage: true,
+      fetch
+    });
+    if (!recentResult.error) {
+      await (dependencies.saveRecentIssuedCursor || store.saveRecentIssuedCursor)({
+        from: recentFrom,
+        skip: recentResult.scan.nextSkip
+      });
+    }
+    // Somente depois da busca das emissões recentes percorremos todas as
+    // abertas, reservando para aviso apenas as próximas ou já vencidas.
+    openResult = await scanInvoicesSafely('faturas em aberto para avisos', { status: '0' }, {
+      startSkip: openStart,
+      maxPages: config.maxPages,
+      refreshFirstPage: true,
+      fetch
+    });
+    if (!openResult.error) {
+      await (dependencies.saveOpenInvoiceCursor || store.saveOpenInvoiceCursor)(openResult.scan.nextSkip);
+    }
+  }
+  const recentScan = recentResult.scan;
+  const openScan = openResult.scan;
+  const reminderInvoices = openScan.invoices.filter((invoice) =>
+    automaticBillingEventForInvoice(invoice, currentDate) === EVENT_TYPES.reminder);
+  const overdueInvoices = openScan.invoices.filter((invoice) =>
+    automaticBillingEventForInvoice(invoice, currentDate) === EVENT_TYPES.overdue);
   const reconciliationErrors = (bankReconciliation.errors || []).map((error) => ({
     event: 'bank_reconciliation',
     invoiceId: String(error.invoiceId || ''),
     stage: error.bank ? `conciliação ${error.bank}` : 'conciliação bancária',
     message: String(error.message || 'Falha na conciliação bancária.').slice(0, 300)
   }));
-  const scanErrors = scanResults.map((result) => result.error).filter(Boolean);
-  if (!continuation) {
-    if (!overdueResult.error) {
-      await (dependencies.saveOverdueCursor || store.saveOverdueCursor)(overdueScan.nextSkip);
-    }
-  }
+  const scanErrors = [recentResult.error, openResult.error].filter(Boolean);
 
   const queuedForRun = currentPending.filter((record) => (
     record.reason === 'queued'
@@ -1493,9 +1526,9 @@ const runBillingCollection = async (dependencies = {}) => {
   ));
   const queue = buildBillingQueue({
     pending: queuedForRun,
-    today: todayScan.invoices,
-    reminder: reminderScan.invoices,
-    overdue: overdueScan.invoices,
+    recent: recentScan.invoices,
+    reminder: reminderInvoices,
+    overdue: overdueInvoices,
     reconciliation: [],
     currentDate
   });

@@ -32,8 +32,10 @@ const KEYS = Object.freeze({
   webhookEvents: 'faturamento:cobranca:webhook-eventos:v1',
   logs: 'faturamento:cobranca:logs:v1',
   invoiceBlocks: 'faturamento:cobranca:faturas-bloqueadas:v1',
-  overdueCursor: 'faturamento:cobranca:cursor:vencidas:v1',
+  recentIssuedCursor: 'faturamento:cobranca:cursor:emissoes-72h:v1',
+  openInvoiceCursor: 'faturamento:cobranca:cursor:abertas:v1',
   reconciliationCursor: 'faturamento:cobranca:cursor:reconciliacao:v1',
+  automaticBankScanCursor: 'faturamento:cobranca:cursor:liquidacao-automatica:v1',
   billingQueueCursor: 'faturamento:cobranca:cursor:fila:v1',
   processing: 'faturamento:cobranca:processamento:v1',
   paymentImports: 'faturamento:cobranca:importacao-pagamentos:v1',
@@ -549,17 +551,45 @@ const listLogs = async ({ invoiceId = '', date = '', cnpj = '', page = 1, limit 
   };
 };
 
-const getOverdueCursor = async (command = redisCommand) =>
-  Math.max(0, Number(await command('GET', KEYS.overdueCursor)) || 0);
+const getRecentIssuedCursor = async (command = redisCommand) => {
+  const value = parseRecord(await command('GET', KEYS.recentIssuedCursor), {});
+  return {
+    from: String(value.from || ''),
+    skip: Math.max(0, Number(value.skip) || 0)
+  };
+};
 
-const saveOverdueCursor = (cursor, command = redisCommand) =>
-  command('SET', KEYS.overdueCursor, String(Math.max(0, Number(cursor) || 0)));
+const saveRecentIssuedCursor = (cursor, command = redisCommand) => command(
+  'SET', KEYS.recentIssuedCursor, JSON.stringify({
+    from: String(cursor.from || ''),
+    skip: Math.max(0, Number(cursor.skip) || 0)
+  })
+);
+
+const getOpenInvoiceCursor = async (command = redisCommand) =>
+  Math.max(0, Number(await command('GET', KEYS.openInvoiceCursor)) || 0);
+
+const saveOpenInvoiceCursor = (cursor, command = redisCommand) =>
+  command('SET', KEYS.openInvoiceCursor, String(Math.max(0, Number(cursor) || 0)));
 
 const getReconciliationCursor = async (command = redisCommand) =>
   Math.max(0, Number(await command('GET', KEYS.reconciliationCursor)) || 0);
 
 const saveReconciliationCursor = (cursor, command = redisCommand) =>
   command('SET', KEYS.reconciliationCursor, String(Math.max(0, Number(cursor) || 0)));
+
+const getAutomaticBankScanCursor = async (command = redisCommand) => {
+  const value = String(await command('GET', KEYS.automaticBankScanCursor) || '');
+  return /^\d{1,20}$/.test(value) ? value : '';
+};
+
+const saveAutomaticBankScanCursor = (cursor, command = redisCommand) => {
+  const value = String(cursor || '');
+  if (value && !/^\d{1,20}$/.test(value)) {
+    throw new Error('Cursor de liquidação automática inválido.');
+  }
+  return command('SET', KEYS.automaticBankScanCursor, value);
+};
 
 const getBillingQueueCursor = async (command = redisCommand) =>
   Math.max(0, Number(await command('GET', KEYS.billingQueueCursor)) || 0);
@@ -730,10 +760,14 @@ module.exports = {
   saoPauloDate,
   filteredLogs,
   listLogs,
-  getOverdueCursor,
-  saveOverdueCursor,
+  getRecentIssuedCursor,
+  saveRecentIssuedCursor,
+  getOpenInvoiceCursor,
+  saveOpenInvoiceCursor,
   getReconciliationCursor,
   saveReconciliationCursor,
+  getAutomaticBankScanCursor,
+  saveAutomaticBankScanCursor,
   getBillingQueueCursor,
   saveBillingQueueCursor,
   claimProcessingRun,

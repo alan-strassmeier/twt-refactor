@@ -1,12 +1,23 @@
-# Agendamento diário da cobrança
+# Agendamento da liquidação e cobrança
 
 O plano Hobby da Vercel aceita cron apenas diário. Este Worker chama a função
-consolidada da Vercel quatro vezes por dia: **07:00, 12:00, 16:00 e 22:00**, no
-horário de São Paulo.
+consolidada da Vercel **de hora em hora, de segunda a sexta-feira**, no horário
+de São Paulo. Não executa a rotina aos sábados e domingos. Na função, a
+conciliação e eventual liquidação bancária terminam antes da busca e do envio
+de faturas.
+
+Em cada horário, o Worker chama `route=bank-reconciliation-cron` repetidamente
+em lotes de até 25 boletos. O cursor fica no Redis para continuar na hora
+seguinte se a lista exceder 20 lotes. Apenas depois de concluir a lista sem
+erros ele chama `route=process&bankReconciled=1` para cobrar. Falha bancária,
+resposta incompleta ou fila ainda não concluída adiam o envio de cobrança;
+nenhum boleto é baixado sem confirmação do banco e da Brudam.
 
 O Cloudflare interpreta expressões cron em UTC. Por isso, o `wrangler.jsonc`
-usa `0 1,10,15,19 * * *`, equivalente a 22:00, 07:00, 12:00 e 16:00 em
-São Paulo (UTC−3).
+usa `0 3-23 * * mon-fri` e `0 0-2 * * tue-sat`: juntas cobrem as 24 horas
+dos dias úteis de São Paulo (UTC−3). O Worker também confere o dia da semana
+em `America/Sao_Paulo` antes de chamar a Vercel, para impedir execuções no
+fim de semana se a relação entre UTC e horário local mudar.
 
 1. Na Vercel, crie `BILLING_CRON_SECRET` com um valor aleatório de pelo menos 32 caracteres.
 2. Use exatamente o mesmo valor como segredo do Worker:
