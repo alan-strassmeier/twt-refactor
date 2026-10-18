@@ -9,7 +9,7 @@
   <meta name="theme-color" content="#111827" media="(prefers-color-scheme: dark)">
   <title>TWT airpack</title>
   <link rel="icon" href="/favicon.ico" />
-  <link rel="stylesheet" type="text/css" href="style.css?v11">
+  <link rel="stylesheet" type="text/css" href="style.css?v13">
   <link href="https://db.onlinewebfonts.com/c/860c3ec7bbc5da3e97233ccecafe512e?family=Circular+Std+Book"
     rel="stylesheet" type="text/css" />
 
@@ -222,12 +222,11 @@
 
       </div>
 
-      <form class="contact-form" id="messageForm" aria-label="Enviar mensagem para a TWT">
-        <input type="hidden" name="recipient" value="twt@twt.com.br">
-        <input type="hidden" name="email" value="twt@twt.com.br">
+      <form class="contact-form" id="messageForm" method="post" aria-label="Enviar mensagem para a TWT">
+        <input class="form-honeypot" type="text" name="website" tabindex="-1" autocomplete="off" aria-hidden="true">
         <div class="text-input">
 
-          <input required type="text" id="messageName" name="Nome" autocomplete="name" />
+          <input required type="text" id="messageName" name="Nome" autocomplete="name" maxlength="120" />
           <label for="messageName">Nome</label>
 
         </div>
@@ -235,7 +234,7 @@
         <div class="text-input">
 
           <div class="verify-field" role="status" aria-live="polite" aria-atomic="true"><img src="" alt="" /></div>
-          <input required id="email-input" class="js-email" type="email" name="Email" autocomplete="email" />
+          <input required id="email-input" class="js-email" type="email" name="Email" autocomplete="email" maxlength="254" />
           <label for="email-input">Email</label>
 
         </div>
@@ -244,7 +243,7 @@
 
           <div class="text-input">
 
-            <input required type="text" id="messageCity" name="Cidade" autocomplete="address-level2" />
+            <input required type="text" id="messageCity" name="Cidade" autocomplete="address-level2" maxlength="100" />
             <label for="messageCity">Cidade</label>
 
           </div>
@@ -261,19 +260,20 @@
 
         <div class="text-input">
 
-          <input required type="text" id="messageSubject" name="subject" />
+          <input required type="text" id="messageSubject" name="subject" maxlength="120" />
           <label for="messageSubject">Assunto</label>
 
         </div>
 
         <div class="text-box-input">
 
-          <textarea required id="messageBody" name="Mensagem"></textarea>
+          <textarea required id="messageBody" name="Mensagem" maxlength="5000"></textarea>
           <label for="messageBody">Mensagem</label>
 
         </div>
 
         <button class="form-button" id="sendMessage" type="submit">Enviar</button>
+        <p class="form-feedback" role="status" aria-live="polite"></p>
 
       </form>
     </div>
@@ -333,92 +333,90 @@
           alt="Icone de fechar" aria-hidden="true" /></button>
       <h2 id="quotationTitle">Faça uma cotação com a TWT</h2>
       <form method="post" id="cotationForm" aria-label="Formulário de cotação">
-        <input type="hidden" name="recipient" value="twt@twt.com.br">
-        <input type="hidden" name="subject" value="Nova cotação">
-        <input type="hidden" name="email" value="twt@twt.com.br">
+        <input class="form-honeypot" type="text" name="website" tabindex="-1" autocomplete="off" aria-hidden="true">
 
         <div class="modal-fields">
 
           <div class="text-input">
 
-            <input required type="text" id="quotationName" name="Nome" autocomplete="name" />
+            <input required type="text" id="quotationName" name="Nome" autocomplete="name" maxlength="120" />
             <label for="quotationName">Nome:</label>
 
           </div>
 
           <div class="text-input">
             <div class="verify-field" role="status" aria-live="polite" aria-atomic="true"><img src="" alt="" /></div>
-            <input required class="js-email" id="quotationEmail" type="email" name="Email" autocomplete="email" />
+            <input required class="js-email" id="quotationEmail" type="email" name="Email" autocomplete="email" maxlength="254" />
             <label for="quotationEmail">E-mail:</label>
 
           </div>
 
           <div class="text-input">
             <div class="verify-field" role="status" aria-live="polite" aria-atomic="true"><img src="" alt="" /></div>
-            <input required type="tel" name="Telefone" id="phone" class="js-phone" inputmode="tel" />
+            <input required type="tel" name="Telefone" id="phone" class="js-phone" inputmode="tel" maxlength="24" />
             <label for="phone">Telefone:</label>
 
           </div>
 
           <div class="text-input">
 
-            <input required type="text" id="quotationCompany" name="Empresa" autocomplete="organization" />
+            <input required type="text" id="quotationCompany" name="Empresa" autocomplete="organization" maxlength="120" />
             <label for="quotationCompany">Empresa:</label>
 
           </div>
 
           <div class="text-input">
 
-            <input required type="text" id="quotationOrigin" name="Origem" />
+            <input required type="text" id="quotationOrigin" name="Origem" maxlength="120" />
             <label for="quotationOrigin">Origem:</label>
 
           </div>
 
           <div class="text-input">
 
-            <input required type="text" id="quotationDestination" name="Destino" />
+            <input required type="text" id="quotationDestination" name="Destino" maxlength="120" />
             <label for="quotationDestination">Destino:</label>
 
           </div>
 
           <div class="text-input">
 
-            <input required type="text" id="quotationQuantity" name="Quantidade" inputmode="numeric" />
+            <input required type="text" id="quotationQuantity" name="Quantidade" inputmode="numeric" maxlength="40" />
             <label for="quotationQuantity">Quantidade/Volume:</label>
 
           </div>
 
           <div class="text-input">
 
-            <input required type="text" id="quotationWeight" name="Peso" inputmode="decimal" />
+            <input required type="text" id="quotationWeight" name="Peso" inputmode="decimal" maxlength="40" />
             <label for="quotationWeight">Peso (kg):</label>
 
           </div>
 
           <div class="text-input">
 
-            <input required type="text" id="quotationWidth" name="Largura" inputmode="decimal" />
+            <input required type="text" id="quotationWidth" name="Largura" inputmode="decimal" maxlength="40" />
             <label for="quotationWidth">Largura (cm):</label>
 
           </div>
 
           <div class="text-input">
 
-            <input required type="text" id="quotationHeight" name="Altura" inputmode="decimal" />
+            <input required type="text" id="quotationHeight" name="Altura" inputmode="decimal" maxlength="40" />
             <label for="quotationHeight">Altura (cm):</label>
 
           </div>
 
           <div class="text-input">
 
-            <input required type="text" id="quotationLength" name="Comprimento" inputmode="decimal" />
+            <input required type="text" id="quotationLength" name="Comprimento" inputmode="decimal" maxlength="40" />
             <label for="quotationLength">Comprimento (cm):</label>
 
           </div>
 
           <div class="text-input">
 
-            <input required type="text" id="quotationInvoiceValue" name="ValorNf" inputmode="decimal" />
+            <input required type="text" id="quotationInvoiceValue" name="ValorNf" inputmode="decimal" maxlength="40" />
             <label for="quotationInvoiceValue">Valor da NF:</label>
 
           </div>
@@ -443,12 +441,13 @@
 
         <div class="text-box-input">
 
-          <textarea required id="quotationDescription" name="Descricao"></textarea>
+          <textarea required id="quotationDescription" name="Descricao" maxlength="5000"></textarea>
           <label for="quotationDescription">Descrição do conteúdo:</label>
 
         </div>
 
         <button class="form-button" type="submit">Enviar</button>
+        <p class="form-feedback" role="status" aria-live="polite"></p>
       </form>
     </div>
   </div>
@@ -495,7 +494,7 @@
     </ul>
   </nav>
 
-  <script type="module" src="script.js?v7"></script>
+  <script type="module" src="script.js?v9"></script>
   <script type="module" src="rastreamento-ui.js?v23"></script>
 </body>
 

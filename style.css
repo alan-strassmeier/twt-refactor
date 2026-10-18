@@ -28,6 +28,8 @@
   --color-on-primary: #fff;
   --color-hover: #eee;
   --color-error: #f00;
+  --color-form-error: #a82424;
+  --color-form-success: #086c3e;
   --color-overlay: rgb(6 6 6 / 31%);
   --color-validation-background: rgb(255 255 255 / 80%);
   --color-preloader: rgb(42 117 197 / 68%);
@@ -52,6 +54,8 @@
     --color-on-primary: #07111f;
     --color-hover: #334155;
     --color-error: #ff6b6b;
+    --color-form-error: #ff8a8a;
+    --color-form-success: #6ee7a0;
     --color-overlay: rgb(0 0 0 / 68%);
     --color-validation-background: rgb(31 41 55 / 85%);
     --color-preloader: rgb(8 16 30 / 82%);
@@ -954,6 +958,44 @@ textarea:focus:not(:focus-visible) {
   box-shadow: 3px 0 6px 0 var(--shadow-color);
 }
 
+.form-button:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+.form-honeypot {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.form-feedback {
+  min-height: 1.5em;
+  margin: 12px 0 0;
+  text-align: center;
+}
+
+.form-feedback.is-error {
+  color: var(--color-form-error);
+}
+
+.form-feedback.is-success {
+  color: var(--color-form-success);
+}
+
+.contact .form-feedback {
+  width: 48%;
+}
+
+#cotationForm > .form-feedback {
+  width: 48%;
+  margin: 12px auto 0;
+}
+
 footer {
   padding: 0 7%;
   background-color: var(--color-footer);
@@ -1535,6 +1577,9 @@ footer .contact-social {
   }
   .contact .form-button {
     font-size: 18px;
+    width: 100%;
+  }
+  .contact .form-feedback {
     width: 100%;
   }
   footer .contact-social p {
