@@ -576,7 +576,7 @@
     elements.jointPreview.hidden = false;
     elements.jointCompany.textContent = `${preview.company.name} · ${formatCnpj(preview.company.cnpj)}`;
     elements.jointRecipients.textContent = `${preview.recipients.length} destinatário(s) ativo(s)`;
-    elements.jointTotal.textContent = `Total em aberto: ${formatMoney(preview.totalBalance)}`;
+    elements.jointTotal.textContent = `Total vencido: ${formatMoney(preview.totalBalance)}`;
     elements.jointRows.replaceChildren(...preview.invoices.map((invoice) => {
       const row = document.createElement('tr');
       appendInvoiceNavigationCell(row, invoice.id);
@@ -594,17 +594,17 @@
     } else if (preview.jointSentCount) {
       setMessage(`${preview.jointSentCount} fatura(s) já reservadas ou enviadas em conjunto. Confira os logs antes de repetir.`, 'warning');
     } else if (!preview.invoices.length) {
-      setMessage('Esta empresa não possui faturas em aberto elegíveis para envio.', 'warning');
+      setMessage('Esta empresa não possui faturas vencidas em aberto elegíveis para envio.', 'warning');
     } else if (!preview.recipients.length) {
       setMessage('Cadastre ao menos um destinatário ativo antes de enviar.', 'warning');
     } else {
-      setMessage(`${preview.invoices.length} fatura(s) em aberto encontradas. Confira antes do envio.`, 'success');
+      setMessage(`${preview.invoices.length} fatura(s) vencida(s) em aberto encontradas. Confira antes do envio.`, 'success');
     }
   };
 
   const loadJointCompany = async (category) => {
     setLoading(true);
-    setMessage(`Buscando faturas em aberto de ${category.name}…`);
+    setMessage(`Buscando faturas vencidas em aberto de ${category.name}…`);
     elements.jointPreview.hidden = true;
     state.jointPreview = null;
     try {

@@ -4,7 +4,7 @@ const {
   previewJointBilling,
   sendJointBilling
 } = require('../server/faturamento/cobranca-conjunta');
-const { jointBillingText } = require('../server/faturamento/cobranca-email');
+const { jointBillingSubject, jointBillingText } = require('../server/faturamento/cobranca-email');
 const { processWebhookPayload } = require('../server/faturamento/cobranca-webhook');
 const { processInvoiceEvent } = require('../server/faturamento/cobranca-processor');
 const billingStore = require('../server/faturamento/cobranca-store');
@@ -22,9 +22,9 @@ const category = {
 };
 const invoices = [
   { id: '101', clientDocument: CNPJ, status: '0', balance: 50.25, total: 50.25,
-    issuedAt: '2026-10-17', dueAt: '2026-11-17' },
+    issuedAt: '2026-10-01', dueAt: '2026-10-10' },
   { id: '102', clientDocument: CNPJ, status: '0', balance: 20, total: 20,
-    issuedAt: '2026-10-18', dueAt: '2026-11-18' }
+    issuedAt: '2026-10-02', dueAt: '2026-10-12' }
 ];
 
 const mockDependencies = (overrides = {}) => {
@@ -68,7 +68,7 @@ const mockDependencies = (overrides = {}) => {
   };
 };
 
-test('prévia lista todas as faturas abertas e marca bloqueios sem escondê-las', async () => {
+test('prévia lista apenas faturas vencidas em aberto e marca bloqueios sem escondê-las', async () => {
   const dependencies = mockDependencies({ getInvoiceBlocks: async (ids) =>
     new Map(ids.map((id) => [id, { blocked: id === '102' }])) });
   const preview = await previewJointBilling(CNPJ, dependencies);
@@ -78,6 +78,25 @@ test('prévia lista todas as faturas abertas e marca bloqueios sem escondê-las'
   assert.equal(preview.totalBalance, 70.25);
   assert.equal(preview.recipients.length, 2);
   assert.equal(dependencies.calls[0].fresh, true);
+  assert.equal(dependencies.calls[0]['vencimento[lt]'], '2026-10-18');
+});
+
+test('faturas que vencem hoje ou depois não entram na prévia nem podem ser enviadas', async () => {
+  const dependencies = mockDependencies({ fetchInvoices: async () => ({
+    invoices: [
+      ...invoices,
+      { ...invoices[0], id: '103', dueAt: '2026-10-18' },
+      { ...invoices[0], id: '104', dueAt: '2026-10-19' },
+      { ...invoices[0], id: '105', dueAt: '' },
+      { ...invoices[0], id: '106', status: '1' }
+    ],
+    pagination: { allCompanyInvoicesLoaded: true, hasMore: false }
+  }) });
+  const preview = await previewJointBilling(CNPJ, dependencies);
+  assert.deepEqual(preview.invoices.map((invoice) => invoice.id), ['101', '102']);
+  await assert.rejects(sendJointBilling({ cnpj: CNPJ, invoiceIds: ['101', '102', '103'] }, dependencies),
+    /lista de faturas vencidas em aberto mudou/);
+  assert.equal(dependencies.sent.length, 0);
 });
 
 test('envio conjunto manda uma mensagem, dois PDFs e registra ambas as faturas', async () => {
@@ -90,6 +109,7 @@ test('envio conjunto manda uma mensagem, dois PDFs e registra ambas as faturas',
   assert.deepEqual(dependencies.sent[0].attachments.map((item) => item.filename),
     ['fatura-101.pdf', 'fatura-102.pdf']);
   assert.equal(dependencies.sent[0].totalBalance, 70.25);
+  assert.equal(jointBillingSubject, 'Faturas vencidas');
   assert.equal(dependencies.claims.length, 3);
   assert.equal(dependencies.saves[0][3].state, 'sent');
   assert.deepEqual(dependencies.logs.map((record) => record.invoiceId), ['101', '102']);
@@ -107,9 +127,24 @@ test('não envia se uma fatura for liquidada antes do SMTP', async () => {
     }
   });
   await assert.rejects(sendJointBilling({ cnpj: CNPJ, invoiceIds: ['101', '102'] }, dependencies),
-    /não está mais confirmada como aberta/);
+    /não está mais confirmada como vencida e aberta/);
   assert.equal(dependencies.sent.length, 0);
   assert.equal(dependencies.claims.length, 0);
+});
+
+test('não envia se o vencimento mudar antes do SMTP', async () => {
+  let reads = 0;
+  const dependencies = mockDependencies({
+    fetchCurrentInvoice: async ({ id }) => {
+      reads += 1;
+      const invoice = invoices.find((item) => item.id === id);
+      return { invoices: [{ ...invoice, dueAt: reads >= 4 && id === '102'
+        ? '2026-10-18' : invoice.dueAt }] };
+    }
+  });
+  await assert.rejects(sendJointBilling({ cnpj: CNPJ, invoiceIds: ['101', '102'] }, dependencies),
+    /não está mais confirmada como vencida e aberta/);
+  assert.equal(dependencies.sent.length, 0);
 });
 
 test('não envia se algum DOCCOB faltar', async () => {

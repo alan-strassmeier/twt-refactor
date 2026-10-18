@@ -26,6 +26,10 @@ const sameIds = (left, right) => left.length === right.length && left.every((id,
 const sortIds = (values) => [...new Set(values.map(invoiceId))].sort((left, right) =>
   BigInt(left) < BigInt(right) ? -1 : BigInt(left) > BigInt(right) ? 1 : 0);
 const cents = (value) => Math.round(Number(value) * 100);
+const isOverdue = (invoice, today) => {
+  const dueAt = String(invoice?.dueAt || '').slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(dueAt) && dueAt < today;
+};
 
 const companyAndInvoices = async (cnpjInput, dependencies = {}) => {
   const cnpj = digits(cnpjInput);
@@ -34,12 +38,14 @@ const companyAndInvoices = async (cnpjInput, dependencies = {}) => {
   const fetch = dependencies.fetchInvoices || fetchInvoices;
   const category = await getCategory(cnpj);
   if (!category) throw fail('Empresa não cadastrada nos e-mails de cobrança.', 404);
-  const result = await fetch({ cnpj, status: '0', limit: 100, fresh: true });
+  const today = saoPauloDate(dependencies.now ? dependencies.now() : new Date());
+  const result = await fetch({ cnpj, status: '0', 'vencimento[lt]': today, limit: 100, fresh: true });
   if (result?.pagination?.allCompanyInvoicesLoaded !== true && result?.pagination?.hasMore) {
     throw fail('A consulta não retornou todas as faturas da empresa. O envio foi bloqueado.', 503);
   }
   const invoices = (result?.invoices || []).filter((invoice) =>
-    digits(invoice.clientDocument) === cnpj && String(invoice.status) === '0' && isPendingInvoice(invoice));
+    digits(invoice.clientDocument) === cnpj && String(invoice.status) === '0'
+    && isPendingInvoice(invoice) && isOverdue(invoice, today));
   const unique = new Map(invoices.map((invoice) => [invoiceId(invoice.id), invoice]));
   return { cnpj, category, invoices: [...unique.values()].sort((a, b) =>
     BigInt(invoiceId(a.id)) < BigInt(invoiceId(b.id)) ? -1 : 1) };
@@ -74,13 +80,15 @@ const previewJointBilling = async (cnpj, dependencies = {}) => {
   };
 };
 
-const currentOpenInvoice = async (id, cnpj, dependencies, expectedBalance) => {
+const currentOpenInvoice = async (id, cnpj, dependencies, expectedBalance, expectedDueAt) => {
   const fetch = dependencies.fetchCurrentInvoice || fetchInvoices;
   const result = await fetch({ id, limit: 100 });
   const invoice = (result?.invoices || []).find((item) => invoiceId(item.id) === id);
   if (!invoice || digits(invoice.clientDocument) !== cnpj || String(invoice.status) !== '0'
-    || !isPendingInvoice(invoice) || cents(invoice.balance) !== cents(expectedBalance)) {
-    throw fail(`A fatura ${id} não está mais confirmada como aberta para esta empresa. Nenhum e-mail foi enviado.`);
+    || !isPendingInvoice(invoice) || cents(invoice.balance) !== cents(expectedBalance)
+    || !isOverdue(invoice, saoPauloDate(dependencies.now ? dependencies.now() : new Date()))
+    || invoice.dueAt !== expectedDueAt) {
+    throw fail(`A fatura ${id} não está mais confirmada como vencida e aberta para esta empresa. Nenhum e-mail foi enviado.`);
   }
   return invoice;
 };
@@ -132,7 +140,7 @@ const sendJointBilling = async ({ cnpj: cnpjInput, invoiceIds }, dependencies = 
   const cnpj = preview.company.cnpj;
   const currentIds = sortIds(preview.invoices.map((invoice) => invoice.id));
   if (!sameIds(expectedIds, currentIds)) {
-    throw fail('A lista de faturas em aberto mudou. Atualize a consulta antes de enviar.');
+    throw fail('A lista de faturas vencidas em aberto mudou. Atualize a consulta antes de enviar.');
   }
   if (preview.blockedCount) throw fail('Há fatura(s) com envio bloqueado nesta empresa. Nenhum e-mail foi enviado.');
   if (preview.jointSentCount) throw fail('Há fatura(s) já reservadas ou enviadas em conjunto. Confira os logs antes de repetir.');
@@ -142,8 +150,8 @@ const sendJointBilling = async ({ cnpj: cnpjInput, invoiceIds }, dependencies = 
   const initialCategory = await getCategory(cnpj);
   const confirmedInvoices = [];
   for (const id of expectedIds) {
-    const balance = preview.invoices.find((item) => item.id === id).balance;
-    confirmedInvoices.push(await currentOpenInvoice(id, cnpj, dependencies, balance));
+    const expected = preview.invoices.find((item) => item.id === id);
+    confirmedInvoices.push(await currentOpenInvoice(id, cnpj, dependencies, expected.balance, expected.dueAt));
   }
   const attachments = [];
   for (const invoice of confirmedInvoices) {
@@ -174,8 +182,8 @@ const sendJointBilling = async ({ cnpj: cnpjInput, invoiceIds }, dependencies = 
     throw fail('Os destinatários mudaram durante a preparação. Nenhum e-mail foi enviado.');
   }
   for (const id of expectedIds) {
-    await currentOpenInvoice(id, cnpj, dependencies,
-      preview.invoices.find((item) => item.id === id).balance);
+    const expected = preview.invoices.find((item) => item.id === id);
+    await currentOpenInvoice(id, cnpj, dependencies, expected.balance, expected.dueAt);
   }
   const today = saoPauloDate(dependencies.now ? dependencies.now() : new Date());
   const batchId = BigInt(`0x${createHash('sha256').update(`${cnpj}|${today}|${expectedIds.join(',')}`)

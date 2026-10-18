@@ -239,7 +239,7 @@ const sendBillingEmail = async ({
   };
 };
 
-const jointBillingSubject = 'faturas em aberto';
+const jointBillingSubject = 'Faturas vencidas';
 
 const jointBillingText = ({ companyName, invoiceIds, paymentMethod, totalBalance }) => [
   `Aviso de Faturamento das faturas ${invoiceIds.join(', ')}`,
