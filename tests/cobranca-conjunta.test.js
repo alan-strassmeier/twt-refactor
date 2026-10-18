@@ -78,13 +78,15 @@ test('prévia lista apenas faturas vencidas em aberto e marca bloqueios sem esco
   assert.equal(preview.totalBalance, 70.25);
   assert.equal(preview.recipients.length, 2);
   assert.equal(dependencies.calls[0].fresh, true);
-  assert.equal(dependencies.calls[0]['vencimento[lt]'], '2026-10-18');
+  assert.equal(dependencies.calls[0]['vencimento[lte]'], '2026-10-16');
 });
 
-test('faturas que vencem hoje ou depois não entram na prévia nem podem ser enviadas', async () => {
+test('envio conjunto segue o corte automático: inclui dois dias de atraso, exclui ontem e datas futuras', async () => {
   const dependencies = mockDependencies({ fetchInvoices: async () => ({
     invoices: [
       ...invoices,
+      { ...invoices[0], id: '107', dueAt: '2026-10-16' },
+      { ...invoices[0], id: '108', dueAt: '2026-10-17' },
       { ...invoices[0], id: '103', dueAt: '2026-10-18' },
       { ...invoices[0], id: '104', dueAt: '2026-10-19' },
       { ...invoices[0], id: '105', dueAt: '' },
@@ -93,7 +95,7 @@ test('faturas que vencem hoje ou depois não entram na prévia nem podem ser env
     pagination: { allCompanyInvoicesLoaded: true, hasMore: false }
   }) });
   const preview = await previewJointBilling(CNPJ, dependencies);
-  assert.deepEqual(preview.invoices.map((invoice) => invoice.id), ['101', '102']);
+  assert.deepEqual(preview.invoices.map((invoice) => invoice.id), ['101', '102', '107']);
   await assert.rejects(sendJointBilling({ cnpj: CNPJ, invoiceIds: ['101', '102', '103'] }, dependencies),
     /lista de faturas vencidas em aberto mudou/);
   assert.equal(dependencies.sent.length, 0);

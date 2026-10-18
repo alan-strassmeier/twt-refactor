@@ -9,10 +9,10 @@ const { resolveInvoiceCteKeys, fetchCteXmls } = require('./cte-documents');
 const { parseCteXml, buildDactePdf } = require('./dacte');
 const {
   buildDslDacteAttachment, buildTwtNfseAttachment,
-  saoPauloDate, billingEventForInvoice
+  saoPauloDate, addDays, billingEventForInvoice, automaticBillingEventForInvoice
 } = require('./cobranca-processor');
 const {
-  zohoConfig, createZohoTransport, billingAttachments,
+  EVENT_TYPES, zohoConfig, createZohoTransport, billingAttachments,
   jointBillingSubject, jointBillingText, sendJointBillingEmail
 } = require('./cobranca-email');
 const { deliveryReference } = require('./cobranca-webhook');
@@ -26,10 +26,8 @@ const sameIds = (left, right) => left.length === right.length && left.every((id,
 const sortIds = (values) => [...new Set(values.map(invoiceId))].sort((left, right) =>
   BigInt(left) < BigInt(right) ? -1 : BigInt(left) > BigInt(right) ? 1 : 0);
 const cents = (value) => Math.round(Number(value) * 100);
-const isOverdue = (invoice, today) => {
-  const dueAt = String(invoice?.dueAt || '').slice(0, 10);
-  return /^\d{4}-\d{2}-\d{2}$/.test(dueAt) && dueAt < today;
-};
+const isOverdue = (invoice, today) =>
+  automaticBillingEventForInvoice(invoice, today) === EVENT_TYPES.overdue;
 
 const companyAndInvoices = async (cnpjInput, dependencies = {}) => {
   const cnpj = digits(cnpjInput);
@@ -39,7 +37,8 @@ const companyAndInvoices = async (cnpjInput, dependencies = {}) => {
   const category = await getCategory(cnpj);
   if (!category) throw fail('Empresa não cadastrada nos e-mails de cobrança.', 404);
   const today = saoPauloDate(dependencies.now ? dependencies.now() : new Date());
-  const result = await fetch({ cnpj, status: '0', 'vencimento[lt]': today, limit: 100, fresh: true });
+  const result = await fetch({ cnpj, status: '0', 'vencimento[lte]': addDays(today, -2),
+    limit: 100, fresh: true });
   if (result?.pagination?.allCompanyInvoicesLoaded !== true && result?.pagination?.hasMore) {
     throw fail('A consulta não retornou todas as faturas da empresa. O envio foi bloqueado.', 503);
   }

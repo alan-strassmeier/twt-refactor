@@ -594,7 +594,7 @@
     } else if (preview.jointSentCount) {
       setMessage(`${preview.jointSentCount} fatura(s) já reservadas ou enviadas em conjunto. Confira os logs antes de repetir.`, 'warning');
     } else if (!preview.invoices.length) {
-      setMessage('Esta empresa não possui faturas vencidas em aberto elegíveis para envio.', 'warning');
+      setMessage('Esta empresa não possui faturas em aberto vencidas há pelo menos dois dias.', 'warning');
     } else if (!preview.recipients.length) {
       setMessage('Cadastre ao menos um destinatário ativo antes de enviar.', 'warning');
     } else {
