@@ -945,7 +945,7 @@ const fetchInvoices = async (input) => {
   if (exactCnpj && exactId === null) {
     const cacheKey = companyInvoicesCacheKey(query);
     const cached = companyInvoicesCache.get(cacheKey);
-    if (cached && cached.expiresAt > Date.now()) {
+    if (!input?.fresh && cached && cached.expiresAt > Date.now()) {
       invoices = cached.invoices;
       upstreamCount = cached.upstreamCount;
       upstreamReportedCount = cached.upstreamCount;

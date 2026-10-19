@@ -643,6 +643,12 @@ const processInvoiceEvent = async ({ event, invoice, context }) => {
     context.summary.pendingDoccob += 1;
     return;
   }
+  const jointDelivery = typeof context.getDelivery === 'function'
+    ? await context.getDelivery('joint', invoiceId, '__company__') : null;
+  if (jointDelivery && jointDelivery.billingEvent === event) {
+    context.summary.alreadySent = Number(context.summary.alreadySent || 0) + 1;
+    return { skipped: 'joint_delivery' };
+  }
   if (typeof context.ensureEmailTransport === 'function') {
     await context.ensureEmailTransport();
   }

@@ -796,7 +796,7 @@ const drawClientBlock = (doc, data) => {
     });
 
   const values = [
-    ['Valor Doc.', formatNumber(data.invoice.total), 'Valor Total', formatNumber(data.invoice.total)],
+    ['Valor Doc.', formatNumber(data.invoice.total), 'Vencimento', formatDate(data.invoice.dueAt)],
     ['Acréscimo', formatNumber(data.invoice.surcharge), 'NFS', data.invoice.nfs || '-'],
     ['Desconto', formatNumber(data.invoice.discount), 'Emissão', formatDate(data.invoice.issuedAt)]
   ];

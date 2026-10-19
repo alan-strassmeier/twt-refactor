@@ -1592,6 +1592,61 @@ body.modal-open {
   font-size: .9rem;
 }
 
+.collection-heading-search {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.collection-heading-search label {
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font-size: .75rem;
+  font-weight: 800;
+}
+
+.collection-heading-search input { min-width: 210px; }
+
+.joint-billing-search {
+  padding: 20px 24px;
+  grid-template-columns: minmax(220px, 1fr) auto;
+}
+
+.joint-billing-matches {
+  padding: 0 24px 5px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.joint-billing-matches:empty { display: none; }
+
+.joint-billing-matches p { width: 100%; margin: 0; }
+
+.joint-billing-overview {
+  padding: 16px 24px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  background: #f8fbfd;
+}
+
+.joint-billing-overview strong { color: var(--navy-900); }
+
+.joint-billing-actions {
+  padding: 18px 24px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.joint-billing-actions p { max-width: 700px; margin: 0; font-size: .84rem; }
+
 .collection-form {
   display: grid;
   align-items: end;

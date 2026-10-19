@@ -446,3 +446,29 @@ test('gera somente a página principal da fatura em PDF A4', async () => {
   assert.ok(pdf.length > 5000);
   assert.equal((pdf.toString('latin1').match(/\/Type \/Page\b/g) || []).length, 1);
 });
+
+test('exibe vencimento também nas faturas por boleto, inclusive nas antigas', async () => {
+  const originalText = PDFDocument.prototype.text;
+  const renderedText = [];
+  PDFDocument.prototype.text = function (value, ...args) {
+    renderedText.push(String(value));
+    return originalText.call(this, value, ...args);
+  };
+  try {
+    for (const [id, dueAt] of [['11940', '2026-10-30'], ['10432', '2025-06-14']]) {
+      renderedText.length = 0;
+      const data = applyCategoryBillingMethod({
+        invoice: { id, issuedAt: '2025-05-14', dueAt, total: 120, payment: null },
+        client: { name: 'Cliente de teste', document: '12345678000190' },
+        shipments: []
+      }, { billingMethod: 'bank_slip' });
+      assert.equal(data.invoice.dueAt, dueAt);
+      const pdf = await buildInvoicePdf(data);
+      assert.equal(pdf.subarray(0, 5).toString('ascii'), '%PDF-');
+      assert.ok(renderedText.includes(`Vencimento\n${dueAt.split('-').reverse().join('/')}`));
+      assert.ok(!renderedText.some((value) => value.includes('Valor Total')));
+    }
+  } finally {
+    PDFDocument.prototype.text = originalText;
+  }
+});

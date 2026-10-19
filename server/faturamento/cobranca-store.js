@@ -374,6 +374,14 @@ const deliveryField = (event, invoiceId, email) => [
 const getDelivery = async (event, invoiceId, email, command = redisCommand) =>
   parseRecord(await command('HGET', KEYS.deliveries, deliveryField(event, invoiceId, email)));
 
+const getJointDeliveries = async (invoiceIds, command = redisCommand) => {
+  const ids = [...new Set((invoiceIds || []).map(requiredInvoiceId))];
+  if (!ids.length) return new Map();
+  const values = await command('HMGET', KEYS.deliveries,
+    ...ids.map((id) => deliveryField('joint', id, '__company__'))) || [];
+  return new Map(ids.map((id, index) => [id, parseRecord(values[index])]));
+};
+
 const claimDelivery = async (event, invoiceId, email, record, command = redisCommand) => Number(
   await command(
     'HSETNX',
@@ -472,6 +480,13 @@ const getInvoiceBlock = async (invoiceId, command = redisCommand) => {
   return parseRecord(await command('HGET', KEYS.invoiceBlocks, normalizedId));
 };
 
+const getInvoiceBlocks = async (invoiceIds, command = redisCommand) => {
+  const ids = [...new Set((invoiceIds || []).map(requiredInvoiceId))];
+  if (!ids.length) return new Map();
+  const values = await command('HMGET', KEYS.invoiceBlocks, ...ids) || [];
+  return new Map(ids.map((id, index) => [id, parseRecord(values[index])]));
+};
+
 const setInvoiceBlocked = async (invoiceId, blocked, command = redisCommand) => {
   const normalizedId = requiredInvoiceId(invoiceId);
   if (typeof blocked !== 'boolean') {
@@ -525,8 +540,9 @@ const filteredLogs = async ({ invoiceId = '', date = '', cnpj = '' } = {}, comma
   return matching.filter((record) => {
     const reference = String(record.clientReference || '');
     if (!reference) return true;
-    if (seenReferences.has(reference)) return false;
-    seenReferences.add(reference);
+    const key = record.jointBilling ? `${reference}:${record.email || ''}` : reference;
+    if (seenReferences.has(key)) return false;
+    seenReferences.add(key);
     return true;
   });
 };
@@ -745,6 +761,7 @@ module.exports = {
   dismissIssue,
   deliveryField,
   getDelivery,
+  getJointDeliveries,
   claimDelivery,
   releaseDeliveryClaim,
   saveDelivery,
@@ -755,6 +772,7 @@ module.exports = {
   addLog,
   resolveLog,
   getInvoiceBlock,
+  getInvoiceBlocks,
   setInvoiceBlocked,
   listBlockedInvoiceIds,
   saoPauloDate,
