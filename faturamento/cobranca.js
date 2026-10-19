@@ -1129,7 +1129,7 @@
     const continuing = Boolean(state.bulkCursor);
     if (!window.confirm(continuing
       ? 'Continuar a conferência dos boletos restantes? Apenas pagamentos confirmados serão baixados na Brudam.'
-      : 'Conferir todos os boletos registrados em aberto no Itaú e Bradesco e liquidar na Brudam os pagamentos confirmados?'
+      : 'Buscar os boletos registrados no Itaú e Bradesco, conferir quais faturas seguem abertas e liquidar na Brudam somente os pagamentos confirmados?'
     )) return;
     if (!continuing) {
       state.bulkTotals = { checked: 0, settled: 0, alreadySettled: 0, pending: 0, errors: 0 };
@@ -1174,7 +1174,7 @@
         `${totals.alreadySettled} já liquidada(s) na Brudam, ${totals.pending} sem pagamento confirmado ` +
         `e ${totals.errors} falha(s).`;
       elements.liquidationMessage.dataset.kind = totals.errors || hasMore ? 'warning' : 'success';
-      elements.focusLiquidationButton.textContent = hasMore ? 'Continuar liquidação' : 'Liquidar fatura';
+      elements.focusLiquidationButton.textContent = hasMore ? 'Continuar liquidação' : 'Liquidar faturas';
       elements.liquidationBatchIssues.replaceChildren(...state.bulkIssues.map((issue) => {
         const item = document.createElement('li');
         item.textContent = issue;
@@ -1186,7 +1186,7 @@
         `${error.message} ${state.bulkTotals.checked} boleto(s) já conferido(s) nesta rodada.`;
       elements.liquidationMessage.dataset.kind = 'error';
       elements.focusLiquidationButton.textContent = state.bulkCursor
-        ? 'Continuar liquidação' : 'Liquidar fatura';
+        ? 'Continuar liquidação' : 'Liquidar faturas';
     } finally {
       setLoading(false);
     }

@@ -269,14 +269,18 @@ const prepareLiquidation = (record, settlement, current, dependencies = {}) => {
   return {
     status: 'eligible',
     internalId,
+    invoiceBalance: cents(balance) / 100,
     request: {
       documentos: [{
         id_lancamento: internalId,
         data_pagamento: settlement.paidAt,
         forma_pagamento: settings.paymentMethodId,
         data_credito_debito: settlement.paidAt,
-        valor_juros: Math.max(0, Math.round((settlement.paidAmount - balance) * 100) / 100),
-        valor_liquidado: Math.round(balance * 100) / 100,
+        valor_juros: Math.max(0, cents(settlement.paidAmount) - cents(balance)) / 100,
+        // Bradesco: a Brudam espera o total recebido, mesmo com os juros discriminados.
+        valor_liquidado: record.bank === 'bradesco'
+          ? cents(settlement.paidAmount) / 100
+          : cents(balance) / 100,
         conta_bancaria: settings.bankAccountId
       }]
     }
@@ -692,7 +696,7 @@ const previewItauReconciliation = async ({ invoiceId, currentDate } = {}, depend
     eligible,
     paidAt: settlement.paidAt,
     paidAmount: settlement.paidAmount,
-    invoiceBalance: preparation.request.documentos[0].valor_liquidado,
+    invoiceBalance: preparation.invoiceBalance,
     message: eligible
       ? manualRetryAuthorized
         ? 'Pagamento e fatura conferidos. Liberada uma única nova tentativa manual; o agendador permanece bloqueado.'
@@ -823,7 +827,7 @@ const previewBradescoReconciliation = async ({ invoiceId, currentDate } = {}, de
     eligible: preparation.status === 'eligible',
     paidAt: settlement.paidAt,
     paidAmount: settlement.paidAmount,
-    ...(preparation.request ? { invoiceBalance: preparation.request.documentos[0].valor_liquidado } : {}),
+    ...(preparation.request ? { invoiceBalance: preparation.invoiceBalance } : {}),
     message: preparation.status === 'already_settled'
       ? 'O Bradesco confirma o pagamento e a fatura já está liquidada na Brudam.'
       : 'Pagamento e fatura conferidos. A baixa manual está disponível.'
