@@ -1606,7 +1606,7 @@ body.modal-open {
 }
 
 .joint-billing-matches {
-  padding: 0 24px;
+  padding: 0 24px 5px;
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
