@@ -465,8 +465,8 @@ test('exibe vencimento também nas faturas por boleto, inclusive nas antigas', a
       assert.equal(data.invoice.dueAt, dueAt);
       const pdf = await buildInvoicePdf(data);
       assert.equal(pdf.subarray(0, 5).toString('ascii'), '%PDF-');
-      assert.ok(renderedText.includes('Vencimento'));
-      assert.ok(renderedText.includes(dueAt.split('-').reverse().join('/')));
+      assert.ok(renderedText.includes(`Vencimento\n${dueAt.split('-').reverse().join('/')}`));
+      assert.ok(!renderedText.some((value) => value.includes('Valor Total')));
     }
   } finally {
     PDFDocument.prototype.text = originalText;
