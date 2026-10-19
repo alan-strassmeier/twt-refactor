@@ -17,6 +17,7 @@ const {
 const { fetchInvoices } = require('../../server/faturamento/brudam');
 const { findDoccobForInvoice } = require('../../server/faturamento/r2-doccob');
 const { getBankSlipRecord } = require('../../server/faturamento/boleto-store');
+const { previewJointBilling, sendJointBilling } = require('../../server/faturamento/cobranca-conjunta');
 const { listLiquidationLog } = require('../../server/faturamento/liquidation-log');
 const {
   analyzePaymentImport,
@@ -724,6 +725,39 @@ const handleResend = async (req, res) => {
   }
 };
 
+const handleJointBilling = async (req, res, query) => {
+  if (!requireSession(req, res)) return;
+  if (req.method === 'GET') {
+    sendJson(res, 200, await previewJointBilling(query.cnpj));
+    return;
+  }
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', 'GET, POST');
+    sendJson(res, 405, { message: 'Método não permitido.' });
+    return;
+  }
+  if (!requireSameOrigin(req, res)) return;
+  const body = await parseJsonBody(req, 65536);
+  const runId = randomUUID();
+  if (!await store.claimProcessingRun(runId)) {
+    sendJson(res, 409, { message: 'Já existe uma operação de cobrança em andamento. Aguarde a conclusão.' });
+    return;
+  }
+  try {
+    const result = await sendJointBilling(body);
+    sendJson(res, result.status === 'review' ? 202 : 200, {
+      ...result,
+      message: result.status === 'review'
+        ? 'O resultado do envio requer conferência nos logs antes de nova tentativa.'
+        : `Cobrança conjunta com ${result.invoiceIds.length} fatura(s) aceita pelo servidor de e-mail. A entrega será confirmada nos logs.`
+    });
+  } finally {
+    try { await store.releaseProcessingRun(runId); } catch (error) {
+      console.error('[faturamento:cobranca:liberacao-conjunta]', error);
+    }
+  }
+};
+
 const handleWebhook = async (req, res) => {
   const config = webhookConfig();
   if (req.method === 'GET' || req.method === 'HEAD') {
@@ -778,6 +812,7 @@ module.exports = async (req, res) => {
     if (query.route === 'inactive-clients') return await handleInactiveClients(req, res);
     if (query.route === 'logs') return await handleLogs(req, res, query);
     if (query.route === 'resend') return await handleResend(req, res);
+    if (query.route === 'joint-billing') return await handleJointBilling(req, res, query);
     if (query.route === 'process') return await handleProcess(req, res, query);
     if (query.route === 'webhook') return await handleWebhook(req, res);
     sendJson(res, 404, { message: 'Rota de cobrança não encontrada.' });

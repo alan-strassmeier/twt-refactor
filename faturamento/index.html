@@ -322,9 +322,6 @@
               <p>Gerencie destinatários, acompanhe documentos pendentes e confira os envios.</p>
             </div>
             <div class="collection-heading-actions">
-              <button class="button button-quiet" id="bankDiagnosticButton" type="button">
-                Testar consultas bancárias
-              </button>
               <button class="button button-primary" id="runCollectionButton" type="button">
                 Verificar agora
               </button>
@@ -344,6 +341,9 @@
             <button class="collection-section-tab" type="button" role="tab"
               data-collection-section="collectionLogsSection" aria-controls="collectionLogsSection"
               aria-selected="false" tabindex="-1">Logs de envio</button>
+            <button class="collection-section-tab" type="button" role="tab"
+              data-collection-section="jointBillingSection" aria-controls="jointBillingSection"
+              aria-selected="false" tabindex="-1">Envio em conjunto</button>
           </nav>
 
           <section class="collection-summary" aria-label="Resumo das cobranças">
@@ -359,6 +359,11 @@
                 <h2 id="collectionContactsTitle">E-mails para cobrança</h2>
                 <p>As empresas são identificadas pelo CNPJ. Abra uma categoria para gerenciar as pessoas.</p>
               </div>
+              <form id="categorySearchForm" class="collection-heading-search" role="search">
+                <label for="categorySearchInput">Buscar empresa</label>
+                <input id="categorySearchInput" type="search" placeholder="Nome fantasia ou CNPJ" autocomplete="off" required>
+                <button class="button button-quiet" type="submit">Buscar</button>
+              </form>
             </div>
             <form class="collection-form category-form" id="categoryForm">
               <label>CNPJ da empresa
@@ -383,6 +388,40 @@
             <div class="collection-empty" id="categoryEmpty" hidden>
               <strong>Nenhuma empresa cadastrada</strong>
               <p>Adicione uma empresa pelo formulário acima.</p>
+            </div>
+          </section>
+
+          <section class="collection-card collection-anchor-target" id="jointBillingSection"
+            role="tabpanel" aria-label="Envio em conjunto" hidden>
+            <div class="collection-card-heading">
+              <div>
+                <h2>Envio em conjunto</h2>
+                <p>Consulte as faturas em aberto vencidas há pelo menos dois dias e confira os anexos antes de enviar uma única mensagem aos contatos ativos.</p>
+              </div>
+            </div>
+            <form class="collection-form joint-billing-search" id="jointBillingSearchForm" role="search">
+              <label>Empresa ou CNPJ
+                <input name="company" type="search" autocomplete="off" placeholder="Nome fantasia ou CNPJ" required>
+              </label>
+              <button class="button button-primary" type="submit">Buscar faturas</button>
+            </form>
+            <div id="jointBillingMatches" class="joint-billing-matches" aria-live="polite"></div>
+            <div id="jointBillingPreview" hidden>
+              <div class="joint-billing-overview">
+                <strong id="jointBillingCompany"></strong>
+                <span id="jointBillingRecipients"></span>
+                <strong id="jointBillingTotal"></strong>
+              </div>
+              <div class="table-scroll collection-table-scroll">
+                <table class="collection-table">
+                  <thead><tr><th>Fatura</th><th>Emissão</th><th>Vencimento</th><th>Saldo em aberto</th><th>Envio</th></tr></thead>
+                  <tbody id="jointBillingRows"></tbody>
+                </table>
+              </div>
+              <div class="joint-billing-actions">
+                <p>O envio inclui fatura, documentos fiscais/CT-e e boleto quando aplicável. Se algum documento ou estado financeiro não puder ser confirmado, nenhum e-mail será enviado.</p>
+                <button class="button button-primary" id="sendJointBillingButton" type="button">Enviar cobrança conjunta</button>
+              </div>
             </div>
           </section>
 

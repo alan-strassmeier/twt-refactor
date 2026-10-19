@@ -745,6 +745,18 @@ const drawInvoiceHeader = (doc, data, barcode) => {
     .text(`IE: ${safeText(issuer.stateRegistration)}`, 240, 60, { width: 95 });
   doc.font('Helvetica-Bold').fontSize(17)
     .text('Fatura', x + companyWidth, y + 20, { width: titleWidth, align: 'center' });
+  doc.font('Helvetica').fontSize(6.7)
+    .text('Vencimento', x + companyWidth, y + 42, {
+      width: titleWidth,
+      align: 'center',
+      lineBreak: false
+    });
+  doc.font('Helvetica-Bold').fontSize(8)
+    .text(formatDate(data.invoice.dueAt), x + companyWidth, y + 50, {
+      width: titleWidth,
+      align: 'center',
+      lineBreak: false
+    });
   doc.font('Helvetica-Bold').fontSize(16)
     .text(safeText(data.invoice.id), x + companyWidth + titleWidth, y + 8, {
       width: numberWidth,
