@@ -255,8 +255,16 @@ intervalos entre consultas para respeitar o limite da API da Brudam.
 
 O plano Hobby da Vercel não executa vários crons diários. O diretório
 `cloudflare/billing-cron` contém um Worker da Cloudflare configurado para chamar
-a rotina às **07:00, 12:00, 16:00 e 22:00**, no horário de São Paulo. O cron do
-Cloudflare está expresso em UTC como `0 1,10,15,19 * * *`. Troque o domínio em
+a rotina **de hora em hora, de segunda a sexta-feira**, no horário de São Paulo.
+Os crons do Cloudflare estão expressos em UTC como `0 3-23 * * mon-fri` e
+`0 0-2 * * tue-sat`, com uma verificação adicional do dia local no Worker.
+Cada disparo faz primeiro a conciliação completa dos boletos em lotes de até
+25 via `route=bank-reconciliation-cron`. O cursor persiste no Redis entre
+horários; se houver falhas ou a lista exceder 20 lotes, a cobrança é adiada
+até uma execução completar a conferência. Só então o Worker chama
+`route=process&bankReconciled=1`, passando os totais da conferência para o
+resumo da execução sem repetir as consultas bancárias.
+Troque o domínio em
 `wrangler.jsonc` somente se o domínio de produção deixar de ser `www.twt.com.br`.
 Configure na Vercel um `BILLING_CRON_SECRET` aleatório com pelo menos 32 caracteres e
 cadastre exatamente o mesmo valor no Worker:
@@ -270,23 +278,31 @@ npx wrangler deploy
 O botão **Verificar agora** usa a sessão administrativa e executa o mesmo fluxo
 sem depender do agendamento. Quando a fila ultrapassa o limite seguro de uma
 função da Vercel, o navegador continua automaticamente em novos lotes. Somente
-a primeira rodada consulta as três janelas na Brudam; as continuações tratam
+a primeira rodada consulta emissões recentes e faturas abertas na Brudam; as continuações tratam
 apenas os registros **Aguardando processamento** descobertos pela mesma
 execução, sem absorver pendências antigas de DOCCOB, contato ou pagamento.
 
 ### Conciliação bancária e liquidação na Brudam
 
-Antes de cada verificação normal, o sistema percorre em lotes os boletos
-registrados no Redis que ainda não possuem conciliação concluída. As consultas
-bancárias rodam em paralelo com as três janelas de cobrança; uma fatura é
-reconfirmada na Brudam imediatamente antes de qualquer baixa.
+No agendamento, o Worker termina a varredura de todos os boletos registrados
+no Redis que ainda não possuem conciliação concluída antes de iniciar a
+cobrança. A rota `bank-reconciliation-cron` exige o segredo do agendador,
+mantém um cursor próprio no Redis e usa a mesma validação do botão de
+liquidação. Em uma verificação manual de cobrança, a conciliação limitada
+também termina antes da leitura da fila. Cada fatura é reconfirmada na
+Brudam imediatamente antes de qualquer baixa.
 
-A baixa automática Itaú começa desabilitada: sem
+A conciliação limitada da rota geral `route=process`, quando chamada sem a
+conferência prévia do Worker (por exemplo, por **Verificar agora**), mantém
+a restrição Itaú: sem
 `ITAU_RECONCILIATION_INVOICE_IDS`, nenhum boleto Itaú novo é liquidado. Para
 testar apenas as faturas separadas, configure `11817,11838`; depois de
 homologar os resultados, `*` libera todas as faturas Itaú registradas. A
 conferência de uma tentativa anterior com status `submission_pending` continua
-ativa mesmo fora da lista, mas nunca repete o POST na Brudam.
+ativa mesmo fora da lista, mas nunca repete o POST na Brudam. A varredura
+completa do Worker, tal como o botão **Liquidar fatura**, não usa essa lista:
+inclui todos os boletos Itaú e Bradesco prontos, com as mesmas validações de
+pagamento, saldo e idempotência.
 
 No Itaú, a conciliação usa `GET /boletoscash/v2/boletos` com beneficiário,
 carteira e Nosso Número do boleto registrado. Confere ainda CPF/CNPJ do
@@ -343,24 +359,33 @@ como índice da última página (zero para uma página), desde que a contagem de
 registros feche. Rejeita metadados ausentes ou inconsistentes para não
 confundir erro com ausência de boletos.
 
-Na área **Liquidar Faturas**, a seção de boletos oferece
-**Prévia de baixa Itaú** por número de fatura. A rota autenticada
-`GET /api/faturamento/cobranca?route=itau-reconciliation-preview&id=11838`
-consulta o boleto na API v2 e a fatura atual na Brudam. Ela usa as mesmas
-validações de identidade, pagamento, saldo e IDs internos da baixa, mas não
-grava no Redis nem chama `POST /financeiro/liquidar/lancamento`. O resultado
-informa se a fatura está apta, já liquidada, bloqueada ou apenas aguardando
-liberação em `ITAU_RECONCILIATION_INVOICE_IDS`. A execução efetiva sempre
-refaz as conferências; a prévia não reserva nem autoriza uma baixa.
+Na área **Liquidar Faturas**, o botão **Liquidar fatura** inicia uma varredura
+manual dos boletos prontos registrados no Redis, ainda não conciliados. A rota
+autenticada `POST /api/faturamento/cobranca?route=bank-reconciliation-batch`
+recebe `{"afterInvoiceId":""}` e devolve lotes de até oito faturas, com
+`hasMore` e `nextCursor`. A interface continua a paginação até o fim (ou
+oferece **Continuar liquidação** após cem lotes), sem mover o cursor do
+agendador nem acionar o envio de cobranças. A varredura manual inclui os
+boletos Itaú independentemente da lista temporária
+`ITAU_RECONCILIATION_INVOICE_IDS`; isso não altera a restrição do agendador.
+Cada baixa ainda exige pagamento integral confirmado pelo banco, identidade
+do boleto e fatura aberta com saldo compatível na Brudam. A consulta
+Bradesco permanece na janela D-1 documentada pelo banco. O servidor exige
+sessão administrativa, mesma origem e trava contra outra execução financeira.
+Tentativas de baixa com resultado incerto nunca são repetidas automaticamente.
 
-Para homologar uma fatura individual sem acionar toda a rotina de cobrança,
-após a prévia apta, o botão **Liquidar esta fatura** chama
-`POST /api/faturamento/cobranca?route=itau-reconciliation-run` com
-`{"invoiceId":"11838"}`. Exige sessão administrativa, mesma origem e inclusão
-explícita do número em `ITAU_RECONCILIATION_INVOICE_IDS`; o valor `*` não
-autoriza esta ação direcionada. A consulta ao Itaú e à Brudam é refeita,
-aproveitando o mesmo lock e o mesmo registro `submission_pending` da rotina
-automática. Esta ação não percorre nem envia cobranças de outras faturas.
+A seção **Liquidar boleto manualmente** aceita número de fatura com boleto
+Itaú ou Bradesco. `GET /api/faturamento/cobranca?route=bank-reconciliation-preview&id=11838`
+consulta o banco correspondente e a fatura atual na Brudam, mas não grava no
+Redis nem chama `POST /financeiro/liquidar/lancamento`. Após uma prévia apta,
+**Liquidar esta fatura** chama
+`POST /api/faturamento/cobranca?route=bank-reconciliation-invoice` com
+`{"invoiceId":"11838"}`. Exige sessão administrativa e mesma origem. A
+execução refaz as conferências e usa os mesmos locks e controles de
+idempotência da rotina automática. Não percorre outras faturas nem envia
+cobranças. As rotas antigas `itau-reconciliation-preview` e
+`itau-reconciliation-run` permanecem para compatibilidade e preservam a
+restrição por lista explícita do Itaú.
 
 ### Recuperação pontual da fatura 11838
 

@@ -9,7 +9,8 @@ const { resolveInvoiceCteKeys, fetchCteXmls } = require('./cte-documents');
 const { parseCteXml, buildDactePdf } = require('./dacte');
 const {
   buildDslDacteAttachment, buildTwtNfseAttachment,
-  saoPauloDate, addDays, billingEventForInvoice, automaticBillingEventForInvoice
+  saoPauloDate, addDays, billingEventForInvoice, automaticBillingEventForInvoice,
+  retryTransientNetworkRequest
 } = require('./cobranca-processor');
 const {
   EVENT_TYPES, zohoConfig, createZohoTransport, billingAttachments,
@@ -29,6 +30,25 @@ const cents = (value) => Math.round(Number(value) * 100);
 const isOverdue = (invoice, today) =>
   automaticBillingEventForInvoice(invoice, today) === EVENT_TYPES.overdue;
 
+const fetchExactInvoice = async (id, dependencies = {}) => {
+  const fetch = dependencies.fetchCurrentInvoice || dependencies.fetchInvoices || fetchInvoices;
+  let result;
+  try {
+    result = await retryTransientNetworkRequest(() => fetch({ id, limit: 100, fresh: true }));
+  } catch (error) {
+    throw Object.assign(fail(
+      `Não foi possível confirmar a situação da fatura ${id} na Brudam. Nenhum e-mail foi enviado.`, 503
+    ), { cause: error });
+  }
+  const matches = (result?.invoices || []).filter((item) => invoiceId(item.id) === id);
+  if (matches.length !== 1) {
+    throw fail(
+      `A Brudam não retornou uma situação financeira inequívoca para a fatura ${id}. Nenhum e-mail foi enviado.`, 503
+    );
+  }
+  return matches[0];
+};
+
 const companyAndInvoices = async (cnpjInput, dependencies = {}) => {
   const cnpj = digits(cnpjInput);
   if (cnpj.length !== 14) throw fail('Informe um CNPJ válido.', 422);
@@ -42,11 +62,20 @@ const companyAndInvoices = async (cnpjInput, dependencies = {}) => {
   if (result?.pagination?.allCompanyInvoicesLoaded !== true && result?.pagination?.hasMore) {
     throw fail('A consulta não retornou todas as faturas da empresa. O envio foi bloqueado.', 503);
   }
-  const invoices = (result?.invoices || []).filter((invoice) =>
+  const candidates = (result?.invoices || []).filter((invoice) =>
     digits(invoice.clientDocument) === cnpj && String(invoice.status) === '0'
     && isPendingInvoice(invoice) && isOverdue(invoice, today));
-  const unique = new Map(invoices.map((invoice) => [invoiceId(invoice.id), invoice]));
-  return { cnpj, category, invoices: [...unique.values()].sort((a, b) =>
+  const candidateIds = new Set(candidates.map((invoice) => invoiceId(invoice.id)));
+  const invoices = [];
+  for (const id of candidateIds) {
+    const current = await fetchExactInvoice(id, dependencies);
+    if (String(current.status) !== '0' || !isPendingInvoice(current)) continue;
+    if (digits(current.clientDocument) !== cnpj) {
+      throw fail(`O cliente da fatura ${id} não pôde ser confirmado. Nenhum e-mail foi enviado.`, 503);
+    }
+    if (isOverdue(current, today)) invoices.push(current);
+  }
+  return { cnpj, category, invoices: invoices.sort((a, b) =>
     BigInt(invoiceId(a.id)) < BigInt(invoiceId(b.id)) ? -1 : 1) };
 };
 
@@ -80,10 +109,8 @@ const previewJointBilling = async (cnpj, dependencies = {}) => {
 };
 
 const currentOpenInvoice = async (id, cnpj, dependencies, expectedBalance, expectedDueAt) => {
-  const fetch = dependencies.fetchCurrentInvoice || fetchInvoices;
-  const result = await fetch({ id, limit: 100 });
-  const invoice = (result?.invoices || []).find((item) => invoiceId(item.id) === id);
-  if (!invoice || digits(invoice.clientDocument) !== cnpj || String(invoice.status) !== '0'
+  const invoice = await fetchExactInvoice(id, dependencies);
+  if (digits(invoice.clientDocument) !== cnpj || String(invoice.status) !== '0'
     || !isPendingInvoice(invoice) || cents(invoice.balance) !== cents(expectedBalance)
     || !isOverdue(invoice, saoPauloDate(dependencies.now ? dependencies.now() : new Date()))
     || invoice.dueAt !== expectedDueAt) {

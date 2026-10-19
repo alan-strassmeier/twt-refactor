@@ -10,7 +10,7 @@
   <link rel="stylesheet" href="/faturamento/styles.css?v=20">
   <script src="/faturamento/sort.js?v=1" defer></script>
   <script src="/faturamento/app.js?v=21" defer></script>
-  <script src="/faturamento/cobranca.js?v=8" defer></script>
+  <script src="/faturamento/cobranca.js?v=9" defer></script>
   <script src="/faturamento/clientes-inativos.js?v=2" defer></script>
 </head>
 <body>
@@ -491,17 +491,18 @@
             <div>
               <span class="eyebrow">Conciliação financeira</span>
               <h1>Liquidar Faturas</h1>
-              <p>Confira o pagamento e o saldo antes de registrar uma baixa na Brudam.</p>
+              <p>Confira os boletos registrados no Itaú e Bradesco e liquide na Brudam somente os pagamentos confirmados.</p>
             </div>
             <button class="button button-primary" id="focusLiquidationButton" type="button">Liquidar fatura</button>
           </div>
           <p class="dashboard-message collection-message" id="liquidationMessage" role="status" aria-live="polite"></p>
+          <ul class="liquidation-batch-issues" id="liquidationBatchIssues" aria-label="Falhas da conferência" hidden></ul>
 
           <section class="collection-card" id="liquidationManualSection">
             <div class="collection-card-heading">
               <div>
-                <h2>Liquidar boleto Itaú</h2>
-                <p>A conferência não grava a baixa. O botão de liquidar só aparece após validar pagamento e saldo.</p>
+                <h2>Liquidar boleto manualmente</h2>
+                <p>Informe uma fatura com boleto Itaú ou Bradesco. A prévia não grava a baixa; o botão aparece após validar pagamento e saldo.</p>
               </div>
             </div>
             <div class="itau-reconciliation-check">

@@ -28,6 +28,7 @@
     itauReconciliationRunButton: document.getElementById('itauReconciliationRunButton'),
     focusLiquidationButton: document.getElementById('focusLiquidationButton'),
     liquidationMessage: document.getElementById('liquidationMessage'),
+    liquidationBatchIssues: document.getElementById('liquidationBatchIssues'),
     refreshLiquidationLog: document.getElementById('refreshLiquidationLog'),
     liquidationLogRows: document.getElementById('liquidationLogRows'),
     liquidationLogEmpty: document.getElementById('liquidationLogEmpty'),
@@ -91,6 +92,9 @@
     loading: false,
     liquidationLogLoaded: false,
     liquidationLogLoading: false,
+    bulkCursor: '',
+    bulkTotals: { checked: 0, settled: 0, alreadySettled: 0, pending: 0, errors: 0 },
+    bulkIssues: [],
     collectionSection: 'collectionContactsSection',
     categories: [],
     pendingFilter: 'all',
@@ -1120,9 +1124,72 @@
   elements.areaButtons.forEach((button) => {
     button.addEventListener('click', () => setArea(button.dataset.billingArea));
   });
-  elements.focusLiquidationButton.addEventListener('click', () => {
-    document.getElementById('liquidationManualSection').scrollIntoView({ behavior: 'smooth', block: 'start' });
-    elements.itauReconciliationInvoiceId.focus();
+  elements.focusLiquidationButton.addEventListener('click', async () => {
+    if (state.loading) return;
+    const continuing = Boolean(state.bulkCursor);
+    if (!window.confirm(continuing
+      ? 'Continuar a conferência dos boletos restantes? Apenas pagamentos confirmados serão baixados na Brudam.'
+      : 'Conferir todos os boletos registrados em aberto no Itaú e Bradesco e liquidar na Brudam os pagamentos confirmados?'
+    )) return;
+    if (!continuing) {
+      state.bulkTotals = { checked: 0, settled: 0, alreadySettled: 0, pending: 0, errors: 0 };
+      state.bulkIssues = [];
+      elements.liquidationBatchIssues.replaceChildren();
+      elements.liquidationBatchIssues.hidden = true;
+    }
+    setLoading(true);
+    let hasMore = true;
+    let rounds = 0;
+    try {
+      while (hasMore && rounds < 100) {
+        const result = await requestJson(endpoint('bank-reconciliation-batch'), {
+          method: 'POST',
+          body: JSON.stringify({ afterInvoiceId: state.bulkCursor })
+        });
+        rounds += 1;
+        state.bulkTotals.checked += Number(result.checked || 0);
+        state.bulkTotals.settled += Number(result.settled || 0);
+        state.bulkTotals.alreadySettled += Number(result.alreadySettled || 0);
+        state.bulkTotals.pending += Number(result.pending || 0);
+        state.bulkTotals.errors += (result.errors || []).length;
+        state.bulkIssues.push(...(result.errors || []).slice(0, 20).map((issue) =>
+          `Fatura ${issue.invoiceId || 'não identificada'} (${issue.bank || 'banco'}): ${issue.message}`));
+        state.bulkIssues = state.bulkIssues.slice(0, 20);
+        hasMore = result.hasMore === true;
+        if (hasMore && (!/^\d{1,20}$/.test(String(result.nextCursor || '')) ||
+            result.nextCursor === state.bulkCursor)) {
+          throw new Error('A paginação da conferência não avançou. Nenhuma baixa adicional será tentada.');
+        }
+        state.bulkCursor = hasMore ? result.nextCursor : '';
+        elements.liquidationMessage.textContent =
+          `Conferindo boletos: ${state.bulkTotals.checked} verificado(s), ` +
+          `${state.bulkTotals.settled} liquidado(s), ${state.bulkTotals.errors} falha(s)…`;
+        elements.liquidationMessage.dataset.kind = '';
+      }
+      await loadLiquidationLog();
+      const totals = state.bulkTotals;
+      elements.liquidationMessage.textContent =
+        `${hasMore ? 'Limite de lotes atingido; clique em Continuar liquidação. ' : 'Conferência concluída. '}` +
+        `${totals.checked} boleto(s) verificado(s), ${totals.settled} fatura(s) liquidada(s), ` +
+        `${totals.alreadySettled} já liquidada(s) na Brudam, ${totals.pending} sem pagamento confirmado ` +
+        `e ${totals.errors} falha(s).`;
+      elements.liquidationMessage.dataset.kind = totals.errors || hasMore ? 'warning' : 'success';
+      elements.focusLiquidationButton.textContent = hasMore ? 'Continuar liquidação' : 'Liquidar fatura';
+      elements.liquidationBatchIssues.replaceChildren(...state.bulkIssues.map((issue) => {
+        const item = document.createElement('li');
+        item.textContent = issue;
+        return item;
+      }));
+      elements.liquidationBatchIssues.hidden = state.bulkIssues.length === 0;
+    } catch (error) {
+      elements.liquidationMessage.textContent =
+        `${error.message} ${state.bulkTotals.checked} boleto(s) já conferido(s) nesta rodada.`;
+      elements.liquidationMessage.dataset.kind = 'error';
+      elements.focusLiquidationButton.textContent = state.bulkCursor
+        ? 'Continuar liquidação' : 'Liquidar fatura';
+    } finally {
+      setLoading(false);
+    }
   });
   elements.refreshLiquidationLog.addEventListener('click', () => loadLiquidationLog());
 
@@ -1405,10 +1472,10 @@
       rearmButton.hidden = true;
       delete rearmButton.dataset.invoiceId;
       setLoading(true);
-      output.textContent = `Conferindo o boleto Itaú e a fatura ${invoiceId}, sem liquidar…`;
+      output.textContent = `Conferindo o boleto e a fatura ${invoiceId}, sem liquidar…`;
       output.dataset.kind = '';
       try {
-        const result = await requestJson(endpoint('itau-reconciliation-preview', { id: invoiceId }));
+        const result = await requestJson(endpoint('bank-reconciliation-preview', { id: invoiceId }));
         const payment = result.paidAt
           ? ` Pagamento de ${formatMoney(result.paidAmount)} em ${formatDate(result.paidAt)}.`
           : '';
@@ -1472,14 +1539,14 @@
       output.textContent = `Reconfirmando e liquidando a fatura ${invoiceId}…`;
       output.dataset.kind = '';
       try {
-        const result = await requestJson(endpoint('itau-reconciliation-run'), {
+        const result = await requestJson(endpoint('bank-reconciliation-invoice'), {
           method: 'POST',
           body: JSON.stringify({ invoiceId })
         });
         const messages = {
           liquidated: 'Baixa confirmada na Brudam.',
           already_settled: 'A fatura já estava liquidada na Brudam; nenhuma nova baixa foi enviada.',
-          not_paid: 'O Itaú não confirmou pagamento integral; nenhuma baixa foi enviada.',
+          not_paid: 'O banco não confirmou pagamento integral; nenhuma baixa foi enviada.',
           in_progress: 'Outra execução está conferindo esta fatura.',
           manual_review: 'O resultado da tentativa exige conferência manual na Brudam. A baixa não será repetida automaticamente.'
         };

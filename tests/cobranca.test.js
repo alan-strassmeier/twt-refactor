@@ -39,6 +39,8 @@ const {
   saveRecentIssuedCursor,
   getOpenInvoiceCursor,
   saveOpenInvoiceCursor,
+  getAutomaticBankScanCursor,
+  saveAutomaticBankScanCursor,
   claimProcessingRun,
   releaseProcessingRun
 } = require('../server/faturamento/cobranca-store');
@@ -87,7 +89,8 @@ const {
 } = require('../server/faturamento/cobranca-processor');
 const {
   constantTimeEqual,
-  hasCronAuthorization
+  hasCronAuthorization,
+  runCronBankReconciliationBatch
 } = require('../api/faturamento/cobranca');
 const {
   invoiceControl,
@@ -759,6 +762,90 @@ test('mantém cursores independentes para emissões recentes e faturas abertas',
   assert.equal(await getOpenInvoiceCursor(command), 500);
 });
 
+test('cursor da liquidação automática persiste entre rodadas e pode reiniciar', async () => {
+  const values = new Map();
+  const command = async (operation, key, value) => {
+    if (operation === 'SET') { values.set(key, value); return 'OK'; }
+    if (operation === 'GET') return values.get(key) || null;
+    throw new Error(`Comando inesperado: ${operation}`);
+  };
+  assert.equal(await getAutomaticBankScanCursor(command), '');
+  await saveAutomaticBankScanCursor('11838', command);
+  assert.equal(await getAutomaticBankScanCursor(command), '11838');
+  assert.throws(() => saveAutomaticBankScanCursor('11838abc', command), /inválido/);
+  assert.equal(await getAutomaticBankScanCursor(command), '11838');
+  await saveAutomaticBankScanCursor('', command);
+  assert.equal(await getAutomaticBankScanCursor(command), '');
+  assert.equal(values.get(KEYS.reconciliationCursor), undefined);
+});
+
+test('lote do agendador avança apenas sem erros e reinicia após conferir tudo', async () => {
+  let cursor = '11838';
+  const inputs = [];
+  const dependencies = {
+    currentDate: '2026-10-19',
+    getCursor: async () => cursor,
+    saveCursor: async (next) => { cursor = next; },
+    reconcile: async (input) => {
+      inputs.push(input);
+      return inputs.length === 1
+        ? { checked: 25, errors: [], hasMore: true, nextCursor: '11901' }
+        : { checked: 3, errors: [], hasMore: false, nextCursor: '11904' };
+    }
+  };
+  await runCronBankReconciliationBatch(dependencies);
+  assert.equal(cursor, '11901');
+  await runCronBankReconciliationBatch(dependencies);
+  assert.equal(cursor, '');
+  assert.deepEqual(inputs.map((input) => input.afterInvoiceId), ['11838', '11901']);
+  assert.ok(inputs.every((input) => input.manualFullScan && input.maxRecords === 25));
+});
+
+test('lote do agendador não avança após falha ou paginação inválida', async () => {
+  let saves = 0;
+  const base = {
+    currentDate: '2026-10-19',
+    getCursor: async () => '11838',
+    saveCursor: async () => { saves += 1; }
+  };
+  const failed = await runCronBankReconciliationBatch({ ...base,
+    reconcile: async () => ({ checked: 1, errors: [{ invoiceId: '11839' }],
+      hasMore: true, nextCursor: '11839' })
+  });
+  assert.equal(failed.errors.length, 1);
+  await assert.rejects(runCronBankReconciliationBatch({ ...base,
+    reconcile: async () => ({ checked: 1, errors: [], hasMore: true,
+      nextCursor: '11838' })
+  }), /não avançou/);
+  assert.equal(saves, 0);
+});
+
+test('cobrança agendada não repete conciliação já concluída pelo Worker', async () => {
+  let bankCalls = 0;
+  const result = await runBillingCollection({
+    source: 'automatic',
+    bankReconciliationSummary: { checked: 29, settled: 2, alreadySettled: 1, pending: 26 },
+    currentTime: new Date('2026-10-19T12:00:00Z'),
+    config: { maxInvoices: 0, maxPages: 1, deadlineMs: 55000 },
+    reconcileBankPayments: async () => { bankCalls += 1; throw new Error('Não deve repetir'); },
+    listPending: async () => [],
+    getRecentIssuedCursor: async () => ({ from: '', skip: 0 }),
+    getOpenInvoiceCursor: async () => 0,
+    saveRecentIssuedCursor: async () => {},
+    saveOpenInvoiceCursor: async () => {},
+    fetchInvoices: async () => ({ invoices: [], pagination: { hasMore: false } }),
+    listBlockedInvoiceIds: async () => [],
+    getCompletedBillingEvents: async () => new Set(),
+    emailConfig: { fromName: 'TWT', fromEmail: 'faturamento@twt.com.br' },
+    transport: {}
+  });
+  assert.equal(bankCalls, 0);
+  assert.equal(result.reconciled, 29);
+  assert.equal(result.bankSettled, 2);
+  assert.equal(result.bankAlreadySettled, 1);
+  assert.equal(result.scanned, 0);
+});
+
 test('registra em um único comando todas as faturas descobertas', async () => {
   const calls = [];
   const records = [
@@ -819,6 +906,7 @@ test('persiste toda a descoberta antes de limitar o lote de processamento', asyn
   const queued = [];
   const pendingUpdates = [];
   const scanOrder = [];
+  let bankChecked = false;
   const now = new Date();
   const today = logDate(now);
   const invoices = [
@@ -831,7 +919,10 @@ test('persiste toda a descoberta antes de limitar o lote de processamento', asyn
     currentTime: now,
     now: () => now,
     config: { maxInvoices: 1, maxPages: 1, deadlineMs: 55000 },
-    listPending: async () => [],
+    listPending: async () => {
+      assert.equal(bankChecked, true);
+      return [];
+    },
     getBillingQueueCursor: async () => 0,
     getRecentIssuedCursor: async () => ({ from: '', skip: 0 }),
     getOpenInvoiceCursor: async () => 0,
@@ -840,8 +931,12 @@ test('persiste toda a descoberta antes de limitar o lote de processamento', asyn
     saveOpenInvoiceCursor: async () => {},
     saveReconciliationCursor: async () => {},
     saveBillingQueueCursor: async () => {},
-    reconcileBankPayments: async () => ({ checked: 0, settled: 0, alreadySettled: 0, pending: 0, errors: [] }),
+    reconcileBankPayments: async () => {
+      bankChecked = true;
+      return { checked: 0, settled: 0, alreadySettled: 0, pending: 0, errors: [] };
+    },
     fetchInvoices: async (filters) => {
+      assert.equal(bankChecked, true);
       scanOrder.push(filters['emissao[gte]'] ? 'recentes' : 'abertas');
       return {
         invoices: filters['emissao[gte]'] || Object.keys(filters).every((key) => ['status', 'limit', 'skip'].includes(key))
@@ -2785,7 +2880,8 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(source, /route, \.\.\.query/);
   assert.match(source, /continuation: '1'/);
   assert.match(source, /endpoint\('pending-refresh'\)/);
-  assert.match(apiSource, /runBillingCollection\(\{ source, runId, continuation \}\)/);
+  assert.match(apiSource, /runBillingCollection\(\{[\s\S]*bankReconciliationSummary/);
+  assert.match(apiSource, /query\.route === 'bank-reconciliation-cron'/);
   assert.match(source, /const filters = logFilters\(\);[\s\S]*setLoading\(true\)/);
   assert.doesNotMatch(source, /window\.confirm\(`Excluir \$\{category\.name\}/);
   assert.match(source, /openEmailLogModal\(record, previewButton\)/);
@@ -2805,9 +2901,10 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(source, /setCollectionSection\(state\.collectionSection\)/);
   assert.doesNotMatch(source, /endpoint\('bank-diagnostic'\)/);
   assert.match(source, /endpoint\('joint-billing'/);
-  assert.match(source, /endpoint\('itau-reconciliation-preview'/);
+  assert.match(source, /endpoint\('bank-reconciliation-preview'/);
   assert.match(source, /endpoint\('itau-reconciliation-rearm'/);
-  assert.match(source, /endpoint\('itau-reconciliation-run'/);
+  assert.match(source, /endpoint\('bank-reconciliation-invoice'/);
+  assert.match(source, /endpoint\('bank-reconciliation-batch'/);
   assert.match(source, /endpoint\('liquidation-log'/);
   assert.match(source, /categorySearchForm\.addEventListener\('submit'/);
   assert.match(source, /billing:open-documents/);
@@ -2833,6 +2930,9 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(apiSource, /query\.route === 'itau-reconciliation-preview'/);
   assert.match(apiSource, /query\.route === 'itau-reconciliation-rearm'/);
   assert.match(apiSource, /query\.route === 'itau-reconciliation-run'/);
+  assert.match(apiSource, /query\.route === 'bank-reconciliation-preview'/);
+  assert.match(apiSource, /query\.route === 'bank-reconciliation-invoice'/);
+  assert.match(apiSource, /query\.route === 'bank-reconciliation-batch'/);
   assert.match(apiSource, /store\.dismissIssue\(issue\.id, issue\.updatedAt\)/);
   assert.match(apiSource, /query\.route === 'resend'/);
   assert.match(apiSource, /req\.method === 'GET' \|\| req\.method === 'HEAD'/);

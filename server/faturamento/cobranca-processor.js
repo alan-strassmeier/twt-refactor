@@ -1440,22 +1440,13 @@ const runBillingCollection = async (dependencies = {}) => {
   const recentFrom = saoPauloDate(new Date(
     new Date(dependencies.currentTime || new Date()).getTime() - 72 * 60 * 60 * 1000
   ));
-  const [pending, recentCursor, openStart] = await Promise.all([
-    (dependencies.listPending || store.listPending)(),
-    continuation ? { from: recentFrom, skip: 0 } :
-      (dependencies.getRecentIssuedCursor || store.getRecentIssuedCursor)(),
-    continuation ? 0 : (dependencies.getOpenInvoiceCursor || store.getOpenInvoiceCursor)()
-  ]);
-  const currentPending = pending;
-  const pendingByInvoice = new Map(
-    currentPending.map((record) => [String(record.invoiceId), record])
-  );
-  const fetch = dependencies.fetchInvoices || fetchInvoiceScanPage;
-
-  const emptyScan = { invoices: [], pages: 0, hasMore: false, nextSkip: 0 };
-  const bankReconciliationPromise = continuation
-    ? Promise.resolve({ checked: 0, settled: 0, alreadySettled: 0, pending: 0, errors: [] })
-    : (dependencies.reconcileBankPayments || reconcileBankPayments)({
+  // A baixa bancária termina antes de ler a fila ou buscar faturas na Brudam.
+  // Assim, a cobrança usa o estado financeiro atualizado nesta execução.
+  const bankReconciliation = continuation
+    ? { checked: 0, settled: 0, alreadySettled: 0, pending: 0, errors: [] }
+    : dependencies.bankReconciliationSummary
+    ? { ...dependencies.bankReconciliationSummary, errors: [] }
+    : await (dependencies.reconcileBankPayments || reconcileBankPayments)({
       currentDate,
       maxRecords: config.maxBankReconciliations
     }, dependencies).catch((error) => ({
@@ -1469,6 +1460,19 @@ const runBillingCollection = async (dependencies = {}) => {
         message: String(error.message || error).slice(0, 300)
       }]
     }));
+  const [pending, recentCursor, openStart] = await Promise.all([
+    (dependencies.listPending || store.listPending)(),
+    continuation ? { from: recentFrom, skip: 0 } :
+      (dependencies.getRecentIssuedCursor || store.getRecentIssuedCursor)(),
+    continuation ? 0 : (dependencies.getOpenInvoiceCursor || store.getOpenInvoiceCursor)()
+  ]);
+  const currentPending = pending;
+  const pendingByInvoice = new Map(
+    currentPending.map((record) => [String(record.invoiceId), record])
+  );
+  const fetch = dependencies.fetchInvoices || fetchInvoiceScanPage;
+
+  const emptyScan = { invoices: [], pages: 0, hasMore: false, nextSkip: 0 };
   let recentResult = { scan: emptyScan, error: null };
   let openResult = { scan: emptyScan, error: null };
   if (!continuation) {
@@ -1504,7 +1508,6 @@ const runBillingCollection = async (dependencies = {}) => {
       await (dependencies.saveOpenInvoiceCursor || store.saveOpenInvoiceCursor)(openResult.scan.nextSkip);
     }
   }
-  const bankReconciliation = await bankReconciliationPromise;
   const recentScan = recentResult.scan;
   const openScan = openResult.scan;
   const reminderInvoices = openScan.invoices.filter((invoice) =>

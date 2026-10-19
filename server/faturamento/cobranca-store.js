@@ -35,6 +35,7 @@ const KEYS = Object.freeze({
   recentIssuedCursor: 'faturamento:cobranca:cursor:emissoes-72h:v1',
   openInvoiceCursor: 'faturamento:cobranca:cursor:abertas:v1',
   reconciliationCursor: 'faturamento:cobranca:cursor:reconciliacao:v1',
+  automaticBankScanCursor: 'faturamento:cobranca:cursor:liquidacao-automatica:v1',
   billingQueueCursor: 'faturamento:cobranca:cursor:fila:v1',
   processing: 'faturamento:cobranca:processamento:v1',
   paymentImports: 'faturamento:cobranca:importacao-pagamentos:v1',
@@ -593,6 +594,19 @@ const getReconciliationCursor = async (command = redisCommand) =>
 const saveReconciliationCursor = (cursor, command = redisCommand) =>
   command('SET', KEYS.reconciliationCursor, String(Math.max(0, Number(cursor) || 0)));
 
+const getAutomaticBankScanCursor = async (command = redisCommand) => {
+  const value = String(await command('GET', KEYS.automaticBankScanCursor) || '');
+  return /^\d{1,20}$/.test(value) ? value : '';
+};
+
+const saveAutomaticBankScanCursor = (cursor, command = redisCommand) => {
+  const value = String(cursor || '');
+  if (value && !/^\d{1,20}$/.test(value)) {
+    throw new Error('Cursor de liquidação automática inválido.');
+  }
+  return command('SET', KEYS.automaticBankScanCursor, value);
+};
+
 const getBillingQueueCursor = async (command = redisCommand) =>
   Math.max(0, Number(await command('GET', KEYS.billingQueueCursor)) || 0);
 
@@ -770,6 +784,8 @@ module.exports = {
   saveOpenInvoiceCursor,
   getReconciliationCursor,
   saveReconciliationCursor,
+  getAutomaticBankScanCursor,
+  saveAutomaticBankScanCursor,
   getBillingQueueCursor,
   saveBillingQueueCursor,
   claimProcessingRun,

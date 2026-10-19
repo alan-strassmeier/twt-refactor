@@ -81,19 +81,74 @@ test('prévia lista apenas faturas vencidas em aberto e marca bloqueios sem esco
   assert.equal(dependencies.calls[0]['vencimento[lte]'], '2026-10-16');
 });
 
+test('prévia exclui faturas que a listagem por CNPJ mostra abertas mas a consulta individual mostra liquidadas', async () => {
+  const listed = [
+    ...invoices,
+    { ...invoices[0], id: '11347', balance: 1851.36, total: 2135.40 },
+    { ...invoices[0], id: '11348', balance: 12, total: 12 }
+  ];
+  const exactQueries = [];
+  const dependencies = mockDependencies({
+    fetchInvoices: async () => ({ invoices: listed, pagination: { allCompanyInvoicesLoaded: true } }),
+    fetchCurrentInvoice: async (query) => {
+      exactQueries.push(query);
+      const listedInvoice = listed.find((invoice) => invoice.id === query.id);
+      return { invoices: [{ ...listedInvoice,
+        ...(query.id === '11347' ? { status: '1', balance: 0 } : {}),
+        ...(query.id === '11348' ? { balance: 0 } : {})
+      }] };
+    }
+  });
+  const preview = await previewJointBilling(CNPJ, dependencies);
+  assert.deepEqual(preview.invoices.map((invoice) => invoice.id), ['101', '102']);
+  assert.equal(preview.totalBalance, 70.25);
+  assert.deepEqual(exactQueries.map((query) => query.id), ['101', '102', '11347', '11348']);
+  assert.ok(exactQueries.every((query) => query.fresh === true));
+  await assert.rejects(sendJointBilling({ cnpj: CNPJ,
+    invoiceIds: ['101', '102', '11347'] }, dependencies), /lista de faturas vencidas em aberto mudou/);
+  assert.equal(dependencies.sent.length, 0);
+});
+
+test('prévia falha fechada quando não consegue confirmar individualmente uma fatura', async () => {
+  const dependencies = mockDependencies({
+    fetchCurrentInvoice: async ({ id }) => ({ invoices: id === '102' ? [] : [invoices[0]] })
+  });
+  await assert.rejects(previewJointBilling(CNPJ, dependencies), /situação financeira inequívoca/);
+  await assert.rejects(sendJointBilling({ cnpj: CNPJ, invoiceIds: ['101', '102'] }, dependencies),
+    /situação financeira inequívoca/);
+  assert.equal(dependencies.sent.length, 0);
+});
+
+test('prévia usa saldo e vencimento da consulta individual, não os valores antigos da listagem', async () => {
+  const dependencies = mockDependencies({
+    fetchCurrentInvoice: async ({ id }) => ({ invoices: [{
+      ...invoices.find((invoice) => invoice.id === id),
+      ...(id === '102' ? { balance: 15, dueAt: '2026-10-11' } : {})
+    }] })
+  });
+  const preview = await previewJointBilling(CNPJ, dependencies);
+  assert.equal(preview.invoices[1].balance, 15);
+  assert.equal(preview.invoices[1].dueAt, '2026-10-11');
+  assert.equal(preview.totalBalance, 65.25);
+});
+
 test('envio conjunto segue o corte automático: inclui dois dias de atraso, exclui ontem e datas futuras', async () => {
-  const dependencies = mockDependencies({ fetchInvoices: async () => ({
-    invoices: [
-      ...invoices,
-      { ...invoices[0], id: '107', dueAt: '2026-10-16' },
-      { ...invoices[0], id: '108', dueAt: '2026-10-17' },
-      { ...invoices[0], id: '103', dueAt: '2026-10-18' },
-      { ...invoices[0], id: '104', dueAt: '2026-10-19' },
-      { ...invoices[0], id: '105', dueAt: '' },
-      { ...invoices[0], id: '106', status: '1' }
-    ],
-    pagination: { allCompanyInvoicesLoaded: true, hasMore: false }
-  }) });
+  const listed = [
+    ...invoices,
+    { ...invoices[0], id: '107', dueAt: '2026-10-16' },
+    { ...invoices[0], id: '108', dueAt: '2026-10-17' },
+    { ...invoices[0], id: '103', dueAt: '2026-10-18' },
+    { ...invoices[0], id: '104', dueAt: '2026-10-19' },
+    { ...invoices[0], id: '105', dueAt: '' },
+    { ...invoices[0], id: '106', status: '1' }
+  ];
+  const dependencies = mockDependencies({
+    fetchInvoices: async () => ({
+      invoices: listed,
+      pagination: { allCompanyInvoicesLoaded: true, hasMore: false }
+    }),
+    fetchCurrentInvoice: async ({ id }) => ({ invoices: listed.filter((invoice) => invoice.id === id) })
+  });
   const preview = await previewJointBilling(CNPJ, dependencies);
   assert.deepEqual(preview.invoices.map((invoice) => invoice.id), ['101', '102', '107']);
   await assert.rejects(sendJointBilling({ cnpj: CNPJ, invoiceIds: ['101', '102', '103'] }, dependencies),

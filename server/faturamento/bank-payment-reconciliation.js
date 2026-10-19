@@ -615,6 +615,7 @@ const previewItauReconciliation = async ({ invoiceId, currentDate } = {}, depend
   const env = dependencies.env || process.env;
   const allowlist = itauReconciliationAllowlist(env);
   const autoEnabled = allowlist === null || allowlist.has(id);
+  const manuallyEnabled = dependencies.manualAll === true;
   const base = { readOnly: true, bank: 'itau', invoiceId: id, autoEnabled };
   const record = await (dependencies.getBankSlipRecord || bankSlipStore.getBankSlipRecord)(id);
   if (!record || record.bank !== 'itau' || record.state !== 'ready' ||
@@ -684,7 +685,7 @@ const previewItauReconciliation = async ({ invoiceId, currentDate } = {}, depend
       paidAt: settlement.paidAt, paidAmount: settlement.paidAmount,
       message: 'O Itaú confirma o pagamento e a fatura já está liquidada na Brudam.' };
   }
-  const eligible = manualRetryAuthorized ? Boolean(allowlist?.has(id)) : autoEnabled;
+  const eligible = manualRetryAuthorized ? Boolean(allowlist?.has(id)) : manuallyEnabled || autoEnabled;
   return {
     ...base,
     status: eligible ? 'eligible' : 'disabled',
@@ -695,7 +696,9 @@ const previewItauReconciliation = async ({ invoiceId, currentDate } = {}, depend
     message: eligible
       ? manualRetryAuthorized
         ? 'Pagamento e fatura conferidos. Liberada uma única nova tentativa manual; o agendador permanece bloqueado.'
-        : 'Pagamento e fatura conferidos. A próxima execução pode realizar a baixa.'
+        : manuallyEnabled && !autoEnabled
+          ? 'Pagamento e fatura conferidos. A baixa manual está disponível; o agendador continua restrito.'
+          : 'Pagamento e fatura conferidos. A próxima execução pode realizar a baixa.'
       : 'Pagamento e fatura conferidos, mas a baixa automática Itaú não está liberada para esta fatura.'
   };
 };
@@ -706,7 +709,7 @@ const reconcileItauInvoice = async ({ invoiceId, currentDate } = {}, dependencie
     throw new Error('Fatura ou data inválida para a baixa Itaú.');
   }
   const allowlist = itauReconciliationAllowlist(dependencies.env || process.env);
-  if (!allowlist || !allowlist.has(id)) {
+  if (!dependencies.manualAll && (!allowlist || !allowlist.has(id))) {
     throw Object.assign(new Error('Esta fatura não está liberada para baixa Itaú direcionada.'), {
       statusCode: 403,
       expose: true
@@ -744,29 +747,194 @@ const reconcileItauInvoice = async ({ invoiceId, currentDate } = {}, dependencie
   }
 };
 
-const reconcileBankPayments = async ({ currentDate, maxRecords = 8 } = {}, dependencies = {}) => {
+const bradescoSettlementForRecord = async (record, currentDate, dependencies = {}) => {
+  const listRecords = dependencies.listBankSlipRecords ||
+    (() => bankSlipStore.listBankSlipRecords(undefined, { count: 500, maxIterations: 100 }));
+  const records = await listRecords();
+  const matchingOurNumber = records.filter((item) => item?.state === 'ready' &&
+    item.bank === 'bradesco' && sameOurNumber(item.ourNumber, record.ourNumber));
+  if (matchingOurNumber.length !== 1 ||
+      String(matchingOurNumber[0].invoiceId) !== String(record.invoiceId)) {
+    throw new Error('Nosso Número Bradesco associado a mais de uma fatura; baixa interrompida.');
+  }
+  const config = typeof dependencies.bradescoConfig === 'function'
+    ? dependencies.bradescoConfig()
+    : dependencies.bradescoConfig || bradescoConfig();
+  const settlements = await (
+    dependencies.listBradescoSettledBankSlips || listBradescoSettledBankSlips
+  )({
+    paymentDateFrom: addDays(currentDate, -60),
+    paymentDateTo: addDays(currentDate, -1)
+  }, { config });
+  return groupedBradescoSettlements(settlements)
+    .get(digits(record.ourNumber).padStart(11, '0')) || null;
+};
+
+const previewBradescoReconciliation = async ({ invoiceId, currentDate } = {}, dependencies = {}) => {
+  const id = String(invoiceId || '').trim();
+  if (!/^\d{1,20}$/.test(id) || !validIsoDate(currentDate)) {
+    throw new Error('Fatura ou data inválida para a prévia de liquidação Bradesco.');
+  }
+  const base = { readOnly: true, bank: 'bradesco', invoiceId: id };
+  const record = await (dependencies.getBankSlipRecord || bankSlipStore.getBankSlipRecord)(id);
+  if (!record || record.bank !== 'bradesco' || record.state !== 'ready' ||
+      String(record.invoiceId || id) !== id) {
+    return { ...base, status: 'not_registered', eligible: false,
+      message: 'Não há boleto Bradesco pronto registrado para esta fatura.' };
+  }
+  if (record.reconciliation?.status === 'completed') {
+    return { ...base, status: 'completed', eligible: false,
+      message: 'A conciliação deste boleto já foi concluída.' };
+  }
+  if (record.reconciliation?.status === 'submission_pending') {
+    return { ...base, status: 'manual_review', eligible: false,
+      message: 'Existe uma tentativa de baixa incerta. Confira o lançamento na Brudam; o sistema não fará novo POST.' };
+  }
+  let settlement;
+  try {
+    settlement = await bradescoSettlementForRecord(record, currentDate, dependencies);
+  } catch (error) {
+    return { ...base, status: 'blocked', eligible: false, reason: 'bank_validation',
+      message: String(error.message || error).slice(0, 240) };
+  }
+  if (!settlement) {
+    return { ...base, status: 'not_paid', eligible: false,
+      message: 'O Bradesco ainda não confirmou o pagamento integral deste boleto.' };
+  }
+  let current;
+  try {
+    current = await exactInvoice(id, dependencies.fetchInvoices || fetchInvoices);
+  } catch {
+    return { ...base, status: 'blocked', eligible: false, reason: 'brudam_query',
+      message: 'Não foi possível confirmar a fatura atual na Brudam.' };
+  }
+  let preparation;
+  try {
+    preparation = prepareLiquidation(record, settlement, current, dependencies);
+  } catch (error) {
+    return { ...base, status: 'blocked', eligible: false, reason: 'invoice_validation',
+      message: Number(error?.statusCode) >= 500 && !error?.expose
+        ? 'Não foi possível concluir a validação da fatura e da configuração bancária.'
+        : String(error.message || error).slice(0, 240) };
+  }
+  return {
+    ...base,
+    status: preparation.status === 'already_settled' ? 'already_settled' : 'eligible',
+    eligible: preparation.status === 'eligible',
+    paidAt: settlement.paidAt,
+    paidAmount: settlement.paidAmount,
+    ...(preparation.request ? { invoiceBalance: preparation.request.documentos[0].valor_liquidado } : {}),
+    message: preparation.status === 'already_settled'
+      ? 'O Bradesco confirma o pagamento e a fatura já está liquidada na Brudam.'
+      : 'Pagamento e fatura conferidos. A baixa manual está disponível.'
+  };
+};
+
+const reconcileBradescoInvoice = async ({ invoiceId, currentDate } = {}, dependencies = {}) => {
+  const id = String(invoiceId || '').trim();
+  if (!/^\d{1,20}$/.test(id) || !validIsoDate(currentDate)) {
+    throw new Error('Fatura ou data inválida para a baixa Bradesco.');
+  }
+  const getRecord = dependencies.getBankSlipRecord || bankSlipStore.getBankSlipRecord;
+  const record = await getRecord(id);
+  if (!record || record.bank !== 'bradesco' || record.state !== 'ready' ||
+      String(record.invoiceId || id) !== id) {
+    throw Object.assign(new Error('Não há boleto Bradesco pronto registrado para esta fatura.'), {
+      statusCode: 409, expose: true
+    });
+  }
+  if (record.reconciliation?.status === 'completed') {
+    return { invoiceId: id, status: 'already_settled' };
+  }
+  const settlement = record.reconciliation?.status === 'submission_pending'
+    ? record.reconciliation
+    : await bradescoSettlementForRecord(record, currentDate, dependencies);
+  if (!settlement) return { invoiceId: id, status: 'not_paid' };
+  try {
+    const result = await reconcilePaidRecord(record, settlement, dependencies);
+    return { invoiceId: id, status: result.status };
+  } catch (error) {
+    const latest = await Promise.resolve().then(() => getRecord(id)).catch(() => null);
+    if (latest?.reconciliation?.status === 'submission_pending') {
+      return { invoiceId: id, status: 'manual_review' };
+    }
+    throw error;
+  }
+};
+
+const previewBankReconciliation = async (input = {}, dependencies = {}) => {
+  const id = String(input.invoiceId || '').trim();
+  if (!/^\d{1,20}$/.test(id)) throw new Error('Número da fatura inválido.');
+  const record = await (dependencies.getBankSlipRecord || bankSlipStore.getBankSlipRecord)(id);
+  if (record?.bank === 'itau') {
+    return previewItauReconciliation(input, { ...dependencies, manualAll: true });
+  }
+  if (record?.bank === 'bradesco') return previewBradescoReconciliation(input, dependencies);
+  return { readOnly: true, invoiceId: id, status: 'not_registered', eligible: false,
+    message: 'Não há boleto Itaú ou Bradesco pronto registrado para esta fatura.' };
+};
+
+const reconcileBankInvoice = async (input = {}, dependencies = {}) => {
+  const id = String(input.invoiceId || '').trim();
+  if (!/^\d{1,20}$/.test(id)) throw new Error('Número da fatura inválido.');
+  const record = await (dependencies.getBankSlipRecord || bankSlipStore.getBankSlipRecord)(id);
+  if (record?.bank === 'itau') {
+    return reconcileItauInvoice(input, { ...dependencies, manualAll: true });
+  }
+  if (record?.bank === 'bradesco') return reconcileBradescoInvoice(input, dependencies);
+  throw Object.assign(new Error('Não há boleto Itaú ou Bradesco pronto registrado para esta fatura.'), {
+    statusCode: 409, expose: true
+  });
+};
+
+const invoiceIdCompare = (left, right) => String(left).localeCompare(
+  String(right), 'pt-BR', { numeric: true }
+);
+
+const reconcileBankPayments = async ({
+  currentDate,
+  maxRecords = 8,
+  manualFullScan = false,
+  afterInvoiceId = ''
+} = {}, dependencies = {}) => {
   if (!validIsoDate(currentDate)) throw new Error('Data da conciliação bancária inválida.');
+  if (manualFullScan && afterInvoiceId && !/^\d{1,20}$/.test(String(afterInvoiceId))) {
+    throw Object.assign(new Error('Cursor de liquidação inválido.'), { statusCode: 422, expose: true });
+  }
   const itauAllowlist = itauReconciliationAllowlist(dependencies.env || process.env);
-  const records = await (dependencies.listBankSlipRecords || bankSlipStore.listBankSlipRecords)();
+  const listRecords = dependencies.listBankSlipRecords || (manualFullScan
+    ? () => bankSlipStore.listBankSlipRecords(undefined, { count: 500, maxIterations: 100 })
+    : bankSlipStore.listBankSlipRecords);
+  const records = await listRecords();
   const active = records.filter((record) => (
     record?.state === 'ready' &&
     BANKS.has(record.bank) &&
     record.reconciliation?.status !== 'completed' &&
     (record.bank !== 'itau' || record.reconciliation?.status === 'submission_pending' ||
-      itauAllowlist === null || itauAllowlist.has(String(record.invoiceId)))
-  )).sort((left, right) => String(left.invoiceId).localeCompare(
-    String(right.invoiceId), 'pt-BR', { numeric: true }
-  ));
+      manualFullScan || itauAllowlist === null || itauAllowlist.has(String(record.invoiceId)))
+  )).sort((left, right) => invoiceIdCompare(left.invoiceId, right.invoiceId));
   if (!active.length) {
-    await (dependencies.saveReconciliationCursor || billingStore.saveReconciliationCursor)(0);
-    return { checked: 0, settled: 0, alreadySettled: 0, pending: 0, errors: [] };
+    if (!manualFullScan) {
+      await (dependencies.saveReconciliationCursor || billingStore.saveReconciliationCursor)(0);
+    }
+    return { checked: 0, settled: 0, alreadySettled: 0, pending: 0, errors: [],
+      ...(manualFullScan ? { hasMore: false, nextCursor: '', totalCandidates: 0 } : {}) };
   }
-  const storedCursor = await (
-    dependencies.getReconciliationCursor || billingStore.getReconciliationCursor
-  )();
-  const start = Math.max(0, Number(storedCursor) || 0) % active.length;
-  const rotated = [...active.slice(start), ...active.slice(0, start)];
-  const selected = rotated.slice(0, Math.max(1, Math.min(Number(maxRecords) || 8, 25)));
+  const batchSize = Math.max(1, Math.min(Number(maxRecords) || 8, 25));
+  let start = 0;
+  let candidates;
+  if (manualFullScan) {
+    candidates = afterInvoiceId
+      ? active.filter((record) => invoiceIdCompare(record.invoiceId, afterInvoiceId) > 0)
+      : active;
+  } else {
+    const storedCursor = await (
+      dependencies.getReconciliationCursor || billingStore.getReconciliationCursor
+    )();
+    start = Math.max(0, Number(storedCursor) || 0) % active.length;
+    candidates = [...active.slice(start), ...active.slice(0, start)];
+  }
+  const selected = candidates.slice(0, batchSize);
   const bradescoNumberCounts = new Map();
   records.filter((record) => record?.state === 'ready' && record.bank === 'bradesco')
     .forEach((record) => {
@@ -819,16 +987,23 @@ const reconcileBankPayments = async ({ currentDate, maxRecords = 8 } = {}, depen
       };
     }
   });
-  await (dependencies.saveReconciliationCursor || billingStore.saveReconciliationCursor)(
-    (start + selected.length) % active.length
-  );
+  if (!manualFullScan) {
+    await (dependencies.saveReconciliationCursor || billingStore.saveReconciliationCursor)(
+      (start + selected.length) % active.length
+    );
+  }
   return {
     checked: selected.length,
     settled: results.filter((item) => item.status === 'liquidated').length,
     alreadySettled: results.filter((item) => item.status === 'already_settled').length,
     pending: results.filter((item) => ['pending', 'in_progress'].includes(item.status)).length,
     errors: results.filter((item) => item.status === 'error'),
-    results
+    results,
+    ...(manualFullScan ? {
+      hasMore: candidates.length > selected.length,
+      nextCursor: String(selected.at(-1)?.invoiceId || ''),
+      totalCandidates: active.length
+    } : {})
   };
 };
 
@@ -841,6 +1016,8 @@ module.exports = {
   rearmItauReconciliation,
   previewItauReconciliation,
   reconcileItauInvoice,
+  previewBankReconciliation,
+  reconcileBankInvoice,
   reconcilePaidRecord,
   reconcileBankPayments
 };

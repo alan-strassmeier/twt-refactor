@@ -1351,6 +1351,15 @@ body.modal-open {
   min-width: 710px;
 }
 
+.liquidation-batch-issues {
+  margin: 0;
+  padding: 12px 18px 12px 34px;
+  border: 1px solid #f0cfb0;
+  border-radius: 12px;
+  background: #fff8ef;
+  color: #74410f;
+}
+
 .inactive-workspace {
   display: grid;
   gap: 24px;
