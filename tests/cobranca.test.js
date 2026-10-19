@@ -2859,7 +2859,10 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(html, /id="liquidationWorkspace"/);
   assert.match(html, /id="liquidationLogRows"/);
   assert.match(html, /id="refreshLiquidationLog"/);
-  assert.match(html, /id="focusLiquidationButton"/);
+  assert.match(html, /id="focusLiquidationButton"[^>]*>Liquidar faturas<\/button>/);
+  assert.match(html, /<h2>Liquidar boleto<\/h2>/);
+  assert.match(html, /id="itauReconciliationRunButton"[^>]*>[\s\S]*?Liquidar este boleto/);
+  assert.doesNotMatch(html, /Liquidar boleto Itaú/);
   assert.doesNotMatch(html, /data-collection-section="paymentImportSection"/);
   assert.match(html, /id="paymentImportForm"/);
   assert.match(html, /id="approveAllPayments"/);
@@ -2905,6 +2908,7 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(source, /endpoint\('itau-reconciliation-rearm'/);
   assert.match(source, /endpoint\('bank-reconciliation-invoice'/);
   assert.match(source, /endpoint\('bank-reconciliation-batch'/);
+  assert.match(apiSource, /const handleBankReconciliationBatch[\s\S]*?manualFullScan: true/);
   assert.match(source, /endpoint\('liquidation-log'/);
   assert.match(source, /categorySearchForm\.addEventListener\('submit'/);
   assert.match(source, /billing:open-documents/);

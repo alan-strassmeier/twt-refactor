@@ -300,7 +300,7 @@ testar apenas as faturas separadas, configure `11817,11838`; depois de
 homologar os resultados, `*` libera todas as faturas Itaú registradas. A
 conferência de uma tentativa anterior com status `submission_pending` continua
 ativa mesmo fora da lista, mas nunca repete o POST na Brudam. A varredura
-completa do Worker, tal como o botão **Liquidar fatura**, não usa essa lista:
+completa do Worker, tal como o botão **Liquidar faturas**, não usa essa lista:
 inclui todos os boletos Itaú e Bradesco prontos, com as mesmas validações de
 pagamento, saldo e idempotência.
 
@@ -329,8 +329,9 @@ Quando o banco confirma o recebimento, o servidor consulta novamente a fatura.
 Se ela já estiver liquidada, apenas encerra a conciliação. Se estiver aberta e
 o valor cobrir o saldo, envia `POST /financeiro/liquidar/lancamento`, usando a
 data da confirmação Bradesco ou da inclusão do pagamento Itaú em `data_pagamento` e
-`data_credito_debito`, o saldo como `valor_liquidado` e eventual excedente
-bancário como `valor_juros`. No Itaú, saldo diferente do valor nominal
+`data_credito_debito` e eventual excedente bancário como `valor_juros`.
+Para o Bradesco, `valor_liquidado` recebe o total efetivamente pago; para o
+Itaú, permanece o saldo nominal da fatura. No Itaú, saldo diferente do valor nominal
 impede a baixa automática. Depois remove a
 pendência de cobrança e marca os três eventos de e-mail como concluídos.
 Um lock por fatura impede duas execuções simultâneas de enviar a mesma baixa.
@@ -359,7 +360,7 @@ como índice da última página (zero para uma página), desde que a contagem de
 registros feche. Rejeita metadados ausentes ou inconsistentes para não
 confundir erro com ausência de boletos.
 
-Na área **Liquidar Faturas**, o botão **Liquidar fatura** inicia uma varredura
+Na área **Liquidar Faturas**, o botão **Liquidar faturas** inicia uma varredura
 manual dos boletos prontos registrados no Redis, ainda não conciliados. A rota
 autenticada `POST /api/faturamento/cobranca?route=bank-reconciliation-batch`
 recebe `{"afterInvoiceId":""}` e devolve lotes de até oito faturas, com
@@ -374,11 +375,11 @@ Bradesco permanece na janela D-1 documentada pelo banco. O servidor exige
 sessão administrativa, mesma origem e trava contra outra execução financeira.
 Tentativas de baixa com resultado incerto nunca são repetidas automaticamente.
 
-A seção **Liquidar boleto manualmente** aceita número de fatura com boleto
+A seção **Liquidar boleto** aceita número de fatura com boleto
 Itaú ou Bradesco. `GET /api/faturamento/cobranca?route=bank-reconciliation-preview&id=11838`
 consulta o banco correspondente e a fatura atual na Brudam, mas não grava no
 Redis nem chama `POST /financeiro/liquidar/lancamento`. Após uma prévia apta,
-**Liquidar esta fatura** chama
+**Liquidar este boleto** chama
 `POST /api/faturamento/cobranca?route=bank-reconciliation-invoice` com
 `{"invoiceId":"11838"}`. Exige sessão administrativa e mesma origem. A
 execução refaz as conferências e usa os mesmos locks e controles de

@@ -57,34 +57,35 @@ test('exige IDs internos distintos das contas bancárias físicas para liquidar 
   );
 });
 
-test('pagamento integral confirmado pelo banco liquida somente o saldo e separa os juros', async () => {
+test('Bradesco envia o total pago, os juros e a data bancária na baixa', async () => {
   const calls = { completed: [], removed: [], saved: [] };
   const record = {
     state: 'ready',
-    invoiceId: '11777',
+    invoiceId: '11856',
     bank: 'bradesco',
     bankSlipId: '00000021311',
     ourNumber: '00000021311',
-    amount: 100
+    amount: 485.68,
+    dueAt: '2026-10-15'
   };
   const result = await reconcilePaidRecord(record, {
     bank: 'bradesco',
-    paidAt: '2026-09-29',
-    paidAmount: 103,
+    paidAt: '2026-10-16',
+    paidAmount: 500.97,
     reference: '00000021311',
-    titleAmounts: [100],
+    titleAmounts: [485.68],
     payerTaxIds: []
   }, {
     claimReconciliationLock: async () => 'lock-token',
     releaseReconciliationLock: async () => {},
     getBankSlipRecord: async () => record,
     fetchInvoices: async () => ({ invoices: [{
-      id: '11777',
+      id: '11856',
       internalId: 84583298,
       status: 0,
-      balance: 100
+      balance: 485.68
     }] }),
-    liquidationSettings: () => ({ paymentMethodId: 7, bankAccountId: 321 }),
+    liquidationSettings: () => ({ paymentMethodId: 2, bankAccountId: 2 }),
     liquidate: async (path, body) => {
       calls.path = path;
       calls.body = body;
@@ -102,18 +103,18 @@ test('pagamento integral confirmado pelo banco liquida somente o saldo e separa 
   assert.deepEqual(calls.body, {
     documentos: [{
       id_lancamento: 84583298,
-      data_pagamento: '2026-09-29',
-      forma_pagamento: 7,
-      data_credito_debito: '2026-09-29',
-      valor_juros: 3,
-      valor_liquidado: 100,
-      conta_bancaria: 321
+      data_pagamento: '2026-10-16',
+      forma_pagamento: 2,
+      data_credito_debito: '2026-10-16',
+      valor_juros: 15.29,
+      valor_liquidado: 500.97,
+      conta_bancaria: 2
     }]
   });
   assert.equal(calls.saved[0].reconciliation.status, 'submission_pending');
   assert.equal(calls.saved.at(-1).reconciliation.status, 'completed');
   assert.equal(calls.saved.at(-1).reconciliation.outcome, 'liquidated');
-  assert.deepEqual(calls.removed, ['11777']);
+  assert.deepEqual(calls.removed, ['11856']);
   assert.deepEqual(calls.completed.sort(), ['initial', 'overdue', 'reminder']);
 });
 
@@ -210,7 +211,7 @@ test('rodada Itaú baixa boleto na data informada pelo banco e registra a origem
     getReconciliationCursor: async () => 0,
     saveReconciliationCursor: async () => {},
     itauConfig: { beneficiaryId: '150000052061', wallet: '109' },
-    queryItauBankSlipDetail: async () => itauDetail(),
+    queryItauBankSlipDetail: async () => itauDetail({ paymentAmounts: ['205.00'] }),
     fetchInvoices: async () => ({ invoices: [{
       id: '11518', internalId: 12, status: 0, balance: 200
     }] }),
@@ -229,6 +230,7 @@ test('rodada Itaú baixa boleto na data informada pelo banco e registra a origem
   assert.equal(request.documentos[0].data_pagamento, '2026-09-29');
   assert.equal(request.documentos[0].data_credito_debito, '2026-09-29');
   assert.equal(request.documentos[0].valor_liquidado, 200);
+  assert.equal(request.documentos[0].valor_juros, 5);
   assert.equal(record.reconciliation.paidAtSource, 'itau_v2_payment_inclusion');
   assert.equal(record.reconciliation.paidAmountSource, 'itau_v2_payments');
   assert.equal(record.reconciliation.bankReference, '37393662-6632-3261-2d30-6662632d3464');
@@ -701,6 +703,62 @@ test('varredura manual inclui Itaú fora da lista restrita do agendador', async 
   assert.equal(result.hasMore, false);
 });
 
+test('varredura completa liquida boletos pagos dos dois bancos sem baixar faturas não pagas ou já liquidadas', async () => {
+  const records = new Map([
+    { state: 'ready', invoiceId: '11518', bank: 'itau', amount: 200,
+      beneficiaryId: '150000052061', wallet: '109', ourNumber: '00011518',
+      payer: { tax_id: '33378996846' }, issuedAt: '2026-09-20' },
+    { state: 'ready', invoiceId: '11901', bank: 'bradesco', amount: 100,
+      ourNumber: '00000021311' },
+    { state: 'ready', invoiceId: '11902', bank: 'bradesco', amount: 100,
+      ourNumber: '00000021312' },
+    { state: 'ready', invoiceId: '11903', bank: 'bradesco', amount: 100,
+      ourNumber: '00000021313' }
+  ].map((record) => [record.invoiceId, record]));
+  const invoices = {
+    '11518': { id: '11518', internalId: 18, status: 0, balance: 200 },
+    '11901': { id: '11901', internalId: 21, status: 0, balance: 100 },
+    '11903': { id: '11903', internalId: 23, status: 1, balance: 0 }
+  };
+  const requests = [];
+  const result = await reconcileBankPayments({
+    currentDate: '2026-10-16', manualFullScan: true, maxRecords: 8
+  }, {
+    env: { ITAU_RECONCILIATION_INVOICE_IDS: '' },
+    listBankSlipRecords: async () => [...records.values()],
+    getBankSlipRecord: async (id) => records.get(id),
+    saveBankSlipRecord: async (id, record) => { records.set(id, record); },
+    claimReconciliationLock: async () => 'token',
+    releaseReconciliationLock: async () => {},
+    itauConfig: { beneficiaryId: '150000052061', wallet: '109' },
+    queryItauBankSlipDetail: async () => itauDetail(),
+    bradescoConfig: {},
+    listBradescoSettledBankSlips: async () => [
+      { ourNumber: '00000021311', paidAt: '2026-10-15', paidAmount: 103, titleAmount: 100 },
+      { ourNumber: '00000021313', paidAt: '2026-10-15', paidAmount: 100, titleAmount: 100 }
+    ],
+    fetchInvoices: async ({ id }) => ({ invoices: invoices[id] ? [invoices[id]] : [] }),
+    liquidationSettings: (bank) => ({ paymentMethodId: 2,
+      bankAccountId: bank === 'itau' ? 6 : 2 }),
+    liquidate: async (_path, body) => {
+      requests.push(body.documentos[0]);
+      return { response: { ok: true }, payload: {
+        status: 1, data: { status: 1, ids: [body.documentos[0].id_lancamento] }
+      } };
+    },
+    removePending: async () => {},
+    markBillingEventCompleted: async () => {}
+  });
+  assert.equal(result.checked, 4);
+  assert.equal(result.settled, 2);
+  assert.equal(result.alreadySettled, 1);
+  assert.equal(result.pending, 1);
+  assert.equal(result.errors.length, 0);
+  assert.deepEqual(requests.map((item) => item.id_lancamento).sort(), [18, 21]);
+  assert.equal(requests.find((item) => item.id_lancamento === 18).conta_bancaria, 6);
+  assert.equal(requests.find((item) => item.id_lancamento === 21).conta_bancaria, 2);
+});
+
 test('baixa manual Bradesco exige confirmação, faz prévia sem gravar e não duplica lançamento', async () => {
   let record = { state: 'ready', invoiceId: '11901', bank: 'bradesco',
     amount: 100, ourNumber: '00000021311' };
@@ -710,7 +768,7 @@ test('baixa manual Bradesco exige confirmação, faz prévia sem gravar e não d
     getBankSlipRecord: async () => record,
     listBankSlipRecords: async () => [record],
     listBradescoSettledBankSlips: async () => bankPaid ? [{
-      ourNumber: '00000021311', paidAt: '2026-10-15', paidAmount: 100, titleAmount: 100
+      ourNumber: '00000021311', paidAt: '2026-10-15', paidAmount: 103, titleAmount: 100
     }] : [],
     bradescoConfig: {},
     fetchInvoices: async () => ({ invoices: [{
@@ -736,6 +794,7 @@ test('baixa manual Bradesco exige confirmação, faz prévia sem gravar e não d
     currentDate: '2026-10-16' }, dependencies);
   assert.equal(preview.bank, 'bradesco');
   assert.equal(preview.status, 'eligible');
+  assert.equal(preview.paidAmount, 103);
   assert.equal(preview.invoiceBalance, 100);
   assert.equal(liquidations, 0);
   const first = await reconcileBankInvoice({ invoiceId: '11901',

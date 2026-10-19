@@ -10,7 +10,7 @@
   <link rel="stylesheet" href="/faturamento/styles.css?v=20">
   <script src="/faturamento/sort.js?v=1" defer></script>
   <script src="/faturamento/app.js?v=21" defer></script>
-  <script src="/faturamento/cobranca.js?v=9" defer></script>
+  <script src="/faturamento/cobranca.js?v=10" defer></script>
   <script src="/faturamento/clientes-inativos.js?v=2" defer></script>
 </head>
 <body>
@@ -491,9 +491,9 @@
             <div>
               <span class="eyebrow">Conciliação financeira</span>
               <h1>Liquidar Faturas</h1>
-              <p>Confira os boletos registrados no Itaú e Bradesco e liquide na Brudam somente os pagamentos confirmados.</p>
+              <p>Liquidar faturas confere todos os boletos registrados no Itaú e Bradesco; apenas pagamentos confirmados de faturas abertas são baixados na Brudam.</p>
             </div>
-            <button class="button button-primary" id="focusLiquidationButton" type="button">Liquidar fatura</button>
+            <button class="button button-primary" id="focusLiquidationButton" type="button">Liquidar faturas</button>
           </div>
           <p class="dashboard-message collection-message" id="liquidationMessage" role="status" aria-live="polite"></p>
           <ul class="liquidation-batch-issues" id="liquidationBatchIssues" aria-label="Falhas da conferência" hidden></ul>
@@ -501,8 +501,8 @@
           <section class="collection-card" id="liquidationManualSection">
             <div class="collection-card-heading">
               <div>
-                <h2>Liquidar boleto manualmente</h2>
-                <p>Informe uma fatura com boleto Itaú ou Bradesco. A prévia não grava a baixa; o botão aparece após validar pagamento e saldo.</p>
+                <h2>Liquidar boleto</h2>
+                <p>Para conferir uma fatura específica com boleto Itaú ou Bradesco, informe o número abaixo. A prévia não grava a baixa; o botão individual aparece após validar pagamento e saldo.</p>
               </div>
             </div>
             <div class="itau-reconciliation-check">
@@ -516,7 +516,7 @@
                   Liberar tentativa manual
                 </button>
                 <button class="button button-primary" id="itauReconciliationRunButton" type="button" hidden>
-                  Liquidar esta fatura
+                  Liquidar este boleto
                 </button>
               </form>
               <p class="dashboard-message collection-message" id="itauReconciliationPreviewResult"
