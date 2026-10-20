@@ -17,6 +17,7 @@ const {
 const { fetchInvoices } = require('../../server/faturamento/brudam');
 const { findDoccobForInvoice } = require('../../server/faturamento/r2-doccob');
 const { getBankSlipRecord } = require('../../server/faturamento/boleto-store');
+const { itauBoletoConfig, queryItauBankSlipDetail } = require('../../server/faturamento/itau');
 const { listLiquidationLog } = require('../../server/faturamento/liquidation-log');
 const {
   analyzePaymentImport,
@@ -556,6 +557,50 @@ const handleItauDetailDiagnostic = async (req, res, query) => {
   });
 };
 
+// Temporário: consultar somente a fatura autorizada, sem gravar nem liquidar.
+const handleItauRaw11840 = async (req, res, query) => {
+  if (!requireSession(req, res)) return;
+  if (req.method !== 'GET') {
+    res.setHeader('Allow', 'GET');
+    sendJson(res, 405, { message: 'Método não permitido.' });
+    return;
+  }
+  if (String(query.id || '') !== '11840') {
+    sendJson(res, 422, { message: 'Consulta disponível somente para a fatura 11840.' });
+    return;
+  }
+  const record = await getBankSlipRecord('11840');
+  const config = itauBoletoConfig();
+  const onlyDigits = (value) => String(value || '').replace(/\D/g, '');
+  const sameNumber = (left, right) =>
+    onlyDigits(left).replace(/^0+(?=\d)/, '') === onlyDigits(right).replace(/^0+(?=\d)/, '');
+  if (!record || record.state !== 'ready' || record.bank !== 'itau' ||
+      onlyDigits(record.beneficiaryId) !== onlyDigits(config.beneficiaryId) ||
+      onlyDigits(record.wallet) !== onlyDigits(config.wallet) ||
+      !/^\d{1,8}$/.test(onlyDigits(record.ourNumber))) {
+    sendJson(res, 404, { message: 'Boleto Itaú da fatura 11840 não encontrado.' });
+    return;
+  }
+  const response = await queryItauBankSlipDetail({
+    beneficiaryId: record.beneficiaryId,
+    wallet: record.wallet,
+    ourNumber: record.ourNumber
+  }, { config, includeRawResponse: true });
+  if (response.data.length !== 1 ||
+      onlyDigits(response.data[0]?.beneficiario?.id_beneficiario) !== onlyDigits(record.beneficiaryId) ||
+      onlyDigits(response.data[0]?.dado_boleto?.codigo_carteira) !== onlyDigits(record.wallet) ||
+      !response.data[0]?.dado_boleto?.dados_individuais_boleto?.some((item) =>
+        sameNumber(item?.numero_nosso_numero, record.ourNumber))) {
+    sendJson(res, 502, { message: 'O Itaú não retornou um boleto único correspondente à fatura 11840.' });
+    return;
+  }
+  res.setHeader('X-Robots-Tag', 'noindex, nofollow');
+  if (query.download === '1') {
+    res.setHeader('Content-Disposition', 'attachment; filename="itau-11840-resposta-completa.json"');
+  }
+  sendJson(res, 200, response.rawResponse);
+};
+
 const handleItauReconciliationPreview = async (req, res, query) => {
   if (!requireSession(req, res)) return;
   if (req.method !== 'GET') {
@@ -766,6 +811,7 @@ module.exports = async (req, res) => {
     if (query.route === 'liquidation-log') return await handleLiquidationLog(req, res);
     if (query.route === 'bank-diagnostic') return await handleBankDiagnostic(req, res);
     if (query.route === 'itau-v2-diagnostic') return await handleItauDetailDiagnostic(req, res, query);
+    if (query.route === 'itau-raw-11840') return await handleItauRaw11840(req, res, query);
     if (query.route === 'itau-reconciliation-preview') {
       return await handleItauReconciliationPreview(req, res, query);
     }

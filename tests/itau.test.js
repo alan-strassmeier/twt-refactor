@@ -155,7 +155,12 @@ test('consulta detalhe v2 por GET com os parâmetros e cabeçalhos exigidos', as
   const result = await queryItauBankSlipDetail({ ourNumber: '00017244' }, { config, request });
   assert.equal(result.upstreamStatus, 200);
   assert.equal(result.data.length, 1);
-  assert.equal(requests.length, 2);
+  assert.equal(result.rawResponse, undefined);
+  const full = await queryItauBankSlipDetail({ ourNumber: '00017244' }, {
+    config, request, includeRawResponse: true
+  });
+  assert.deepEqual(full.rawResponse, { data: [{ dado_boleto: { pagamentos_cobranca: [] } }] });
+  assert.equal(requests.length, 3);
   const url = new URL(requests[1].url);
   assert.equal(url.origin + url.pathname, `${DETAIL_API_BASE_URL}/boletos`);
   assert.deepEqual(Object.fromEntries(url.searchParams), {
