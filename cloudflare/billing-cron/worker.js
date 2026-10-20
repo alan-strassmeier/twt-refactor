@@ -9,7 +9,7 @@ const triggerBillingCollection = async (env, request = fetch) => {
   const call = async (route, extra = {}) => {
     const url = new URL(endpoint);
     url.searchParams.set('route', route);
-    Object.entries(extra).forEach(([key, value]) => url.searchParams.set(key, value));
+    Object.entries(extra).forEach(([key, value]) => url.searchParams.set(key, String(value)));
     const response = await request(url.toString(), {
       method: 'POST',
       headers: {
@@ -22,7 +22,11 @@ const triggerBillingCollection = async (env, request = fetch) => {
       const body = (await response.text()).slice(0, 500);
       throw new Error(`A etapa ${route} respondeu HTTP ${response.status}: ${body}`);
     }
-    return response.json();
+    try {
+      return await response.json();
+    } catch {
+      throw new Error(`A etapa ${route} respondeu HTTP ${response.status}, mas não retornou JSON válido.`);
+    }
   };
 
   let lastCursor = '';
@@ -33,6 +37,15 @@ const triggerBillingCollection = async (env, request = fetch) => {
         Object.keys(totals).some((key) => !Number.isSafeInteger(result[key]) || result[key] < 0)) {
       throw new Error('A conciliação bancária retornou um formato inesperado; cobrança não iniciada.');
     }
+    console.info('[twt-billing-cron:bank-batch]', {
+      batch: batch + 1,
+      checked: result.checked,
+      settled: result.settled,
+      alreadySettled: result.alreadySettled,
+      pending: result.pending,
+      errors: result.errors.length,
+      hasMore: result.hasMore
+    });
     if (result.errors.length) {
       throw new Error(`${result.errors.length} boleto(s) com falha na conciliação; cobrança não iniciada.`);
     }
@@ -65,8 +78,26 @@ const isSaoPauloWeekday = (date) => {
 
 export default {
   async scheduled(controller, env, ctx) {
-    if (!isSaoPauloWeekday(new Date(controller.scheduledTime))) return;
-    ctx.waitUntil(triggerBillingCollection(env));
+    const scheduledAt = new Date(controller.scheduledTime);
+    if (!isSaoPauloWeekday(scheduledAt)) {
+      console.info('[twt-billing-cron:skipped]', { scheduledAt: scheduledAt.toISOString(), reason: 'weekend' });
+      return;
+    }
+    console.info('[twt-billing-cron:started]', { scheduledAt: scheduledAt.toISOString() });
+    ctx.waitUntil(triggerBillingCollection(env).then((result) => {
+      console.info('[twt-billing-cron:completed]', {
+        scheduledAt: scheduledAt.toISOString(),
+        scanned: Number(result?.scanned || 0),
+        sent: Number(result?.sent || 0),
+        errors: Array.isArray(result?.errors) ? result.errors.length : 0
+      });
+    }).catch((error) => {
+      console.error('[twt-billing-cron:failed]', {
+        scheduledAt: scheduledAt.toISOString(),
+        message: String(error?.message || error).slice(0, 500)
+      });
+      throw error;
+    }));
   },
 
   async fetch(request) {

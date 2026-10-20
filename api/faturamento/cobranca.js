@@ -723,11 +723,32 @@ const handleCronBankReconciliationBatch = async (req, res) => {
   }
   const runId = randomUUID();
   if (!await store.claimProcessingRun(runId)) {
+    console.warn('[faturamento:liquidacao:cron:ocupado]', { runId });
     sendJson(res, 409, { message: 'Outra verificação financeira está em andamento.' });
     return;
   }
+  const startedAt = new Date().toISOString();
   try {
-    sendJson(res, 200, await runCronBankReconciliationBatch());
+    const result = await runCronBankReconciliationBatch();
+    console.info('[faturamento:liquidacao:cron:lote]', {
+      runId,
+      startedAt,
+      completedAt: new Date().toISOString(),
+      checked: result.checked,
+      settled: result.settled,
+      alreadySettled: result.alreadySettled,
+      pending: result.pending,
+      errors: result.errors.length,
+      hasMore: result.hasMore
+    });
+    sendJson(res, 200, result);
+  } catch (error) {
+    console.error('[faturamento:liquidacao:cron:falha]', {
+      runId,
+      startedAt,
+      message: String(error?.message || error).slice(0, 300)
+    });
+    throw error;
   } finally {
     await store.releaseProcessingRun(runId).catch((error) => {
       console.error('[faturamento:liquidacao:cron:liberacao]', error);
