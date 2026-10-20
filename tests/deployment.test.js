@@ -112,6 +112,16 @@ test('Worker não envia cobrança se um lote bancário falhar ou ficar incomplet
   }
 });
 
+test('Worker identifica resposta 200 sem JSON válido como falha do agendador', async () => {
+  const worker = await import(pathToFileURL(
+    path.join(root, 'cloudflare', 'billing-cron', 'worker.js')
+  ).href);
+  await assert.rejects(worker.triggerBillingCollection({
+    BILLING_ENDPOINT: 'https://www.twt.com.br/api/faturamento/cobranca?route=process',
+    BILLING_CRON_SECRET: 'd'.repeat(32)
+  }, async () => new Response('conteúdo inesperado', { status: 200 })), /JSON válido/);
+});
+
 test('Worker adia a cobrança após vinte lotes e preserva continuação no servidor', async () => {
   const worker = await import(pathToFileURL(
     path.join(root, 'cloudflare', 'billing-cron', 'worker.js')

@@ -33,4 +33,20 @@ fim de semana se a relação entre UTC e horário local mudar.
    npx wrangler deploy
    ```
 
+O deploy da Vercel **não publica este Worker**. Após cada alteração de código ou
+agendamento em `cloudflare/billing-cron`, publique-o separadamente. Confirme no
+painel da Cloudflare que os dois cron triggers estão ativos. Em um dia útil,
+os logs devem mostrar `[twt-billing-cron:started]`, um ou mais
+`[twt-billing-cron:bank-batch]` e, ao final, `completed` ou `failed`. Na
+Vercel, procure `[faturamento:liquidacao:cron:lote]` e, quando a cobrança
+iniciar, `[faturamento:cobranca:execucao]` com `source: automatic`. O endpoint
+GET do Worker é apenas um teste de disponibilidade HTTP: `status: ok` não
+confirma que o cron executou.
+
+Ao editar variáveis no painel da Cloudflare, confira também a versão ativa e
+os eventos agendados. Em 20/10/2026, a versão ativa continha apenas `fetch()`;
+o cron disparava, mas todos os eventos falhavam com
+`Handler does not export a scheduled() function`. Ter o gatilho e o segredo
+configurados não basta se o código publicado não exportar `scheduled()`.
+
 O segredo nunca deve ser incluído no `wrangler.jsonc` ou enviado ao Git.
