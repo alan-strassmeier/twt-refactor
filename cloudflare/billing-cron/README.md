@@ -38,7 +38,10 @@ agendamento em `cloudflare/billing-cron`, publique-o separadamente. Confirme no
 painel da Cloudflare que os dois cron triggers estão ativos. Em um dia útil,
 os logs devem mostrar `[twt-billing-cron:started]`, um ou mais
 `[twt-billing-cron:bank-batch]` e, ao final, `completed` ou `failed`. Na
-Vercel, procure `[faturamento:liquidacao:cron:lote]` e, quando a cobrança
+falha por boleto, `[twt-billing-cron:bank-error]` identifica a fatura e o
+banco sem registrar a mensagem bruta do provedor. A fatura pode então ser
+conferida pela prévia manual, sem disparar uma nova baixa. Na Vercel, procure
+`[faturamento:liquidacao:cron:lote]` e, quando a cobrança
 iniciar, `[faturamento:cobranca:execucao]` com `source: automatic`. O endpoint
 GET do Worker é apenas um teste de disponibilidade HTTP: `status: ok` não
 confirma que o cron executou.

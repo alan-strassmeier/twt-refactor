@@ -1,5 +1,15 @@
 const MAX_BANK_BATCHES_PER_RUN = 20;
 
+const bankFailureDiagnostics = (errors, batch) => errors.slice(0, 25).map((error) => {
+  const invoiceId = String(error?.invoiceId || '');
+  const bank = String(error?.bank || '');
+  return {
+    batch,
+    invoiceId: /^\d{1,20}$/.test(invoiceId) ? invoiceId : 'invalid',
+    bank: bank === 'itau' || bank === 'bradesco' ? bank : 'unknown'
+  };
+});
+
 const triggerBillingCollection = async (env, request = fetch) => {
   const endpoint = String(env.BILLING_ENDPOINT || '').trim();
   const secret = String(env.BILLING_CRON_SECRET || '');
@@ -47,6 +57,11 @@ const triggerBillingCollection = async (env, request = fetch) => {
       hasMore: result.hasMore
     });
     if (result.errors.length) {
+      // O retorno da Vercel pode conter mensagens de provedores externos. Elas
+      // não vão aos logs; fatura e banco bastam para localizar a falha.
+      bankFailureDiagnostics(result.errors, batch + 1).forEach((diagnostic) => {
+        console.error('[twt-billing-cron:bank-error]', diagnostic);
+      });
       throw new Error(`${result.errors.length} boleto(s) com falha na conciliação; cobrança não iniciada.`);
     }
     Object.keys(totals).forEach((key) => { totals[key] += result[key]; });
@@ -106,4 +121,4 @@ export default {
   }
 };
 
-export { triggerBillingCollection, isSaoPauloWeekday };
+export { triggerBillingCollection, isSaoPauloWeekday, bankFailureDiagnostics };

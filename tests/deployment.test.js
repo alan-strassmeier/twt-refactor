@@ -112,6 +112,21 @@ test('Worker não envia cobrança se um lote bancário falhar ou ficar incomplet
   }
 });
 
+test('Worker registra apenas fatura e banco no diagnóstico de erro bancário', async () => {
+  const worker = await import(pathToFileURL(
+    path.join(root, 'cloudflare', 'billing-cron', 'worker.js')
+  ).href);
+  assert.deepEqual(worker.bankFailureDiagnostics([
+    { invoiceId: '11840', bank: 'itau', message: 'token secreto do provedor' },
+    { invoiceId: '11856', bank: 'bradesco', message: 'pagador e dados bancários' },
+    { invoiceId: 'ABC', bank: 'outro', message: 'não registrar' }
+  ], 2), [
+    { batch: 2, invoiceId: '11840', bank: 'itau' },
+    { batch: 2, invoiceId: '11856', bank: 'bradesco' },
+    { batch: 2, invoiceId: 'invalid', bank: 'unknown' }
+  ]);
+});
+
 test('Worker identifica resposta 200 sem JSON válido como falha do agendador', async () => {
   const worker = await import(pathToFileURL(
     path.join(root, 'cloudflare', 'billing-cron', 'worker.js')
