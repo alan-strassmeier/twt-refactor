@@ -5,7 +5,7 @@ const bankFailureDiagnostics = (errors, batch) => errors.slice(0, 25).map((error
   const bank = String(error?.bank || '');
   return {
     batch,
-    invoiceId: /^\d{1,20}$/.test(invoiceId) ? invoiceId : 'invalid',
+    invoiceId: /^[0-9]{1,20}$/.test(invoiceId) ? invoiceId : 'invalid',
     bank: bank === 'itau' || bank === 'bradesco' ? bank : 'unknown'
   };
 });
