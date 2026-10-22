@@ -37,13 +37,24 @@ const fetchExactInvoice = async (id, dependencies = {}) => {
   const fetch = dependencies.fetchCurrentInvoice || dependencies.fetchInvoices || fetchInvoices;
   const wait = dependencies.waitBeforeInvoiceRetry || ((milliseconds) =>
     new Promise((resolve) => setTimeout(resolve, milliseconds)));
+  const retryDeadline = Date.now() + 12000;
   for (let attempt = 1; attempt <= EMPTY_INVOICE_RETRIES; attempt += 1) {
     let result;
     try {
       result = await retryTransientNetworkRequest(() => fetch({ id, limit: 100, fresh: true }));
     } catch (error) {
+      const status = Number(error?.statusCode || error?.upstreamStatus || 0);
+      if (status >= 500 && attempt < EMPTY_INVOICE_RETRIES && Date.now() < retryDeadline) {
+        await wait(200 * attempt);
+        continue;
+      }
+      console.warn('[faturamento:cobranca-conjunta:consulta-fatura]', {
+        invoiceId: id,
+        httpStatus: status || null,
+        code: String(error?.code || error?.name || '').slice(0, 40)
+      });
       throw Object.assign(fail(
-        `Não foi possível confirmar a situação da fatura ${id} na Brudam. Nenhum e-mail foi enviado.`, 503
+        `Não foi possível confirmar a situação da fatura ${id} na Brudam${status ? ` (HTTP ${status})` : ''}. Nenhum e-mail foi enviado.`, 503
       ), { cause: error });
     }
     const matches = (result?.invoices || []).filter((item) => invoiceId(item.id) === id);
@@ -51,12 +62,13 @@ const fetchExactInvoice = async (id, dependencies = {}) => {
     if (matches.length > 1) {
       throw fail(`A Brudam retornou registros duplicados para a fatura ${id}. Nenhum e-mail foi enviado.`, 503);
     }
-    if (attempt === EMPTY_INVOICE_RETRIES) break;
+    if (attempt === EMPTY_INVOICE_RETRIES || Date.now() >= retryDeadline) {
+      throw fail(
+        `A Brudam não retornou uma situação financeira inequívoca para a fatura ${id} após ${attempt} consulta(s). Nenhum e-mail foi enviado.`, 503
+      );
+    }
     await wait(200 * attempt);
   }
-  throw fail(
-    `A Brudam não retornou uma situação financeira inequívoca para a fatura ${id} após ${EMPTY_INVOICE_RETRIES} consultas. Nenhum e-mail foi enviado.`, 503
-  );
 };
 
 const companyAndInvoices = async (cnpjInput, dependencies = {}, onlyInvoiceIds = null) => {

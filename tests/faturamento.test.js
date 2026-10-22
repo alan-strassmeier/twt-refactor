@@ -25,7 +25,8 @@ const {
   buildAgingBuckets,
   buildDebtorSummary,
   debtorInvoiceInput,
-  plainInvoiceIdQuery
+  plainInvoiceIdQuery,
+  fetchInvoices
 } = require('../server/faturamento/brudam');
 const { MAX_ATTEMPTS } = require('../server/faturamento/rate-limit');
 const { queryFromRequest } = require('../server/faturamento/http');
@@ -98,6 +99,71 @@ test('monta somente os filtros permitidos pela API de faturas', () => {
   assert.equal(result.limit, 50);
   assert.equal(result.skip, 0);
   assert.equal(result.exactCnpj, '97434690000129');
+});
+
+test('consulta por número tenta id simples quando id[eq] retorna erro da Brudam', async () => {
+  const queries = [];
+  const result = await fetchInvoices({ id: '10758' }, { requestPage: async (query) => {
+    queries.push(new URLSearchParams(query));
+    return queries.length === 1
+      ? { response: { ok: false, status: 500 }, payload: { status: 0, message: 'Falha temporária' } }
+      : { response: { ok: true, status: 200 }, payload: { status: 1, data: { documentos: [{
+        fatura: 10758, id: 999, status: 0, valor_total: 100, saldo: 100,
+        cliente: { cnpj: '35820448006339', fantasia: 'SPS White Martins' }
+      }] } } };
+  } });
+  assert.equal(queries[0].get('id[eq]'), '10758');
+  assert.equal(queries[1].get('id'), '10758');
+  assert.deepEqual(result.invoices.map((invoice) => invoice.id), [10758]);
+  assert.equal(result.pagination.upstreamFilter, 'id');
+  assert.equal(result.pagination.fallbackAttempted, true);
+});
+
+test('consulta alternativa não aceita uma fatura diferente da solicitada', async () => {
+  let calls = 0;
+  const result = await fetchInvoices({ id: '10758' }, { requestPage: async () => {
+    calls += 1;
+    return calls === 1
+      ? { response: { ok: false, status: 500 }, payload: { status: 0 } }
+      : { response: { ok: true, status: 200 }, payload: { status: 1, data: { documentos: [{
+        fatura: 10759, id: 999, status: 0, valor_total: 100, saldo: 100,
+        cliente: { cnpj: '35820448006339' }
+      }] } } };
+  } });
+  assert.equal(calls, 2);
+  assert.deepEqual(result.invoices, []);
+});
+
+test('falha da consulta alternativa não oculta o HTTP 500 original', async () => {
+  let calls = 0;
+  await assert.rejects(fetchInvoices({ id: '10758' }, { requestPage: async () => {
+    calls += 1;
+    return calls === 1
+      ? { response: { ok: false, status: 500 }, payload: { status: 0, message: 'Falha temporária' } }
+      : { response: { ok: false, status: 400 }, payload: { status: 0, message: 'Filtro inválido' } };
+  } }), { statusCode: 500, message: 'Falha temporária' });
+  assert.equal(calls, 2);
+});
+
+test('fallback indisponível não apaga uma resposta id[eq] válida e vazia', async () => {
+  let calls = 0;
+  const result = await fetchInvoices({ id: '10758' }, { requestPage: async () => {
+    calls += 1;
+    if (calls === 2) throw Object.assign(new Error('Timeout'), { code: 'ETIMEDOUT' });
+    return { response: { ok: true, status: 200 }, payload: { status: 1, data: { documentos: [] } } };
+  } });
+  assert.equal(calls, 2);
+  assert.deepEqual(result.invoices, []);
+  assert.equal(result.pagination.fallbackAttempted, true);
+});
+
+test('falha de transporte não duplica espera com filtro alternativo', async () => {
+  let calls = 0;
+  await assert.rejects(fetchInvoices({ id: '10758' }, { requestPage: async () => {
+    calls += 1;
+    throw Object.assign(new Error('Timeout'), { code: 'ETIMEDOUT' });
+  } }), /Timeout/);
+  assert.equal(calls, 1);
 });
 
 test('transforma o status local de vencidas em faturas abertas até o dia anterior', () => {
