@@ -23,10 +23,11 @@ const MAX_ATTACHMENT_BYTES = 18 * 1024 * 1024;
 const fail = (message, statusCode = 409) => Object.assign(new Error(message), { statusCode, expose: true });
 const digits = (value) => String(value || '').replace(/\D/g, '');
 const invoiceId = (value) => String(value || '').trim().replace(/^0+(?=\d)/, '');
-const sameIds = (left, right) => left.length === right.length && left.every((id, index) => id === right[index]);
 const sortIds = (values) => [...new Set(values.map(invoiceId))].sort((left, right) =>
   BigInt(left) < BigInt(right) ? -1 : BigInt(left) > BigInt(right) ? 1 : 0);
 const cents = (value) => Math.round(Number(value) * 100);
+const overdueDays = (dueAt, today) => Math.floor((Date.parse(`${today}T00:00:00Z`)
+  - Date.parse(`${String(dueAt || '').slice(0, 10)}T00:00:00Z`)) / 86400000);
 const isOverdue = (invoice, today) =>
   automaticBillingEventForInvoice(invoice, today) === EVENT_TYPES.overdue;
 
@@ -67,20 +68,34 @@ const companyAndInvoices = async (cnpjInput, dependencies = {}) => {
     && isPendingInvoice(invoice) && isOverdue(invoice, today));
   const candidateIds = new Set(candidates.map((invoice) => invoiceId(invoice.id)));
   const invoices = [];
+  const unverifiedInvoices = [];
   for (const id of candidateIds) {
-    const current = await fetchExactInvoice(id, dependencies);
+    let current;
+    try {
+      current = await fetchExactInvoice(id, dependencies);
+    } catch (error) {
+      const listed = candidates.find((invoice) => invoiceId(invoice.id) === id);
+      unverifiedInvoices.push({ id, issuedAt: listed.issuedAt, dueAt: listed.dueAt,
+        balance: null, unverified: true,
+        blockReason: error.message.replace(/\s*Nenhum e-mail foi enviado\.\s*$/, '') });
+      continue;
+    }
     if (String(current.status) !== '0' || !isPendingInvoice(current)) continue;
     if (digits(current.clientDocument) !== cnpj) {
-      throw fail(`O cliente da fatura ${id} não pôde ser confirmado. Nenhum e-mail foi enviado.`, 503);
+      const listed = candidates.find((invoice) => invoiceId(invoice.id) === id);
+      unverifiedInvoices.push({ id, issuedAt: listed.issuedAt, dueAt: listed.dueAt,
+        balance: null, unverified: true,
+        blockReason: `O cliente da fatura ${id} não pôde ser confirmado na Brudam.` });
+      continue;
     }
     if (isOverdue(current, today)) invoices.push(current);
   }
-  return { cnpj, category, invoices: invoices.sort((a, b) =>
-    BigInt(invoiceId(a.id)) < BigInt(invoiceId(b.id)) ? -1 : 1) };
+  return { cnpj, category, invoices: [...invoices, ...unverifiedInvoices].sort((a, b) =>
+    BigInt(invoiceId(a.id)) < BigInt(invoiceId(b.id)) ? -1 : 1), today };
 };
 
 const previewJointBilling = async (cnpj, dependencies = {}) => {
-  const { category, invoices } = await companyAndInvoices(cnpj, dependencies);
+  const { category, invoices, today } = await companyAndInvoices(cnpj, dependencies);
   const ids = invoices.map((invoice) => invoiceId(invoice.id));
   const [blocks, jointDeliveries] = await Promise.all([
     (dependencies.getInvoiceBlocks || store.getInvoiceBlocks)(ids),
@@ -92,8 +107,10 @@ const previewJointBilling = async (cnpj, dependencies = {}) => {
       id: invoiceId(invoice.id),
       issuedAt: invoice.issuedAt,
       dueAt: invoice.dueAt,
-      balance: Number(invoice.balance),
-      blocked: Boolean(blocks.get(id)?.blocked),
+      balance: invoice.unverified ? null : Number(invoice.balance),
+      overdueDays: overdueDays(invoice.dueAt, today),
+      blocked: Boolean(invoice.unverified || blocks.get(id)?.blocked),
+      blockReason: invoice.blockReason || (blocks.get(id)?.blocked ? 'Envio bloqueado para esta fatura.' : ''),
       jointSent: Boolean(jointDeliveries.get(id))
     };
   });
@@ -102,7 +119,7 @@ const previewJointBilling = async (cnpj, dependencies = {}) => {
     company: { cnpj: category.cnpj, name: category.name, billingMethod: category.billingMethod },
     recipients: recipients.map(({ firstName, lastName, email }) => ({ firstName, lastName, email })),
     invoices: entries,
-    totalBalance: Math.round(entries.reduce((sum, invoice) => sum + invoice.balance, 0) * 100) / 100,
+    totalBalance: Math.round(entries.reduce((sum, invoice) => sum + (invoice.balance || 0), 0) * 100) / 100,
     blockedCount: entries.filter((invoice) => invoice.blocked).length,
     jointSentCount: entries.filter((invoice) => invoice.jointSent).length
   };
@@ -164,12 +181,16 @@ const sendJointBilling = async ({ cnpj: cnpjInput, invoiceIds }, dependencies = 
   }
   const preview = await previewJointBilling(cnpjInput, dependencies);
   const cnpj = preview.company.cnpj;
-  const currentIds = sortIds(preview.invoices.map((invoice) => invoice.id));
-  if (!sameIds(expectedIds, currentIds)) {
-    throw fail('A lista de faturas vencidas em aberto mudou. Atualize a consulta antes de enviar.');
+  const selected = expectedIds.map((id) => preview.invoices.find((invoice) => invoice.id === id));
+  if (selected.some((invoice) => !invoice)) {
+    throw fail('Uma fatura selecionada não está mais vencida e em aberto. Atualize a consulta antes de enviar.');
   }
-  if (preview.blockedCount) throw fail('Há fatura(s) com envio bloqueado nesta empresa. Nenhum e-mail foi enviado.');
-  if (preview.jointSentCount) throw fail('Há fatura(s) já reservadas ou enviadas em conjunto. Confira os logs antes de repetir.');
+  if (selected.some((invoice) => invoice.blocked)) {
+    throw fail('Há fatura(s) selecionada(s) com envio bloqueado. Ignore-as neste envio para continuar com as demais.');
+  }
+  if (selected.some((invoice) => invoice.jointSent)) {
+    throw fail('Há fatura(s) selecionada(s) já reservadas ou enviadas em conjunto. Ignore-as para continuar com as demais.');
+  }
   if (!preview.recipients.length) throw fail('Cadastre ao menos um destinatário ativo para esta empresa.');
 
   const getCategory = dependencies.getCategory || store.getCategory;
@@ -190,19 +211,24 @@ const sendJointBilling = async ({ cnpj: cnpjInput, invoiceIds }, dependencies = 
 
   // A lista e o estado financeiro são novamente conferidos imediatamente antes do SMTP.
   const latest = await previewJointBilling(cnpj, dependencies);
-  if (!sameIds(expectedIds, sortIds(latest.invoices.map((invoice) => invoice.id)))) {
-    throw fail('A lista de faturas mudou durante a preparação. Nenhum e-mail foi enviado.');
+  const latestSelected = expectedIds.map((id) => latest.invoices.find((invoice) => invoice.id === id));
+  if (latestSelected.some((invoice) => !invoice)) {
+    throw fail('Uma fatura selecionada mudou durante a preparação. Nenhum e-mail foi enviado.');
   }
-  if (expectedIds.some((id) => cents(preview.invoices.find((item) => item.id === id).balance)
-    !== cents(latest.invoices.find((item) => item.id === id).balance))) {
+  if (selected.some((invoice, index) => cents(invoice.balance) !== cents(latestSelected[index].balance)
+    || invoice.dueAt !== latestSelected[index].dueAt)) {
     throw fail('O saldo de uma fatura mudou durante a preparação. Atualize a consulta antes de enviar.');
   }
   if (preview.company.name !== latest.company.name
     || preview.company.billingMethod !== latest.company.billingMethod) {
     throw fail('O cadastro da empresa mudou durante a preparação. Atualize a consulta antes de enviar.');
   }
-  if (latest.blockedCount) throw fail('Uma fatura foi bloqueada durante a preparação. Nenhum e-mail foi enviado.');
-  if (latest.jointSentCount) throw fail('Uma fatura foi reservada por outro envio conjunto. Nenhum e-mail foi enviado.');
+  if (latestSelected.some((invoice) => invoice.blocked)) {
+    throw fail('Uma fatura selecionada foi bloqueada durante a preparação. Nenhum e-mail foi enviado.');
+  }
+  if (latestSelected.some((invoice) => invoice.jointSent)) {
+    throw fail('Uma fatura selecionada foi reservada por outro envio conjunto. Nenhum e-mail foi enviado.');
+  }
   const recipientEmails = preview.recipients.map((contact) => contact.email.toLowerCase()).sort();
   if (recipientEmails.join('|') !== latest.recipients.map((contact) => contact.email.toLowerCase()).sort().join('|')) {
     throw fail('Os destinatários mudaram durante a preparação. Nenhum e-mail foi enviado.');
@@ -212,6 +238,8 @@ const sendJointBilling = async ({ cnpj: cnpjInput, invoiceIds }, dependencies = 
     await currentOpenInvoice(id, cnpj, dependencies, expected.balance, expected.dueAt);
   }
   const today = saoPauloDate(dependencies.now ? dependencies.now() : new Date());
+  const selectedTotalBalance = Math.round(selected.reduce((sum, invoice) => sum + invoice.balance, 0) * 100) / 100;
+  const selectedInvoices = selected.map(({ id, dueAt }) => ({ id, dueAt, overdueDays: overdueDays(dueAt, today) }));
   const batchId = BigInt(`0x${createHash('sha256').update(`${cnpj}|${today}|${expectedIds.join(',')}`)
     .digest('hex').slice(0, 16)}`).toString();
   const event = 'joint';
@@ -236,8 +264,8 @@ const sendJointBilling = async ({ cnpj: cnpjInput, invoiceIds }, dependencies = 
   const emailPreview = {
     fromName: '', fromEmail: '', toName: preview.company.name,
     toEmail: recipientEmails.join(', '), subject: jointBillingSubject,
-    text: jointBillingText({ companyName: greetingName, invoiceIds: expectedIds,
-      paymentMethod, totalBalance: preview.totalBalance }),
+    text: jointBillingText({ companyName: greetingName, invoices: selectedInvoices,
+      paymentMethod, totalBalance: selectedTotalBalance }),
     priority: 'normal', attachments: attachments.map((item) => item.filename)
   };
   const metadata = {
@@ -276,7 +304,8 @@ const sendJointBilling = async ({ cnpj: cnpjInput, invoiceIds }, dependencies = 
     try {
       result = await (dependencies.sendJointBillingEmail || sendJointBillingEmail)({
         recipients: preview.recipients, companyName: greetingName,
-        invoiceIds: expectedIds, paymentMethod, totalBalance: preview.totalBalance,
+        invoiceIds: expectedIds, invoices: selectedInvoices, paymentMethod,
+        totalBalance: selectedTotalBalance,
         attachments, clientReference, transport, config
       });
     } finally {
