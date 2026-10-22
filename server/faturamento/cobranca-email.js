@@ -275,6 +275,7 @@ const sendJointBillingEmail = async ({
       name: [contact.firstName, contact.lastName].filter(Boolean).join(' '),
       address: contact.email
     })),
+    cc: config.alertEmail || DEFAULT_ALERT_EMAIL,
     headers: { 'X-TM-CLIENT-REF': clientReference },
     subject: jointBillingSubject,
     text: jointBillingText(content),

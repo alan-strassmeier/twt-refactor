@@ -18,7 +18,7 @@ const { fetchInvoices } = require('../../server/faturamento/brudam');
 const { findDoccobForInvoice } = require('../../server/faturamento/r2-doccob');
 const { getBankSlipRecord } = require('../../server/faturamento/boleto-store');
 const {
-  previewJointBilling, refreshJointBillingInvoice, sendJointBilling
+  listJointBilling, previewJointBilling, refreshJointBillingInvoice, sendJointBilling
 } = require('../../server/faturamento/cobranca-conjunta');
 const { listLiquidationLog } = require('../../server/faturamento/liquidation-log');
 const {
@@ -964,7 +964,8 @@ const handleResend = async (req, res) => {
 const handleJointBilling = async (req, res, query) => {
   if (!requireSession(req, res)) return;
   if (req.method === 'GET') {
-    sendJson(res, 200, await previewJointBilling(query.cnpj));
+    sendJson(res, 200, query.list === '1'
+      ? await listJointBilling(query.cnpj) : await previewJointBilling(query.cnpj));
     return;
   }
   if (req.method !== 'POST') {
@@ -973,7 +974,7 @@ const handleJointBilling = async (req, res, query) => {
     return;
   }
   if (!requireSameOrigin(req, res)) return;
-  const body = await parseJsonBody(req, 65536);
+  const body = await parseJsonBody(req, 3 * 1024 * 1024);
   const runId = randomUUID();
   if (!await store.claimProcessingRun(runId)) {
     sendJson(res, 409, { message: 'Já existe uma operação de cobrança em andamento. Aguarde a conclusão.' });
@@ -1084,7 +1085,10 @@ module.exports = async (req, res) => {
     sendJson(res, statusCode, {
       message: statusCode >= 500 && !error.expose
         ? 'Não foi possível concluir a operação de cobrança.'
-        : error.message
+        : error.message,
+      ...(error.retryable === true ? { retryable: true } : {}),
+      ...(error.invoiceId ? { invoiceId: String(error.invoiceId) } : {}),
+      ...(Number(error.upstreamStatus) > 0 ? { upstreamStatus: Number(error.upstreamStatus) } : {})
     });
   }
 };

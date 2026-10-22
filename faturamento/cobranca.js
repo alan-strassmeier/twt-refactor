@@ -113,6 +113,8 @@
     categoryDeleteTrigger: null,
     emailLogTrigger: null,
     jointPreview: null,
+    jointInitialRetryCategory: null,
+    jointSendRetry: false,
     jointExcludedIds: new Set()
   };
   const endpoint = (route, query = {}) => {
@@ -121,22 +123,41 @@
   };
 
   const requestJson = async (url, options = {}) => {
-    const response = await fetch(url, {
-      credentials: 'same-origin',
-      ...options,
-      headers: {
-        Accept: 'application/json',
-        ...(options.body ? { 'Content-Type': 'application/json' } : {}),
-        ...(options.headers || {})
-      }
-    });
-    const payload = (response.headers.get('content-type') || '').includes('application/json')
-      ? await response.json()
-      : { message: 'Resposta inválida do servidor.' };
+    let response;
+    try {
+      response = await fetch(url, {
+        credentials: 'same-origin',
+        ...options,
+        headers: {
+          Accept: 'application/json',
+          ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+          ...(options.headers || {})
+        }
+      });
+    } catch (error) {
+      throw new Error(`Falha de conexão com o servidor: ${error.message || 'sem resposta'}. Tente novamente.`);
+    }
+    const isJson = (response.headers.get('content-type') || '').includes('application/json');
+    const payload = isJson
+      ? await response.json().catch(() => ({}))
+      : {};
     if (!response.ok) {
-      const error = new Error(payload.message || 'Não foi possível concluir a solicitação.');
+      const requestId = response.headers.get('x-vercel-id');
+      const fallback = response.status === 429
+        ? 'Muitas consultas em sequência (HTTP 429). Aguarde um instante e tente novamente.'
+        : `Não foi possível concluir a solicitação (HTTP ${response.status}${requestId
+          ? `; requisição ${requestId}` : ''}).`;
+      const serverMessage = String(payload.message || '').trim();
+      const generic = /^Não foi possível concluir (?:a solicitação|a operação de cobrança)\.?$/i
+        .test(serverMessage);
+      const error = new Error(serverMessage && !generic ? serverMessage : fallback);
       error.status = response.status;
+      error.retryable = payload.retryable === true;
+      error.invoiceId = payload.invoiceId || '';
       throw error;
+    }
+    if (!isJson || !payload || typeof payload !== 'object' || !Object.keys(payload).length) {
+      throw new Error(`O servidor retornou uma resposta inválida (HTTP ${response.status}). Tente novamente.`);
     }
     return payload;
   };
@@ -587,6 +608,8 @@
 
   const selectedJointInvoices = () => (state.jointPreview?.invoices || [])
     .filter((invoice) => !state.jointExcludedIds.has(invoice.id));
+  const needsJointInvoiceData = (invoice) => invoice.unverified
+    || (!invoice.blocked && !invoice.jointSent && (!invoice.proof || !invoice.snapshot));
   const jointBlockLabel = (invoice) => {
     const reasons = [];
     if (invoice.blockKind === 'manual') reasons.push('bloqueio manual');
@@ -597,16 +620,27 @@
   };
 
   const updateJointSelection = () => {
+    if (state.jointInitialRetryCategory) {
+      elements.jointTotal.textContent = 'Lista ainda não carregada';
+      elements.jointRefreshButton.disabled = true;
+      elements.jointSendButton.textContent = 'Tentar novamente';
+      elements.jointSendButton.disabled = state.loading;
+      return;
+    }
     const selected = selectedJointInvoices();
+    const needsRetry = selected.some(needsJointInvoiceData);
     const total = selected.reduce((sum, invoice) => sum + (Number(invoice.balance) || 0), 0);
     elements.jointTotal.textContent = `${selected.length} selecionada(s) · Total: ${formatMoney(total)}`;
-    const errorCount = (state.jointPreview?.invoices || []).filter((invoice) => invoice.unverified).length;
+    const errorCount = (state.jointPreview?.invoices || []).filter(needsJointInvoiceData).length;
     elements.jointRefreshButton.disabled = state.loading || errorCount === 0;
     elements.jointRefreshButton.title = errorCount
       ? `Reconsultar somente ${errorCount} fatura(s) com erro` : 'Nenhuma fatura com erro para atualizar';
-    elements.jointSendButton.disabled = state.loading || !selected.length
-      || !state.jointPreview?.recipients?.length
-      || selected.some((invoice) => invoice.blocked || invoice.jointSent || !invoice.proof);
+    elements.jointSendButton.textContent = needsRetry || state.jointSendRetry
+      ? 'Tentar novamente' : 'Enviar cobrança conjunta';
+    elements.jointSendButton.disabled = state.loading || !selected.length || (!needsRetry
+      && (!state.jointPreview?.recipients?.length
+        || selected.some((invoice) => invoice.blocked || invoice.jointSent
+          || !invoice.proof || !invoice.snapshot)));
   };
 
   const renderJointPreview = (preview) => {
@@ -648,10 +682,14 @@
     const selected = selectedJointInvoices();
     if (!preview.invoices.length) {
       setMessage('Esta empresa não possui faturas em aberto vencidas há pelo menos dois dias.', 'warning');
-    } else if (!preview.recipients.length) {
-      setMessage('Cadastre ao menos um destinatário ativo antes de enviar.', 'warning');
     } else if (!selected.length) {
       setMessage('Selecione ao menos uma fatura para o envio.', 'warning');
+    } else if (selected.some(needsJointInvoiceData)) {
+      const pending = selected.filter(needsJointInvoiceData);
+      setMessage(`${pending.length} fatura(s) sem confirmação: ${pending.map(jointBlockLabel).join('; ')}. `
+        + 'Clique em Tentar novamente para consultar somente essas faturas, ou ignore-as neste envio.', 'warning');
+    } else if (!preview.recipients.length) {
+      setMessage('Cadastre ao menos um destinatário ativo antes de enviar.', 'warning');
     } else if (selected.some((invoice) => invoice.blocked || invoice.jointSent)) {
       const blocked = selected.filter((invoice) => invoice.blocked || invoice.jointSent);
       setMessage(`Faturas que impedem o envio: ${blocked.map(jointBlockLabel).join('; ')}. `
@@ -663,16 +701,97 @@
     }
   };
 
+  const retryJointErrors = async (preview) => {
+    const errorIds = (preview?.invoices || []).filter(needsJointInvoiceData)
+      .map((invoice) => invoice.id);
+    if (!errorIds.length || state.loading) return;
+    let updated = 0;
+    let removed = 0;
+    let limited = false;
+    setLoading(true);
+    updateJointSelection();
+    try {
+      for (let index = 0; index < errorIds.length; index += 1) {
+        if (state.jointPreview !== preview) return;
+        const id = errorIds[index];
+        setMessage(`Conferindo fatura ${id} (${index + 1}/${errorIds.length})…`);
+        let result;
+        try {
+          result = await requestJson(endpoint('joint-billing-refresh'), {
+            method: 'POST',
+            body: JSON.stringify({ cnpj: preview.company.cnpj, invoiceId: id,
+              includePdfData: true })
+          });
+          if (result.id !== id || (!result.removed && !result.invoice)) {
+            throw new Error(`Resposta inválida ao consultar a fatura ${id}.`);
+          }
+        } catch (error) {
+          result = { id, removed: false, invoice: {
+            id, balance: null, unverified: true, blocked: true, proof: null,
+            upstreamStatus: error.status || null,
+            blockReason: `Não foi possível consultar a fatura ${id}: ${error.message}`
+          } };
+        }
+        if (result.removed) {
+          preview.invoices = preview.invoices.filter((invoice) => invoice.id !== id);
+          state.jointExcludedIds.delete(id);
+          removed += 1;
+        } else {
+          preview.invoices = preview.invoices.map((invoice) => invoice.id === id
+            ? { ...invoice, ...result.invoice,
+              issuedAt: result.invoice.issuedAt || invoice.issuedAt,
+              dueAt: result.invoice.dueAt || invoice.dueAt }
+            : invoice);
+          if (!result.invoice.unverified) updated += 1;
+          limited = result.invoice.upstreamStatus === 429;
+        }
+        preview.totalBalance = Math.round(preview.invoices.reduce(
+          (sum, invoice) => sum + (Number(invoice.balance) || 0), 0) * 100) / 100;
+        preview.blockedCount = preview.invoices.filter((invoice) => invoice.blocked).length;
+        preview.jointSentCount = preview.invoices.filter((invoice) => invoice.jointSent).length;
+        renderJointPreview(preview);
+        if (limited) break;
+        if (index + 1 < errorIds.length) await new Promise((resolve) => setTimeout(resolve, 350));
+      }
+      const remaining = preview.invoices.filter(needsJointInvoiceData).length;
+      const blocked = selectedJointInvoices().filter((invoice) => !needsJointInvoiceData(invoice)
+        && (invoice.blocked || invoice.jointSent)).length;
+      const summary = `${updated} fatura(s) confirmada(s), ${removed} removida(s) e ${remaining} ainda sem confirmação.`;
+      setMessage(limited
+        ? `${summary} A Brudam limitou as consultas (HTTP 429). Clique em Tentar novamente mais tarde; as faturas já conferidas foram mantidas nesta página.`
+        : `${summary}${remaining ? ' Clique em Tentar novamente para consultar só as que falharam.' : ''}`
+          + `${blocked ? ` ${blocked} fatura(s) bloqueada(s) precisam ser ignoradas neste envio.` : ''}`,
+      remaining || blocked ? 'warning' : 'success');
+    } finally {
+      setLoading(false);
+      updateJointSelection();
+    }
+  };
+
   const loadJointCompany = async (category) => {
+    if (state.loading) return;
+    state.jointInitialRetryCategory = null;
+    state.jointSendRetry = false;
     setLoading(true);
     setMessage(`Buscando faturas vencidas em aberto de ${category.name}…`);
     elements.jointPreview.hidden = true;
     state.jointPreview = null;
     state.jointExcludedIds.clear();
+    let listed = false;
     try {
-      const preview = await requestJson(endpoint('joint-billing', { cnpj: category.cnpj }));
+      const preview = await requestJson(endpoint('joint-billing', { cnpj: category.cnpj, list: '1' }));
       renderJointPreview(preview);
+      listed = true;
+      setLoading(false);
+      await retryJointErrors(preview);
     } catch (error) {
+      if (!listed) {
+        state.jointInitialRetryCategory = category;
+        elements.jointPreview.hidden = false;
+        elements.jointCompany.textContent = `${category.name} · ${formatCnpj(category.cnpj)}`;
+        elements.jointRecipients.textContent = '';
+        elements.jointRows.replaceChildren();
+      }
       setMessage(error.message, 'error');
     } finally {
       setLoading(false);
@@ -1204,7 +1323,20 @@
     }
   };
 
+  const clearJointBillingMemory = () => {
+    state.jointPreview = null;
+    state.jointInitialRetryCategory = null;
+    state.jointSendRetry = false;
+    state.jointExcludedIds.clear();
+    elements.jointPreview.hidden = true;
+    elements.jointRows.replaceChildren();
+    elements.jointMatches.replaceChildren();
+    elements.jointSearchForm.reset();
+  };
+
   const setArea = (area) => {
+    if (state.area === 'collection' && area !== 'collection'
+      && state.collectionSection === 'jointBillingSection') clearJointBillingMemory();
     state.area = area;
     const collection = area === 'collection';
     elements.invoiceWorkspace.hidden = area !== 'invoices';
@@ -1229,6 +1361,9 @@
       (item) => item.dataset.collectionSection === sectionId
     );
     if (!button) return;
+    if (state.collectionSection === 'jointBillingSection' && sectionId !== 'jointBillingSection') {
+      clearJointBillingMemory();
+    }
     state.collectionSection = sectionId;
     elements.collectionSectionPanels.forEach((panel) => {
       panel.hidden = panel.id !== sectionId;
@@ -1417,6 +1552,8 @@
     elements.jointMatches.replaceChildren();
     elements.jointPreview.hidden = true;
     state.jointPreview = null;
+    state.jointInitialRetryCategory = null;
+    state.jointSendRetry = false;
     state.jointExcludedIds.clear();
     if (!matches.length) {
       setMessage('Nenhuma empresa cadastrada corresponde à busca.', 'warning');
@@ -1444,74 +1581,37 @@
   });
 
   elements.jointRefreshButton.addEventListener('click', async () => {
-    const preview = state.jointPreview;
-    const errorIds = (preview?.invoices || []).filter((invoice) => invoice.unverified)
-      .map((invoice) => invoice.id);
-    if (!errorIds.length || state.loading) return;
-    let updated = 0;
-    let removed = 0;
-    setLoading(true);
-    updateJointSelection();
-    try {
-      for (let index = 0; index < errorIds.length; index += 1) {
-        const id = errorIds[index];
-        setMessage(`Atualizando fatura ${id} (${index + 1}/${errorIds.length})…`);
-        const result = await requestJson(endpoint('joint-billing-refresh'), {
-          method: 'POST',
-          body: JSON.stringify({ cnpj: preview.company.cnpj, invoiceId: id })
-        });
-        if (result.id !== id || (!result.removed && !result.invoice)) {
-          throw new Error(`Resposta inválida ao atualizar a fatura ${id}.`);
-        }
-        if (result.removed) {
-          preview.invoices = preview.invoices.filter((invoice) => invoice.id !== id);
-          state.jointExcludedIds.delete(id);
-          removed += 1;
-        } else {
-          preview.invoices = preview.invoices.map((invoice) => invoice.id === id
-            ? { ...invoice, ...result.invoice,
-              issuedAt: result.invoice.issuedAt || invoice.issuedAt,
-              dueAt: result.invoice.dueAt || invoice.dueAt }
-            : invoice);
-          if (!result.invoice.unverified) updated += 1;
-        }
-        preview.totalBalance = Math.round(preview.invoices.reduce(
-          (sum, invoice) => sum + (Number(invoice.balance) || 0), 0) * 100) / 100;
-        preview.blockedCount = preview.invoices.filter((invoice) => invoice.blocked).length;
-        preview.jointSentCount = preview.invoices.filter((invoice) => invoice.jointSent).length;
-        renderJointPreview(preview);
-        if (index + 1 < errorIds.length) {
-          await new Promise((resolve) => setTimeout(resolve,
-            result.invoice?.upstreamStatus === 429 ? 2000 : 350));
-        }
-      }
-      const remaining = preview.invoices.filter((invoice) => invoice.unverified).length;
-      setMessage(`${updated} fatura(s) confirmada(s), ${removed} removida(s) por não estarem mais vencidas em aberto`
-        + ` e ${remaining} ainda com erro.`, remaining ? 'warning' : 'success');
-    } catch (error) {
-      setMessage(`Atualização parcial: ${error.message} As demais faturas não foram reconsultadas.`, 'error');
-    } finally {
-      setLoading(false);
-      updateJointSelection();
-    }
+    await retryJointErrors(state.jointPreview);
   });
 
   elements.jointSendButton.addEventListener('click', async () => {
+    if (state.jointInitialRetryCategory) {
+      await loadJointCompany(state.jointInitialRetryCategory);
+      return;
+    }
     const preview = state.jointPreview;
     const selected = selectedJointInvoices();
+    if (selected.some(needsJointInvoiceData)) {
+      await retryJointErrors(preview);
+      return;
+    }
     if (!selected.length || !preview?.recipients?.length
-      || selected.some((invoice) => invoice.blocked || invoice.jointSent || !invoice.proof)) return;
+      || selected.some((invoice) => invoice.blocked || invoice.jointSent
+        || !invoice.proof || !invoice.snapshot)) return;
     const invoiceIds = selected.map((invoice) => invoice.id);
     const invoiceProofs = selected.map(({ id, proof }) => ({ id, proof }));
+    const invoiceSnapshots = selected.map(({ id, snapshot }) => ({ id, snapshot }));
     if (!window.confirm(`Enviar uma única cobrança para ${preview.company.name}, com ${invoiceIds.length} fatura(s) e anexos, a ${preview.recipients.length} destinatário(s)? A situação financeira não será conferida novamente.`)) return;
     setLoading(true);
     setMessage('Preparando os anexos das faturas liberadas…');
     try {
       const result = await requestJson(endpoint('joint-billing'), {
         method: 'POST',
-        body: JSON.stringify({ cnpj: preview.company.cnpj, invoiceIds, invoiceProofs })
+        body: JSON.stringify({ cnpj: preview.company.cnpj, invoiceIds, invoiceProofs,
+          invoiceSnapshots })
       });
       state.jointPreview = null;
+      state.jointSendRetry = false;
       state.jointExcludedIds.clear();
       elements.jointPreview.hidden = true;
       elements.jointRows.replaceChildren();
@@ -1521,6 +1621,15 @@
         setMessage(`${result.message} Os logs não puderam ser atualizados agora.`, 'warning');
       }
     } catch (error) {
+      state.jointSendRetry = error.retryable === true || error.status === 429
+        || error.status >= 500 || !error.status;
+      if (error.status === 409 && error.invoiceId) {
+        preview.invoices = preview.invoices.map((invoice) => invoice.id === error.invoiceId
+          ? { ...invoice, unverified: true, blocked: true, proof: null, snapshot: null,
+            blockReason: error.message }
+          : invoice);
+        renderJointPreview(preview);
+      }
       setMessage(error.message, 'error');
     } finally {
       setLoading(false);

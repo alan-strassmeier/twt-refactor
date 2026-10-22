@@ -1,4 +1,5 @@
 const { createHash, createHmac, randomUUID, timingSafeEqual } = require('node:crypto');
+const { gzipSync, gunzipSync } = require('node:zlib');
 const { fetchInvoices, isPendingInvoice } = require('./brudam');
 const { findDoccobForInvoice } = require('./r2-doccob');
 const { fetchInvoicePdfData, buildInvoicePdf, applyCategoryBillingMethod } = require('./invoice-pdf');
@@ -23,7 +24,11 @@ const MAX_ATTACHMENT_BYTES = 18 * 1024 * 1024;
 const INVOICE_CHECK_CONCURRENCY = 3;
 const EMPTY_INVOICE_RETRIES = 3;
 const PREVIEW_PROOF_TTL_MS = 30 * 60 * 1000;
+const MAX_INVOICE_SNAPSHOT_CHARS = 500000;
 const fail = (message, statusCode = 409) => Object.assign(new Error(message), { statusCode, expose: true });
+const refreshFailure = (id, message) => Object.assign(fail(message, 409), {
+  invoiceId: id, retryable: true
+});
 const digits = (value) => String(value || '').replace(/\D/g, '');
 const invoiceId = (value) => String(value || '').trim().replace(/^0+(?=\d)/, '');
 const sortIds = (values) => [...new Set(values.map(invoiceId))].sort((left, right) =>
@@ -61,13 +66,13 @@ const invoiceFromProof = (proof, id, cnpj, dependencies) => {
   if (!payload || !signature || extra || payload.length > 2048
     || signature.length !== expected.length
     || !timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) {
-    throw fail(`A confirmação da fatura ${id} é inválida. Atualize a prévia antes de enviar.`, 409);
+    throw refreshFailure(id, `A confirmação da fatura ${id} é inválida. Atualize a prévia antes de enviar.`);
   }
   let verified;
   try {
     verified = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
   } catch {
-    throw fail(`A confirmação da fatura ${id} é inválida. Atualize a prévia antes de enviar.`, 409);
+    throw refreshFailure(id, `A confirmação da fatura ${id} é inválida. Atualize a prévia antes de enviar.`);
   }
   const now = previewNow(dependencies);
   if (verified?.v !== 1 || verified.id !== id || verified.cnpj !== cnpj
@@ -76,10 +81,48 @@ const invoiceFromProof = (proof, id, cnpj, dependencies) => {
     || !/^\d{4}-\d{2}-\d{2}$/.test(verified.dueAt)
     || !Number.isFinite(verified.checkedAt) || verified.checkedAt > now + 60000
     || now - verified.checkedAt > PREVIEW_PROOF_TTL_MS) {
-    throw fail(`A confirmação da fatura ${id} expirou ou não corresponde à empresa. Atualize a prévia antes de enviar.`, 409);
+    throw refreshFailure(id,
+      `A confirmação da fatura ${id} expirou ou não corresponde à empresa. Atualize a prévia antes de enviar.`);
   }
   return { id, clientDocument: cnpj, status: '0', issuedAt: verified.issuedAt,
     dueAt: verified.dueAt, balance: verified.balance };
+};
+
+const invoiceSnapshot = (data, proof, dependencies) => {
+  const raw = Buffer.from(JSON.stringify(data));
+  if (raw.length > 4 * 1024 * 1024) {
+    throw fail('Os dados desta fatura são grandes demais para manter na prévia. Nenhum e-mail foi enviado.', 413);
+  }
+  const payload = gzipSync(raw).toString('base64url');
+  if (payload.length > MAX_INVOICE_SNAPSHOT_CHARS) {
+    throw fail('Os dados desta fatura são grandes demais para manter na prévia. Nenhum e-mail foi enviado.', 413);
+  }
+  return `${payload}.${proofSignature(`${proof}.${payload}`, previewSecret(dependencies))}`;
+};
+
+const invoiceDataFromSnapshot = (snapshot, proof, id, cnpj, dependencies) => {
+  const [payload, signature, extra] = String(snapshot || '').split('.');
+  const expected = payload ? proofSignature(`${proof}.${payload}`, previewSecret(dependencies)) : '';
+  if (!payload || payload.length > MAX_INVOICE_SNAPSHOT_CHARS || !signature || extra
+    || signature.length !== expected.length
+    || !timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) {
+    throw refreshFailure(id,
+      `Os dados guardados da fatura ${id} são inválidos. Tente novamente apenas esta fatura.`);
+  }
+  let data;
+  try {
+    data = JSON.parse(gunzipSync(Buffer.from(payload, 'base64url'), {
+      maxOutputLength: 4 * 1024 * 1024
+    }).toString('utf8'));
+  } catch {
+    throw refreshFailure(id,
+      `Não foi possível ler os dados guardados da fatura ${id}. Tente novamente apenas esta fatura.`);
+  }
+  if (invoiceId(data?.invoice?.id) !== id || digits(data?.client?.document) !== cnpj) {
+    throw refreshFailure(id,
+      `Os dados guardados da fatura ${id} não correspondem à empresa. Nenhum e-mail foi enviado.`);
+  }
+  return data;
 };
 
 const fetchExactInvoice = async (id, dependencies = {}) => {
@@ -120,7 +163,7 @@ const fetchExactInvoice = async (id, dependencies = {}) => {
   }
 };
 
-const companyAndInvoices = async (cnpjInput, dependencies = {}, onlyInvoiceIds = null) => {
+const companyCandidates = async (cnpjInput, dependencies = {}, onlyInvoiceIds = null) => {
   const cnpj = digits(cnpjInput);
   if (cnpj.length !== 14) throw fail('Informe um CNPJ válido.', 422);
   const getCategory = dependencies.getCategory || store.getCategory;
@@ -128,8 +171,17 @@ const companyAndInvoices = async (cnpjInput, dependencies = {}, onlyInvoiceIds =
   const category = await getCategory(cnpj);
   if (!category) throw fail('Empresa não cadastrada nos e-mails de cobrança.', 404);
   const today = saoPauloDate(dependencies.now ? dependencies.now() : new Date());
-  const result = await fetch({ cnpj, status: '0', 'vencimento[lte]': addDays(today, -2),
-    limit: 100, fresh: true });
+  let result;
+  try {
+    result = await fetch({ cnpj, status: '0', 'vencimento[lte]': addDays(today, -2),
+      limit: 100, fresh: true });
+  } catch (error) {
+    const status = Number(error?.statusCode || error?.upstreamStatus || 0);
+    throw Object.assign(fail(status === 429
+      ? 'A Brudam limitou a consulta inicial (HTTP 429). Aguarde um instante e busque a empresa novamente.'
+      : `Não foi possível listar as faturas na Brudam${status ? ` (HTTP ${status})` : ''}: ${String(error.message || 'erro desconhecido').slice(0, 180)}`, 503),
+    { cause: error });
+  }
   if (result?.pagination?.allCompanyInvoicesLoaded !== true && result?.pagination?.hasMore) {
     throw fail('A consulta não retornou todas as faturas da empresa. O envio foi bloqueado.', 503);
   }
@@ -139,6 +191,42 @@ const companyAndInvoices = async (cnpjInput, dependencies = {}, onlyInvoiceIds =
   const candidatesById = new Map(candidates.map((invoice) => [invoiceId(invoice.id), invoice]));
   const candidateEntries = [...candidatesById.entries()]
     .filter(([id]) => !onlyInvoiceIds || onlyInvoiceIds.has(id));
+  return { cnpj, category, today, candidateEntries };
+};
+
+const listJointBilling = async (cnpjInput, dependencies = {}) => {
+  const { cnpj, category, today, candidateEntries } = await companyCandidates(cnpjInput, dependencies);
+  const ids = candidateEntries.map(([id]) => id);
+  const [blocks, jointDeliveries] = await Promise.all([
+    (dependencies.getInvoiceBlocks || store.getInvoiceBlocks)(ids),
+    (dependencies.getJointDeliveries || store.getJointDeliveries)(ids)
+  ]);
+  const entries = candidateEntries.map(([id, invoice]) => {
+    const block = blocks.get(id);
+    const kind = blockKind(block);
+    return {
+      id, issuedAt: invoice.issuedAt, dueAt: invoice.dueAt,
+      balance: null, overdueDays: overdueDays(invoice.dueAt, today),
+      unverified: true, blocked: true, blockKind: kind,
+      blockReason: [
+        'Aguardando conferência individual da fatura na Brudam.',
+        blockDescription(kind)
+      ].filter(Boolean).join(' · '),
+      jointSent: Boolean(jointDeliveries.get(id)), proof: null
+    };
+  });
+  const recipients = (category.contacts || []).filter((contact) => contact.enabled !== false);
+  return {
+    company: { cnpj, name: category.name, billingMethod: category.billingMethod },
+    recipients: recipients.map(({ firstName, lastName, email }) => ({ firstName, lastName, email })),
+    invoices: entries, totalBalance: 0, blockedCount: entries.length,
+    jointSentCount: entries.filter((invoice) => invoice.jointSent).length
+  };
+};
+
+const companyAndInvoices = async (cnpjInput, dependencies = {}, onlyInvoiceIds = null) => {
+  const { cnpj, category, today, candidateEntries } =
+    await companyCandidates(cnpjInput, dependencies, onlyInvoiceIds);
   const checked = new Array(candidateEntries.length);
   let nextIndex = 0;
   await Promise.all(Array.from({ length: Math.min(INVOICE_CHECK_CONCURRENCY, candidateEntries.length) }, async () => {
@@ -208,7 +296,8 @@ const previewJointBilling = async (cnpj, dependencies = {}, onlyInvoiceIds = nul
   };
 };
 
-const refreshJointBillingInvoice = async ({ cnpj: cnpjInput, invoiceId: requestedId }, dependencies = {}) => {
+const refreshJointBillingInvoice = async ({ cnpj: cnpjInput, invoiceId: requestedId,
+  includePdfData = false }, dependencies = {}) => {
   const cnpj = digits(cnpjInput);
   const id = invoiceId(requestedId);
   if (cnpj.length !== 14 || !/^\d{1,20}$/.test(String(requestedId || '')) || !/^\d+$/.test(id)
@@ -222,10 +311,23 @@ const refreshJointBillingInvoice = async ({ cnpj: cnpjInput, invoiceId: requeste
   const blocks = await (dependencies.getInvoiceBlocks || store.getInvoiceBlocks)([id]);
   const kind = blockKind(blocks.get(id));
   let current;
+  let pdfData = null;
   try {
-    current = await fetchExactInvoice(id, dependencies);
+    if (includePdfData === true) {
+      pdfData = await (dependencies.fetchInvoicePdfData || fetchInvoicePdfData)(id);
+      current = {
+        ...pdfData.invoice,
+        clientDocument: pdfData.client?.document
+      };
+      if (invoiceId(current.id) !== id) {
+        throw fail(`A Brudam retornou dados de outra fatura para ${id}.`, 503);
+      }
+    } else {
+      current = await fetchExactInvoice(id, dependencies);
+    }
   } catch (error) {
-    const upstreamStatus = Number(error.cause?.statusCode || error.cause?.upstreamStatus || 0);
+    const upstreamStatus = Number(error?.upstreamStatus || error?.cause?.upstreamStatus
+      || error?.cause?.statusCode || error?.statusCode || 0);
     return { id, removed: false, invoice: {
       id, balance: null, unverified: true, blocked: true, proof: null,
       upstreamStatus: upstreamStatus || null, blockKind: kind,
@@ -241,29 +343,40 @@ const refreshJointBillingInvoice = async ({ cnpj: cnpjInput, invoiceId: requeste
         blockDescription(kind)].filter(Boolean).join(' · ')
     } };
   }
+  if (!['0', '1', '2'].includes(String(current.status))
+    || current.balance === null || current.balance === undefined
+    || !Number.isFinite(Number(current.balance))) {
+    return { id, removed: false, invoice: {
+      id, balance: null, unverified: true, blocked: true, proof: null,
+      upstreamStatus: null, blockKind: kind,
+      blockReason: [`A Brudam não retornou uma situação financeira completa para a fatura ${id}.`,
+        blockDescription(kind)].filter(Boolean).join(' · ')
+    } };
+  }
   if (String(current.status) !== '0' || !isPendingInvoice(current) || !isOverdue(current, today)) {
     return { id, removed: true };
   }
   const jointDeliveries = await (dependencies.getJointDeliveries || store.getJointDeliveries)([id]);
   const blocked = Boolean(blocks.get(id)?.blocked);
   const jointSent = Boolean(jointDeliveries.get(id));
+  const proof = !blocked && !jointSent ? invoiceProof(current, cnpj, dependencies) : null;
   return { id, removed: false, invoice: {
     id, issuedAt: current.issuedAt, dueAt: current.dueAt,
     balance: Number(current.balance), overdueDays: overdueDays(current.dueAt, today),
     unverified: false, upstreamStatus: null, blocked,
     blockKind: kind, blockReason: blockDescription(kind),
-    jointSent,
-    proof: !blocked && !jointSent ? invoiceProof(current, cnpj, dependencies) : null
+    jointSent, proof,
+    snapshot: proof && pdfData ? invoiceSnapshot(pdfData, proof, dependencies) : null
   } };
 };
 
-const prepareAttachments = async (invoice, category, dependencies) => {
+const prepareAttachments = async (invoice, category, dependencies, preparedData = null) => {
   const id = invoiceId(invoice.id);
   const findDoccob = dependencies.findDoccobForInvoice || findDoccobForInvoice;
   const doccob = await findDoccob({ invoiceId: id, clientCnpj: category.cnpj, issuedAt: invoice.issuedAt });
   if (!doccob) throw fail(`DOCCOB da fatura ${id} não localizado. Nenhum e-mail foi enviado.`);
   const fetchPdfData = dependencies.fetchInvoicePdfData || fetchInvoicePdfData;
-  const data = applyCategoryBillingMethod(await fetchPdfData(id), category);
+  const data = applyCategoryBillingMethod(preparedData || await fetchPdfData(id), category);
   if (digits(data.client?.document) !== digits(category.cnpj) || invoiceId(data.invoice?.id) !== id) {
     throw fail(`Os documentos da fatura ${id} não correspondem à empresa selecionada. Nenhum e-mail foi enviado.`);
   }
@@ -292,7 +405,8 @@ const prepareAttachments = async (invoice, category, dependencies) => {
   return attachments;
 };
 
-const sendJointBilling = async ({ cnpj: cnpjInput, invoiceIds, invoiceProofs }, dependencies = {}) => {
+const sendJointBilling = async ({ cnpj: cnpjInput, invoiceIds, invoiceProofs,
+  invoiceSnapshots }, dependencies = {}) => {
   const expectedIds = Array.isArray(invoiceIds) && invoiceIds.length > 0
     && invoiceIds.every((id) => /^\d{1,20}$/.test(String(id)) && Number(id) > 0)
     ? sortIds(invoiceIds) : null;
@@ -308,6 +422,13 @@ const sendJointBilling = async ({ cnpj: cnpjInput, invoiceIds, invoiceProofs }, 
     throw fail('A liberação das faturas está incompleta. Atualize a prévia antes de enviar.', 409);
   }
   const selected = expectedIds.map((id) => invoiceFromProof(proofById.get(id), id, cnpj, dependencies));
+  const snapshotById = new Map(Array.isArray(invoiceSnapshots)
+    ? invoiceSnapshots.map((item) => [invoiceId(item?.id), item?.snapshot]) : []);
+  if (invoiceSnapshots !== undefined && (!Array.isArray(invoiceSnapshots)
+    || snapshotById.size !== expectedIds.length
+    || invoiceSnapshots.length !== expectedIds.length)) {
+    throw fail('Os dados das faturas estão incompletos. Tente novamente as que falharam.', 409);
+  }
   const getCategory = dependencies.getCategory || store.getCategory;
   const initialCategory = await getCategory(cnpj);
   if (!initialCategory) throw fail('Empresa não cadastrada nos e-mails de cobrança.', 404);
@@ -321,7 +442,20 @@ const sendJointBilling = async ({ cnpj: cnpjInput, invoiceIds, invoiceProofs }, 
   const attachments = [];
   for (const invoice of selected) {
     const id = invoiceId(invoice.id);
-    attachments.push(...await prepareAttachments(invoice, initialCategory, dependencies));
+    try {
+      const preparedData = invoiceSnapshots === undefined ? null
+        : invoiceDataFromSnapshot(snapshotById.get(id), proofById.get(id), id, cnpj, dependencies);
+      attachments.push(...await prepareAttachments(invoice, initialCategory, dependencies, preparedData));
+    } catch (error) {
+      const upstreamStatus = Number(error?.upstreamStatus || error?.statusCode || 0);
+      const reason = upstreamStatus === 429
+        ? 'A Brudam limitou a consulta dos documentos (HTTP 429).'
+        : String(error?.message || 'Falha desconhecida ao preparar os documentos.').slice(0, 220);
+      throw Object.assign(fail(`Fatura ${id}: ${reason} Nenhum e-mail foi enviado.`,
+        error?.statusCode === 409 ? 409 : upstreamStatus === 429 ? 429 : 503), {
+        invoiceId: id, upstreamStatus: upstreamStatus || null, retryable: true, cause: error
+      });
+    }
     if (attachments.reduce((sum, item) => sum + item.content.length, 0) > MAX_ATTACHMENT_BYTES) {
       throw fail('Os anexos ultrapassam 18 MB. Nenhum e-mail foi enviado.', 413);
     }
@@ -459,5 +593,6 @@ const sendJointBilling = async ({ cnpj: cnpjInput, invoiceIds, invoiceProofs }, 
 };
 
 module.exports = {
-  companyAndInvoices, previewJointBilling, refreshJointBillingInvoice, sendJointBilling, jointBillingText
+  companyAndInvoices, listJointBilling, previewJointBilling,
+  refreshJointBillingInvoice, sendJointBilling, jointBillingText
 };
