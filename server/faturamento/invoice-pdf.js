@@ -546,6 +546,11 @@ const requestExactInvoice = async (invoiceId) => {
   for (const query of queries) {
     const result = await authenticatedGet(`/financeiro/faturas?${query}`);
     lastResult = result;
+    if (Number(result.response?.status) === 429) {
+      throw Object.assign(new Error('A Brudam limitou a consulta dos dados da fatura (HTTP 429).'), {
+        statusCode: 429, upstreamStatus: 429
+      });
+    }
     const invoices = invoiceListFromPayload(result.payload);
     const invoice = Array.isArray(invoices) ? exactInvoiceRecord(invoices, invoiceId) : null;
     if (result.response.ok && Number(result.payload?.status) === 1 && invoice) {
@@ -555,7 +560,8 @@ const requestExactInvoice = async (invoiceId) => {
 
   const upstreamStatus = Number(lastResult?.response?.status);
   throw Object.assign(new Error('Fatura não encontrada na Brudam.'), {
-    statusCode: upstreamStatus >= 500 ? 502 : 404
+    statusCode: upstreamStatus >= 500 ? 502 : 404,
+    upstreamStatus: upstreamStatus || null
   });
 };
 

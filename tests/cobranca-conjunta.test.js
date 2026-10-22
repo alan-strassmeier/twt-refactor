@@ -1,11 +1,12 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
+  listJointBilling,
   previewJointBilling,
   refreshJointBillingInvoice,
   sendJointBilling: sendJointBillingCore
 } = require('../server/faturamento/cobranca-conjunta');
-const { jointBillingSubject, jointBillingText, jointBillingHtml } = require('../server/faturamento/cobranca-email');
+const { jointBillingSubject, jointBillingText, jointBillingHtml, sendJointBillingEmail } = require('../server/faturamento/cobranca-email');
 const { processWebhookPayload } = require('../server/faturamento/cobranca-webhook');
 const { processInvoiceEvent } = require('../server/faturamento/cobranca-processor');
 const billingStore = require('../server/faturamento/cobranca-store');
@@ -77,6 +78,27 @@ const sendJointBilling = async ({ cnpj, invoiceIds }, dependencies) => {
     proof: preview.invoices.find((invoice) => invoice.id === id)?.proof }));
   return sendJointBillingCore({ cnpj, invoiceIds, invoiceProofs }, dependencies);
 };
+
+test('lista inicial não consulta faturas individuais e mantém cada uma pendente para conferência separada', async () => {
+  const dependencies = mockDependencies({ fetchCurrentInvoice: async () => {
+    throw new Error('A lista inicial não deve consultar faturas individuais');
+  } });
+  const preview = await listJointBilling(CNPJ, dependencies);
+  assert.deepEqual(preview.invoices.map((invoice) => invoice.id), ['101', '102']);
+  assert.ok(preview.invoices.every((invoice) => invoice.unverified && invoice.blocked && !invoice.proof));
+  assert.equal(dependencies.calls.length, 1);
+  const refreshed = await refreshJointBillingInvoice({ cnpj: CNPJ, invoiceId: '101' },
+    mockDependencies());
+  assert.equal(refreshed.invoice.unverified, false);
+  assert.ok(refreshed.invoice.proof);
+});
+
+test('limite HTTP 429 na listagem inicial informa o motivo sem iniciar conferências individuais', async () => {
+  const dependencies = mockDependencies({ fetchInvoices: async () => {
+    throw Object.assign(new Error('Too Many Requests'), { statusCode: 429 });
+  } });
+  await assert.rejects(listJointBilling(CNPJ, dependencies), /Brudam limitou a consulta inicial \(HTTP 429\)/);
+});
 
 test('prévia lista apenas faturas vencidas em aberto e marca bloqueios sem escondê-las', async () => {
   const dependencies = mockDependencies({ getInvoiceBlocks: async (ids) =>
@@ -156,6 +178,81 @@ test('atualização de erro consulta só a fatura indicada, sem refazer a lista 
   assert.equal(result.invoice.balance, 20);
 });
 
+test('conferência guarda os dados da fatura para enviar sem buscá-los novamente na Brudam', async () => {
+  let reads = 0;
+  const dependencies = mockDependencies({ fetchInvoicePdfData: async (id) => {
+    reads += 1;
+    return { invoice: { id, status: '0', balance: 50.25, total: 50.25,
+      issuedAt: '2026-10-01', dueAt: '2026-10-10', payment: { type: 'ted_doc' } },
+    client: { document: CNPJ } };
+  } });
+  const checked = await refreshJointBillingInvoice({ cnpj: CNPJ, invoiceId: '101',
+    includePdfData: true }, dependencies);
+  assert.equal(reads, 1);
+  assert.ok(checked.invoice.proof);
+  assert.ok(checked.invoice.snapshot);
+  dependencies.fetchInvoicePdfData = async () => { throw new Error('Não deve repetir a busca'); };
+  const result = await sendJointBillingCore({ cnpj: CNPJ, invoiceIds: ['101'],
+    invoiceProofs: [{ id: '101', proof: checked.invoice.proof }],
+    invoiceSnapshots: [{ id: '101', snapshot: checked.invoice.snapshot }] }, dependencies);
+  assert.equal(result.status, 'submitted');
+  assert.equal(reads, 1);
+  assert.equal(dependencies.sent.length, 1);
+});
+
+test('após HTTP 429 só a fatura que falhou precisa de nova consulta', async () => {
+  const reads = [];
+  let rateLimited = true;
+  const dependencies = mockDependencies({ fetchInvoicePdfData: async (id) => {
+    reads.push(id);
+    if (id === '102' && rateLimited) {
+      throw Object.assign(new Error('Too Many Requests'), { statusCode: 429 });
+    }
+    const invoice = invoices.find((item) => item.id === id);
+    return { invoice: { ...invoice, payment: { type: 'ted_doc' } },
+      client: { document: CNPJ } };
+  } });
+  const first = await refreshJointBillingInvoice({ cnpj: CNPJ, invoiceId: '101',
+    includePdfData: true }, dependencies);
+  const failed = await refreshJointBillingInvoice({ cnpj: CNPJ, invoiceId: '102',
+    includePdfData: true }, dependencies);
+  assert.equal(failed.invoice.upstreamStatus, 429);
+  assert.ok(first.invoice.snapshot);
+  rateLimited = false;
+  const second = await refreshJointBillingInvoice({ cnpj: CNPJ, invoiceId: '102',
+    includePdfData: true }, dependencies);
+  dependencies.fetchInvoicePdfData = async () => { throw new Error('Não deve repetir consultas'); };
+  const result = await sendJointBillingCore({ cnpj: CNPJ, invoiceIds: ['101', '102'],
+    invoiceProofs: [first, second].map(({ id, invoice }) => ({ id, proof: invoice.proof })),
+    invoiceSnapshots: [first, second].map(({ id, invoice }) => ({ id, snapshot: invoice.snapshot }))
+  }, dependencies);
+  assert.equal(result.status, 'submitted');
+  assert.deepEqual(reads, ['101', '102', '102']);
+});
+
+test('recusa dados de fatura adulterados no navegador sem acessar documentos', async () => {
+  let documents = 0;
+  const dependencies = mockDependencies({
+    findDoccobForInvoice: async () => {
+      documents += 1;
+      return null;
+    },
+    fetchInvoicePdfData: async (id) => ({
+      invoice: { id, status: '0', balance: 50.25, total: 50.25,
+        issuedAt: '2026-10-01', dueAt: '2026-10-10', payment: { type: 'ted_doc' } },
+      client: { document: CNPJ }
+    })
+  });
+  const checked = await refreshJointBillingInvoice({ cnpj: CNPJ, invoiceId: '101',
+    includePdfData: true }, dependencies);
+  const changed = `${checked.invoice.snapshot.slice(0, -1)}${checked.invoice.snapshot.endsWith('x') ? 'y' : 'x'}`;
+  await assert.rejects(sendJointBillingCore({ cnpj: CNPJ, invoiceIds: ['101'],
+    invoiceProofs: [{ id: '101', proof: checked.invoice.proof }],
+    invoiceSnapshots: [{ id: '101', snapshot: changed }] },
+  dependencies), /dados guardados da fatura 101 são inválidos/);
+  assert.equal(documents, 0);
+});
+
 test('atualização remove da prévia a fatura que deixou de estar aberta', async () => {
   const dependencies = mockDependencies({
     fetchCurrentInvoice: async () => ({ invoices: [{ ...invoices[1], status: '1', balance: 0 }] })
@@ -163,6 +260,18 @@ test('atualização remove da prévia a fatura que deixou de estar aberta', asyn
   const result = await refreshJointBillingInvoice({ cnpj: CNPJ, invoiceId: '102' }, dependencies);
   assert.deepEqual(result, { id: '102', removed: true });
   assert.equal(dependencies.calls.length, 0);
+});
+
+test('resposta financeira incompleta continua pendente em vez de sumir da lista', async () => {
+  const dependencies = mockDependencies({ fetchInvoicePdfData: async (id) => ({
+    invoice: { id, status: null, balance: null, issuedAt: '2026-10-02',
+      dueAt: '2026-10-12' }, client: { document: CNPJ }
+  }) });
+  const result = await refreshJointBillingInvoice({ cnpj: CNPJ, invoiceId: '102',
+    includePdfData: true }, dependencies);
+  assert.equal(result.removed, false);
+  assert.equal(result.invoice.unverified, true);
+  assert.match(result.invoice.blockReason, /situação financeira completa/);
 });
 
 test('HTTP 429 mantém apenas a fatura reconsultada bloqueada', async () => {
@@ -306,6 +415,26 @@ test('envio conjunto manda uma mensagem, dois PDFs e registra ambas as faturas',
   assert.match(dependencies.sent[0].clientReference, /^twt-joint-/);
 });
 
+test('envio conjunto inclui Adriano em cópia sem alterar os destinatários principais', async () => {
+  let message;
+  await sendJointBillingEmail({
+    recipients: [{ firstName: 'Ana', lastName: '', email: 'ana@example.com' }],
+    companyName: 'Empresa Exemplo',
+    invoices: [{ id: '101', overdueDays: 8 }],
+    paymentMethod: 'Boleto bancário',
+    totalBalance: 30.25,
+    attachments: [],
+    clientReference: 'test-joint-101',
+    transport: { sendMail: async (value) => {
+      message = value;
+      return { messageId: 'smtp-1', accepted: ['ana@example.com', 'adrianoldepaula@gmail.com'], rejected: [] };
+    } },
+    config: { fromName: 'TWT LOG', fromEmail: 'faturamento@twt.com.br' }
+  });
+  assert.deepEqual(message.to, [{ name: 'Ana', address: 'ana@example.com' }]);
+  assert.equal(message.cc, 'adrianoldepaula@gmail.com');
+});
+
 test('envio usa a liberação da prévia sem nova consulta financeira', async () => {
   let reads = 0;
   const dependencies = mockDependencies({ fetchCurrentInvoice: async ({ id }) => {
@@ -331,6 +460,18 @@ test('envio não confere novamente o status financeiro ao gerar anexos', async (
   const result = await sendJointBilling({ cnpj: CNPJ, invoiceIds: ['101'] }, dependencies);
   assert.equal(result.status, 'submitted');
   assert.equal(dependencies.sent.length, 1);
+});
+
+test('falha HTTP 429 ao preparar anexos identifica a fatura e permite tentar novamente', async () => {
+  const dependencies = mockDependencies({ fetchInvoicePdfData: async (id) => {
+    if (id === '102') throw Object.assign(new Error('Too Many Requests'), { statusCode: 429 });
+    return { invoice: { id, status: '0', total: 50.25, balance: 50.25,
+      payment: { type: 'ted_doc' } }, client: { document: CNPJ } };
+  } });
+  await assert.rejects(sendJointBilling({ cnpj: CNPJ, invoiceIds: ['101', '102'] }, dependencies),
+    (error) => error.invoiceId === '102' && error.upstreamStatus === 429
+      && error.retryable === true && /Fatura 102:.*HTTP 429/.test(error.message));
+  assert.equal(dependencies.sent.length, 0);
 });
 
 test('não envia se algum DOCCOB faltar', async () => {

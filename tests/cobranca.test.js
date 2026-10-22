@@ -3042,7 +3042,16 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(html, /id="jointBillingSearchForm"/);
   assert.match(html, /id="sendJointBillingButton"/);
   assert.match(html, /id="refreshJointBillingButton"[^>]*>[\s\S]*?Atualizar<\/button>/);
-  assert.match(source, /filter\(\(invoice\) => invoice\.unverified\)[\s\S]*?endpoint\('joint-billing-refresh'\)/);
+  assert.match(source, /filter\(needsJointInvoiceData\)[\s\S]*?endpoint\('joint-billing-refresh'\)/);
+  assert.match(source, /endpoint\('joint-billing', \{ cnpj: category\.cnpj, list: '1' \}\)/);
+  assert.match(source, /jointSendButton\.textContent = needsRetry \|\| state\.jointSendRetry/);
+  assert.match(source, /jointInitialRetryCategory[\s\S]*?jointSendButton\.textContent = 'Tentar novamente'/);
+  assert.match(source, /const clearJointBillingMemory = \(\) => \{[\s\S]*?state\.jointPreview = null/);
+  assert.match(source, /state\.collectionSection === 'jointBillingSection' && sectionId !== 'jointBillingSection'/);
+  assert.match(source, /if \(selected\.some\(needsJointInvoiceData\)\) \{\s*await retryJointErrors\(preview\)/);
+  assert.match(source, /includePdfData: true/);
+  assert.match(source, /invoiceSnapshots = selected\.map/);
+  assert.match(apiSource, /query\.list === '1'[\s\S]*?listJointBilling\(query\.cnpj\)/);
   assert.match(source, /invoiceProofs: selected\.map|const invoiceProofs = selected\.map/);
   assert.match(source, /Faturas que impedem o envio:.*blocked\.map\(jointBlockLabel\)/);
   assert.match(apiSource, /query\.route === 'joint-billing-refresh'/);

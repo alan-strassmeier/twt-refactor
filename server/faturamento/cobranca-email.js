@@ -240,6 +240,7 @@ const sendBillingEmail = async ({
 };
 
 const jointBillingSubject = 'Faturas vencidas';
+const jointBillingCc = 'adrianoldepaula@gmail.com';
 
 const jointBillingText = ({ companyName, invoices, paymentMethod, totalBalance }) => [
   `Aviso de Faturamento das faturas ${invoices.map(({ id }) => id).join(', ')}`,
@@ -275,6 +276,7 @@ const sendJointBillingEmail = async ({
       name: [contact.firstName, contact.lastName].filter(Boolean).join(' '),
       address: contact.email
     })),
+    cc: jointBillingCc,
     headers: { 'X-TM-CLIENT-REF': clientReference },
     subject: jointBillingSubject,
     text: jointBillingText(content),
