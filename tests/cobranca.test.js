@@ -25,6 +25,7 @@ const {
   getInvoiceBlock,
   setInvoiceBlocked,
   listBlockedInvoiceIds,
+  updateBankReconciliationFailures,
   removePending,
   listDismissedIssues,
   dismissIssue,
@@ -779,42 +780,55 @@ test('cursor da liquidação automática persiste entre rodadas e pode reiniciar
   assert.equal(values.get(KEYS.reconciliationCursor), undefined);
 });
 
-test('lote do agendador avança apenas sem erros e reinicia após conferir tudo', async () => {
+test('lote do agendador persiste isolamento e reinicia após conferir tudo', async () => {
   let cursor = '11838';
   const inputs = [];
+  const updates = [];
   const dependencies = {
     currentDate: '2026-10-19',
     getCursor: async () => cursor,
     saveCursor: async (next) => { cursor = next; },
+    updateFailures: async (update) => { updates.push(update); },
     reconcile: async (input) => {
       inputs.push(input);
       return inputs.length === 1
-        ? { checked: 25, errors: [], hasMore: true, nextCursor: '11901' }
-        : { checked: 3, errors: [], hasMore: false, nextCursor: '11904' };
+        ? { checked: 3, results: [
+          { invoiceId: '11839', status: 'error' },
+          { invoiceId: '11840', status: 'in_progress' },
+          { invoiceId: '11901', status: 'pending' }
+        ], errors: [{ invoiceId: '11839', bank: 'itau' }], hasMore: true, nextCursor: '11901' }
+        : { checked: 1, results: [{ invoiceId: '11904', status: 'pending' }],
+          errors: [], hasMore: false, nextCursor: '11904' };
     }
   };
-  await runCronBankReconciliationBatch(dependencies);
+  const first = await runCronBankReconciliationBatch(dependencies);
   assert.equal(cursor, '11901');
+  assert.equal(first.bankFailuresPersisted, true);
   await runCronBankReconciliationBatch(dependencies);
   assert.equal(cursor, '');
+  assert.deepEqual(updates, [
+    { failed: ['11839', '11840'], cleared: ['11901'] },
+    { failed: [], cleared: ['11904'] }
+  ]);
   assert.deepEqual(inputs.map((input) => input.afterInvoiceId), ['11838', '11901']);
   assert.ok(inputs.every((input) => input.manualFullScan && input.maxRecords === 25));
 });
 
-test('lote do agendador não avança após falha ou paginação inválida', async () => {
+test('lote do agendador não avança após falha de persistência ou paginação inválida', async () => {
   let saves = 0;
   const base = {
     currentDate: '2026-10-19',
     getCursor: async () => '11838',
     saveCursor: async () => { saves += 1; }
   };
-  const failed = await runCronBankReconciliationBatch({ ...base,
-    reconcile: async () => ({ checked: 1, errors: [{ invoiceId: '11839' }],
-      hasMore: true, nextCursor: '11839' })
-  });
-  assert.equal(failed.errors.length, 1);
   await assert.rejects(runCronBankReconciliationBatch({ ...base,
-    reconcile: async () => ({ checked: 1, errors: [], hasMore: true,
+    updateFailures: async () => { throw new Error('Redis indisponível'); },
+    reconcile: async () => ({ checked: 1, results: [{ invoiceId: '11839', status: 'error' }],
+      errors: [{ invoiceId: '11839' }], hasMore: true, nextCursor: '11839' })
+  }), /Redis indisponível/);
+  await assert.rejects(runCronBankReconciliationBatch({ ...base,
+    reconcile: async () => ({ checked: 1, results: [{ invoiceId: '11839', status: 'pending' }],
+      errors: [], hasMore: true,
       nextCursor: '11838' })
   }), /não avançou/);
   assert.equal(saves, 0);
@@ -844,6 +858,69 @@ test('cobrança agendada não repete conciliação já concluída pelo Worker', 
   assert.equal(result.bankSettled, 2);
   assert.equal(result.bankAlreadySettled, 1);
   assert.equal(result.scanned, 0);
+});
+
+test('erro bancário por fatura exclui só ela da fila de e-mails', async () => {
+  const queued = [];
+  const now = new Date('2026-10-19T12:00:00Z');
+  const invoices = ['11827', '11828'].map((id) => ({
+    id, status: 0, balance: 100, issuedAt: '2026-10-19', dueAt: '2026-11-19',
+    clientDocument: '35820448008110'
+  }));
+  const result = await runBillingCollection({
+    source: 'automatic',
+    bankReconciliationSummary: { checked: 2, settled: 0, alreadySettled: 0, pending: 1,
+      errors: [{ invoiceId: '11827', bank: 'itau', message: 'Falha na consulta.' }] },
+    currentTime: now,
+    now: () => now,
+    config: { maxInvoices: 0, maxPages: 1, deadlineMs: 55000 },
+    listPending: async () => [],
+    getRecentIssuedCursor: async () => ({ from: '', skip: 0 }),
+    getOpenInvoiceCursor: async () => 0,
+    saveRecentIssuedCursor: async () => {},
+    saveOpenInvoiceCursor: async () => {},
+    fetchInvoices: async () => ({ invoices, pagination: { hasMore: false } }),
+    listBlockedInvoiceIds: async () => [],
+    getCompletedBillingEvents: async () => new Set(),
+    savePendingBatch: async (records) => { queued.push(...records); },
+    emailConfig: { fromName: 'TWT', fromEmail: 'faturamento@twt.com.br' },
+    transport: {}
+  });
+  assert.deepEqual(queued.map((record) => record.invoiceId), ['11828']);
+  assert.equal(result.blocked, 1);
+  assert.equal(result.errors[0].invoiceId, '11827');
+});
+
+test('falha bancária sem fatura identificada impede cobrança manual', async () => {
+  await assert.rejects(runBillingCollection({
+    reconcileBankPayments: async () => { throw new Error('Banco indisponível'); }
+  }), /sem fatura identificada/);
+});
+
+test('fatura isolada em rodada anterior continua fora dos e-mails', async () => {
+  const queued = [];
+  const result = await runBillingCollection({
+    source: 'automatic',
+    bankReconciliationSummary: { checked: 1, settled: 0, alreadySettled: 0,
+      pending: 1, errors: [] },
+    currentTime: new Date('2026-10-19T12:00:00Z'),
+    config: { maxInvoices: 0, maxPages: 1, deadlineMs: 55000 },
+    listPending: async () => [],
+    getRecentIssuedCursor: async () => ({ from: '', skip: 0 }),
+    getOpenInvoiceCursor: async () => 0,
+    saveRecentIssuedCursor: async () => {},
+    saveOpenInvoiceCursor: async () => {},
+    fetchInvoices: async () => ({ invoices: [{ id: '11827', status: 0, balance: 100,
+      issuedAt: '2026-10-19', dueAt: '2026-11-19', clientDocument: '35820448008110' }],
+      pagination: { hasMore: false } }),
+    listBlockedInvoiceIds: async () => ['11827'],
+    getCompletedBillingEvents: async () => new Set(),
+    savePendingBatch: async (records) => { queued.push(...records); },
+    emailConfig: { fromName: 'TWT', fromEmail: 'faturamento@twt.com.br' },
+    transport: {}
+  });
+  assert.deepEqual(queued, []);
+  assert.equal(result.blocked, 1);
 });
 
 test('registra em um único comando todas as faturas descobertas', async () => {
@@ -2296,6 +2373,7 @@ test('persiste e remove o bloqueio de envio por fatura', async () => {
     }
     if (operation === 'HGET') return blocks.get(field) || null;
     if (operation === 'HKEYS') return [...blocks.keys()];
+    if (operation === 'SMEMBERS') return [];
     if (operation === 'HDEL') return blocks.delete(field) ? 1 : 0;
     throw new Error(`Comando inesperado: ${operation}`);
   };
@@ -2308,6 +2386,27 @@ test('persiste e remove o bloqueio de envio por fatura', async () => {
     blocked: false
   });
   assert.equal(await getInvoiceBlock('11756', command), null);
+});
+
+test('isola falha bancária no Redis até uma conferência sem erro', async () => {
+  const failures = new Set();
+  const command = async (operation, _key, ...values) => {
+    if (operation === 'HKEYS') return [];
+    if (operation === 'SMEMBERS') return [...failures];
+    if (operation === 'SADD') {
+      values.forEach((value) => failures.add(value));
+      return values.length;
+    }
+    if (operation === 'SREM') {
+      values.forEach((value) => failures.delete(value));
+      return values.length;
+    }
+    throw new Error(`Comando inesperado: ${operation}`);
+  };
+  await updateBankReconciliationFailures({ failed: ['011827'] }, command);
+  assert.deepEqual(await listBlockedInvoiceIds(command), ['11827']);
+  await updateBankReconciliationFailures({ cleared: ['11827'] }, command);
+  assert.deepEqual(await listBlockedInvoiceIds(command), []);
 });
 
 test('remove somente a pendência operacional da fatura informada', async () => {

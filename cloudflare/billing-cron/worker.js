@@ -43,7 +43,8 @@ const triggerBillingCollection = async (env, request = fetch) => {
   const totals = { checked: 0, settled: 0, alreadySettled: 0, pending: 0 };
   for (let batch = 0; batch < MAX_BANK_BATCHES_PER_RUN; batch += 1) {
     const result = await call('bank-reconciliation-cron');
-    if (!Array.isArray(result?.errors) || typeof result?.hasMore !== 'boolean' ||
+    if (!Array.isArray(result?.errors) || result.bankFailuresPersisted !== true ||
+        typeof result?.hasMore !== 'boolean' ||
         Object.keys(totals).some((key) => !Number.isSafeInteger(result[key]) || result[key] < 0)) {
       throw new Error('A conciliação bancária retornou um formato inesperado; cobrança não iniciada.');
     }
@@ -62,7 +63,6 @@ const triggerBillingCollection = async (env, request = fetch) => {
       bankFailureDiagnostics(result.errors, batch + 1).forEach((diagnostic) => {
         console.error('[twt-billing-cron:bank-error]', diagnostic);
       });
-      throw new Error(`${result.errors.length} boleto(s) com falha na conciliação; cobrança não iniciada.`);
     }
     Object.keys(totals).forEach((key) => { totals[key] += result[key]; });
     if (!result.hasMore) {

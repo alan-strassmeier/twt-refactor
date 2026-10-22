@@ -74,9 +74,9 @@ test('Worker confere todos os lotes bancários antes de iniciar cobrança', asyn
     if (params.get('route') === 'bank-reconciliation-cron') {
       return Response.json(routes.length === 1
         ? { checked: 25, settled: 2, alreadySettled: 1, pending: 22,
-          errors: [], hasMore: true, nextCursor: '11838' }
+          errors: [], hasMore: true, nextCursor: '11838', bankFailuresPersisted: true }
         : { checked: 4, settled: 1, alreadySettled: 0, pending: 3,
-          errors: [], hasMore: false, nextCursor: '11901' });
+          errors: [], hasMore: false, nextCursor: '11901', bankFailuresPersisted: true });
     }
     assert.equal(params.get('bankChecked'), '29');
     assert.equal(params.get('bankSettled'), '3');
@@ -90,26 +90,53 @@ test('Worker confere todos os lotes bancários antes de iniciar cobrança', asyn
   assert.equal(result.sent, 1);
 });
 
-test('Worker não envia cobrança se um lote bancário falhar ou ficar incompleto', async () => {
+test('Worker continua após erro isolado, mas não envia se a fila ficar incompleta', async () => {
   const worker = await import(pathToFileURL(
     path.join(root, 'cloudflare', 'billing-cron', 'worker.js')
   ).href);
-  for (const bankResult of [
-    { checked: 1, settled: 0, alreadySettled: 0, pending: 0,
-      errors: [{ invoiceId: '11838' }], hasMore: true, nextCursor: '11838' },
-    { checked: 0, settled: 0, alreadySettled: 0, pending: 0,
-      errors: [], hasMore: true, nextCursor: '' }
-  ]) {
-    const routes = [];
-    await assert.rejects(worker.triggerBillingCollection({
-      BILLING_ENDPOINT: 'https://www.twt.com.br/api/faturamento/cobranca?route=process',
-      BILLING_CRON_SECRET: 'b'.repeat(32)
-    }, async (url) => {
-      routes.push(new URL(url).searchParams.get('route'));
-      return Response.json(bankResult);
-    }), /cobrança não iniciada/);
-    assert.deepEqual(routes, ['bank-reconciliation-cron']);
-  }
+  const routes = [];
+  await worker.triggerBillingCollection({
+    BILLING_ENDPOINT: 'https://www.twt.com.br/api/faturamento/cobranca?route=process',
+    BILLING_CRON_SECRET: 'b'.repeat(32)
+  }, async (url) => {
+    const route = new URL(url).searchParams.get('route');
+    routes.push(route);
+    if (route === 'bank-reconciliation-cron') return Response.json(routes.length === 1
+      ? { checked: 1, settled: 0, alreadySettled: 0, pending: 0,
+        errors: [{ invoiceId: '11838', bank: 'itau' }], hasMore: true,
+        nextCursor: '11838', bankFailuresPersisted: true }
+      : { checked: 1, settled: 0, alreadySettled: 0, pending: 1,
+        errors: [], hasMore: false, bankFailuresPersisted: true });
+    return Response.json({ sent: 1 });
+  });
+  assert.deepEqual(routes, ['bank-reconciliation-cron', 'bank-reconciliation-cron', 'process']);
+
+  const incompleteRoutes = [];
+  await assert.rejects(worker.triggerBillingCollection({
+    BILLING_ENDPOINT: 'https://www.twt.com.br/api/faturamento/cobranca?route=process',
+    BILLING_CRON_SECRET: 'b'.repeat(32)
+  }, async (url) => {
+    incompleteRoutes.push(new URL(url).searchParams.get('route'));
+    return Response.json({ checked: 0, settled: 0, alreadySettled: 0, pending: 0,
+      errors: [], hasMore: true, nextCursor: '', bankFailuresPersisted: true });
+  }), /cobrança não iniciada/);
+  assert.deepEqual(incompleteRoutes, ['bank-reconciliation-cron']);
+});
+
+test('Worker não continua com servidor antigo sem isolamento persistido', async () => {
+  const worker = await import(pathToFileURL(
+    path.join(root, 'cloudflare', 'billing-cron', 'worker.js')
+  ).href);
+  const routes = [];
+  await assert.rejects(worker.triggerBillingCollection({
+    BILLING_ENDPOINT: 'https://www.twt.com.br/api/faturamento/cobranca?route=process',
+    BILLING_CRON_SECRET: 'b'.repeat(32)
+  }, async (url) => {
+    routes.push(new URL(url).searchParams.get('route'));
+    return Response.json({ checked: 1, settled: 0, alreadySettled: 0, pending: 0,
+      errors: [{ invoiceId: '11838' }], hasMore: false });
+  }), /formato inesperado/);
+  assert.deepEqual(routes, ['bank-reconciliation-cron']);
 });
 
 test('Worker registra apenas fatura e banco no diagnóstico de erro bancário', async () => {
@@ -148,8 +175,9 @@ test('Worker adia a cobrança após vinte lotes e preserva continuação no serv
   }, async (url) => {
     assert.equal(new URL(url).searchParams.get('route'), 'bank-reconciliation-cron');
     calls += 1;
-    return Response.json({ checked: 25, settled: 0, alreadySettled: 0,
-      pending: 25, errors: [], hasMore: true, nextCursor: String(calls) });
+      return Response.json({ checked: 25, settled: 0, alreadySettled: 0,
+        pending: 25, errors: [], hasMore: true, nextCursor: String(calls),
+        bankFailuresPersisted: true });
   }), /próxima execução/);
   assert.equal(calls, 20);
 });

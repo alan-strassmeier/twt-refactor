@@ -8,10 +8,13 @@ de faturas.
 
 Em cada horário, o Worker chama `route=bank-reconciliation-cron` repetidamente
 em lotes de até 25 boletos. O cursor fica no Redis para continuar na hora
-seguinte se a lista exceder 20 lotes. Apenas depois de concluir a lista sem
-erros ele chama `route=process&bankReconciled=1` para cobrar. Falha bancária,
-resposta incompleta ou fila ainda não concluída adiam o envio de cobrança;
-nenhum boleto é baixado sem confirmação do banco e da Brudam.
+seguinte se a lista exceder 20 lotes. Uma falha identificada de uma fatura
+fica isolada no Redis: ela não recebe e-mail de cobrança, mas as demais
+liquidações e cobranças podem seguir após a varredura inteira. A próxima
+conferência sem erro libera essa fatura. Falha sem fatura identificada, erro ao
+persistir o isolamento, resposta incompleta ou fila ainda não concluída
+adiam o envio de cobrança. Nenhum boleto é baixado sem confirmação do banco
+e da Brudam.
 
 O Cloudflare interpreta expressões cron em UTC. Por isso, o `wrangler.jsonc`
 usa `0 3-23 * * mon-fri` e `0 0-2 * * tue-sat`: juntas cobrem as 24 horas

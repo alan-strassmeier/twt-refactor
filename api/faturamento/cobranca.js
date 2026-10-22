@@ -695,20 +695,37 @@ const runCronBankReconciliationBatch = async (dependencies = {}) => {
     manualFullScan: true,
     afterInvoiceId
   });
-  if (!Array.isArray(result?.errors) || typeof result.hasMore !== 'boolean') {
+  if (!Array.isArray(result?.errors) || !Array.isArray(result?.results) ||
+      result.results.length !== result.checked || typeof result.hasMore !== 'boolean' ||
+      result.results.some((item) => !/^\d{1,20}$/.test(String(item?.invoiceId || '')) ||
+        !['error', 'in_progress', 'pending', 'liquidated', 'already_settled'].includes(item.status)) ||
+      result.errors.some((item) => !/^\d{1,20}$/.test(String(item?.invoiceId || '')))) {
     throw new Error('A conciliação bancária retornou um resultado inválido.');
   }
-  // Erros não avançam o cursor. Na próxima hora, somente boletos ainda não
-  // concluídos são revistos; o registro de baixa impede um segundo POST.
-  if (result.errors.length) return result;
+  const failedIds = result.results.filter((item) => item.status === 'error')
+    .map((item) => String(item.invoiceId)).sort();
+  const reportedIds = result.errors.map((item) => String(item.invoiceId)).sort();
+  if (new Set(result.results.map((item) => String(item.invoiceId))).size !== result.results.length ||
+      failedIds.length !== reportedIds.length ||
+      failedIds.some((id, index) => id !== reportedIds[index])) {
+    throw new Error('A conciliação bancária retornou falhas inconsistentes.');
+  }
   if (result.hasMore && (!/^\d{1,20}$/.test(String(result.nextCursor || '')) ||
       BigInt(result.nextCursor) <= BigInt(afterInvoiceId || '0'))) {
     throw new Error('A fila de liquidação automática não avançou.');
   }
+  // O bloqueio dos boletos incertos precisa sobreviver ao avanço do cursor
+  // entre execuções. Somente uma nova conferência sem erro libera cada ID.
+  await (dependencies.updateFailures || store.updateBankReconciliationFailures)({
+    failed: result.results.filter((item) => ['error', 'in_progress'].includes(item.status))
+      .map((item) => item.invoiceId),
+    cleared: result.results.filter((item) => ['pending', 'liquidated', 'already_settled'].includes(item.status))
+      .map((item) => item.invoiceId)
+  });
   await (dependencies.saveCursor || store.saveAutomaticBankScanCursor)(
     result.hasMore ? result.nextCursor : ''
   );
-  return result;
+  return { ...result, bankFailuresPersisted: true };
 };
 
 const handleCronBankReconciliationBatch = async (req, res) => {

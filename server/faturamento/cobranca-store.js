@@ -32,6 +32,7 @@ const KEYS = Object.freeze({
   webhookEvents: 'faturamento:cobranca:webhook-eventos:v1',
   logs: 'faturamento:cobranca:logs:v1',
   invoiceBlocks: 'faturamento:cobranca:faturas-bloqueadas:v1',
+  bankReconciliationFailures: 'faturamento:cobranca:falhas-liquidacao-automatica:v1',
   recentIssuedCursor: 'faturamento:cobranca:cursor:emissoes-72h:v1',
   openInvoiceCursor: 'faturamento:cobranca:cursor:abertas:v1',
   reconciliationCursor: 'faturamento:cobranca:cursor:reconciliacao:v1',
@@ -505,9 +506,25 @@ const setInvoiceBlocked = async (invoiceId, blocked, command = redisCommand) => 
   return record;
 };
 
-const listBlockedInvoiceIds = async (command = redisCommand) => (
-  (await command('HKEYS', KEYS.invoiceBlocks) || []).map(String)
-);
+const listBlockedInvoiceIds = async (command = redisCommand) => {
+  const [manual, bankFailures] = await Promise.all([
+    command('HKEYS', KEYS.invoiceBlocks),
+    command('SMEMBERS', KEYS.bankReconciliationFailures)
+  ]);
+  return [...new Set([...(manual || []), ...(bankFailures || [])].map(String))];
+};
+
+const updateBankReconciliationFailures = async ({ failed = [], cleared = [] } = {}, command = redisCommand) => {
+  const failedIds = [...new Set(failed.map(requiredInvoiceId))];
+  const clearedIds = [...new Set(cleared.map(requiredInvoiceId))];
+  if (failedIds.some((id) => clearedIds.includes(id))) {
+    throw new Error('Uma fatura não pode falhar e ser liberada no mesmo lote.');
+  }
+  // Registrar falhas primeiro: se a persistência falhar, o agendador não
+  // avança o cursor nem inicia os e-mails.
+  if (failedIds.length) await command('SADD', KEYS.bankReconciliationFailures, ...failedIds);
+  if (clearedIds.length) await command('SREM', KEYS.bankReconciliationFailures, ...clearedIds);
+};
 
 const saoPauloDate = (value) => {
   const date = new Date(value);
@@ -775,6 +792,7 @@ module.exports = {
   getInvoiceBlocks,
   setInvoiceBlocked,
   listBlockedInvoiceIds,
+  updateBankReconciliationFailures,
   saoPauloDate,
   filteredLogs,
   listLogs,

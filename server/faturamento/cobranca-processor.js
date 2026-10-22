@@ -1445,7 +1445,8 @@ const runBillingCollection = async (dependencies = {}) => {
   const bankReconciliation = continuation
     ? { checked: 0, settled: 0, alreadySettled: 0, pending: 0, errors: [] }
     : dependencies.bankReconciliationSummary
-    ? { ...dependencies.bankReconciliationSummary, errors: [] }
+    ? { ...dependencies.bankReconciliationSummary,
+      errors: dependencies.bankReconciliationSummary.errors || [] }
     : await (dependencies.reconcileBankPayments || reconcileBankPayments)({
       currentDate,
       maxRecords: config.maxBankReconciliations
@@ -1460,6 +1461,9 @@ const runBillingCollection = async (dependencies = {}) => {
         message: String(error.message || error).slice(0, 300)
       }]
     }));
+  if (bankReconciliation.errors.some((error) => !/^\d{1,20}$/.test(String(error.invoiceId || '')))) {
+    throw new Error('Falha bancária sem fatura identificada; cobrança não iniciada.');
+  }
   const [pending, recentCursor, openStart] = await Promise.all([
     (dependencies.listPending || store.listPending)(),
     continuation ? { from: recentFrom, skip: 0 } :
@@ -1541,6 +1545,13 @@ const runBillingCollection = async (dependencies = {}) => {
   const blockedInvoiceIds = new Set(
     await (dependencies.listBlockedInvoiceIds || store.listBlockedInvoiceIds)()
   );
+  // Uma falha de conciliação não autoriza cobrar a fatura cuja situação
+  // bancária permaneceu incerta, ainda que as demais possam prosseguir.
+  bankReconciliation.errors.forEach((error) => {
+    if (/^\d{1,20}$/.test(String(error.invoiceId || ''))) {
+      blockedInvoiceIds.add(String(error.invoiceId));
+    }
+  });
   const unblockedQueue = queue.filter(({ invoice }) => !blockedInvoiceIds.has(String(invoice.id)));
   const completedEventFields = await (
     dependencies.getCompletedBillingEvents || store.getCompletedBillingEvents
