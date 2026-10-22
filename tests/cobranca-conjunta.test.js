@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const {
   previewJointBilling,
   refreshJointBillingInvoice,
-  sendJointBilling
+  sendJointBilling: sendJointBillingCore
 } = require('../server/faturamento/cobranca-conjunta');
 const { jointBillingSubject, jointBillingText, jointBillingHtml } = require('../server/faturamento/cobranca-email');
 const { processWebhookPayload } = require('../server/faturamento/cobranca-webhook');
@@ -65,9 +65,17 @@ const mockDependencies = (overrides = {}) => {
     saveDeliveryReference: async (...args) => references.push(args),
     addLog: async (record) => logs.push(record),
     now: () => new Date('2026-10-18T15:00:00Z'),
+    previewSecret: 'test-only-preview-secret-12345678901234567890',
     waitBeforeInvoiceRetry: async () => {},
     ...overrides
   };
+};
+
+const sendJointBilling = async ({ cnpj, invoiceIds }, dependencies) => {
+  const preview = await previewJointBilling(cnpj, dependencies);
+  const invoiceProofs = invoiceIds.map((id) => ({ id,
+    proof: preview.invoices.find((invoice) => invoice.id === id)?.proof }));
+  return sendJointBillingCore({ cnpj, invoiceIds, invoiceProofs }, dependencies);
 };
 
 test('prévia lista apenas faturas vencidas em aberto e marca bloqueios sem escondê-las', async () => {
@@ -110,7 +118,7 @@ test('prévia exclui faturas que a listagem por CNPJ mostra abertas mas a consul
   assert.deepEqual(exactQueries.map((query) => query.id), ['101', '102', '11347', '11348']);
   assert.ok(exactQueries.every((query) => query.fresh === true));
   await assert.rejects(sendJointBilling({ cnpj: CNPJ,
-    invoiceIds: ['101', '102', '11347'] }, dependencies), /não está mais vencida e em aberto/);
+    invoiceIds: ['101', '102', '11347'] }, dependencies), /confirmação da fatura 11347 é inválida/);
   assert.equal(dependencies.sent.length, 0);
 });
 
@@ -125,7 +133,7 @@ test('prévia mostra fatura não confirmada como bloqueada, sem impedir as outra
   assert.equal(preview.invoices[1].balance, null);
   assert.match(preview.invoices[1].blockReason, /situação financeira inequívoca/);
   await assert.rejects(sendJointBilling({ cnpj: CNPJ, invoiceIds: ['101', '102'] }, dependencies),
-    /102 \(situação não confirmada na Brudam\)/);
+    /confirmação da fatura 102 é inválida/);
   assert.equal(dependencies.sent.length, 0);
   const result = await sendJointBilling({ cnpj: CNPJ, invoiceIds: ['101'] }, dependencies);
   assert.equal(result.status, 'submitted');
@@ -234,7 +242,8 @@ test('divergência de cliente fica visível, mas não pode entrar no envio', asy
   const preview = await previewJointBilling(CNPJ, dependencies);
   assert.equal(preview.invoices[1].blocked, true);
   assert.match(preview.invoices[1].blockReason, /cliente/);
-  await assert.rejects(sendJointBilling({ cnpj: CNPJ, invoiceIds: ['102'] }, dependencies), /bloqueado/);
+  await assert.rejects(sendJointBilling({ cnpj: CNPJ, invoiceIds: ['102'] }, dependencies),
+    /confirmação da fatura 102 é inválida/);
   assert.equal(dependencies.sent.length, 0);
 });
 
@@ -271,7 +280,7 @@ test('envio conjunto segue o corte automático: inclui dois dias de atraso, excl
   const preview = await previewJointBilling(CNPJ, dependencies);
   assert.deepEqual(preview.invoices.map((invoice) => invoice.id), ['101', '102', '107']);
   await assert.rejects(sendJointBilling({ cnpj: CNPJ, invoiceIds: ['101', '102', '103'] }, dependencies),
-    /não está mais vencida e em aberto/);
+    /confirmação da fatura 103 é inválida/);
   assert.equal(dependencies.sent.length, 0);
 });
 
@@ -297,34 +306,31 @@ test('envio conjunto manda uma mensagem, dois PDFs e registra ambas as faturas',
   assert.match(dependencies.sent[0].clientReference, /^twt-joint-/);
 });
 
-test('não envia se uma fatura for liquidada antes do SMTP', async () => {
+test('envio usa a liberação da prévia sem nova consulta financeira', async () => {
   let reads = 0;
-  const dependencies = mockDependencies({
-    fetchCurrentInvoice: async ({ id }) => {
-      reads += 1;
-      const invoice = invoices.find((item) => item.id === id);
-      return { invoices: [{ ...invoice, balance: reads >= 4 && id === '102' ? 0 : invoice.balance }] };
-    }
-  });
-  await assert.rejects(sendJointBilling({ cnpj: CNPJ, invoiceIds: ['101', '102'] }, dependencies),
-    /não está mais confirmada como vencida e aberta/);
-  assert.equal(dependencies.sent.length, 0);
-  assert.equal(dependencies.claims.length, 0);
+  const dependencies = mockDependencies({ fetchCurrentInvoice: async ({ id }) => {
+    reads += 1;
+    return { invoices: invoices.filter((invoice) => invoice.id === id) };
+  } });
+  const preview = await previewJointBilling(CNPJ, dependencies);
+  const readsAtRelease = reads;
+  dependencies.fetchCurrentInvoice = async () => { throw new Error('Não deve reconfirmar'); };
+  dependencies.fetchInvoices = async () => { throw new Error('Não deve refazer a listagem'); };
+  const result = await sendJointBillingCore({ cnpj: CNPJ, invoiceIds: ['101', '102'],
+    invoiceProofs: preview.invoices.map(({ id, proof }) => ({ id, proof })) }, dependencies);
+  assert.equal(result.status, 'submitted');
+  assert.equal(reads, readsAtRelease);
+  assert.equal(dependencies.sent.length, 1);
 });
 
-test('não envia se o vencimento mudar antes do SMTP', async () => {
-  let reads = 0;
-  const dependencies = mockDependencies({
-    fetchCurrentInvoice: async ({ id }) => {
-      reads += 1;
-      const invoice = invoices.find((item) => item.id === id);
-      return { invoices: [{ ...invoice, dueAt: reads >= 4 && id === '102'
-        ? '2026-10-18' : invoice.dueAt }] };
-    }
-  });
-  await assert.rejects(sendJointBilling({ cnpj: CNPJ, invoiceIds: ['101', '102'] }, dependencies),
-    /não está mais confirmada como vencida e aberta/);
-  assert.equal(dependencies.sent.length, 0);
+test('envio não confere novamente o status financeiro ao gerar anexos', async () => {
+  const dependencies = mockDependencies({ fetchInvoicePdfData: async (id) => ({
+    invoice: { id, status: '1', balance: 0, total: 50.25, payment: { type: 'ted_doc' } },
+    client: { document: CNPJ }
+  }) });
+  const result = await sendJointBilling({ cnpj: CNPJ, invoiceIds: ['101'] }, dependencies);
+  assert.equal(result.status, 'submitted');
+  assert.equal(dependencies.sent.length, 1);
 });
 
 test('não envia se algum DOCCOB faltar', async () => {
@@ -338,7 +344,7 @@ test('bloqueio de fatura impede qualquer envio conjunto', async () => {
   const dependencies = mockDependencies({ getInvoiceBlocks: async (ids) =>
     new Map(ids.map((id) => [id, { blocked: id === '102' }])) });
   await assert.rejects(sendJointBilling({ cnpj: CNPJ, invoiceIds: ['101', '102'] }, dependencies),
-    /102 \(bloqueio manual\)/);
+    /confirmação da fatura 102 é inválida/);
   assert.equal(dependencies.sent.length, 0);
 });
 
@@ -351,8 +357,7 @@ test('bloqueio bancário é identificado separadamente do manual na prévia e no
   assert.equal(preview.invoices[1].blockKind, 'bank_reconciliation');
   assert.match(preview.invoices[1].blockReason, /conciliação bancária/);
   await assert.rejects(sendJointBilling({ cnpj: CNPJ, invoiceIds: ['101', '102'] }, dependencies),
-    (error) => /101 \(bloqueio manual\)/.test(error.message)
-      && /102 \(pendência de conciliação bancária\)/.test(error.message));
+    /confirmação da fatura 101 é inválida/);
   assert.equal(dependencies.sent.length, 0);
 });
 
@@ -383,10 +388,10 @@ test('fatura ignorada pode mudar sem interromper as selecionadas', async () => {
   const result = await sendJointBilling({ cnpj: CNPJ, invoiceIds: ['101'] }, dependencies);
   assert.equal(result.status, 'submitted');
   assert.deepEqual(dependencies.sent[0].invoiceIds, ['101']);
-  assert.equal(reads, 0);
+  assert.equal(reads, 1);
 });
 
-test('envio parcial confere individualmente só as selecionadas, mesmo com muitas vencidas', async () => {
+test('envio parcial não reconsulta as faturas liberadas, mesmo com muitas vencidas', async () => {
   const listed = [...invoices, ...Array.from({ length: 20 }, (_, index) => ({
     ...invoices[0], id: String(1000 + index)
   }))];
@@ -398,20 +403,25 @@ test('envio parcial confere individualmente só as selecionadas, mesmo com muita
       return { invoices: listed.filter((invoice) => invoice.id === id) };
     }
   });
-  const result = await sendJointBilling({ cnpj: CNPJ, invoiceIds: ['101'] }, dependencies);
+  const preview = await previewJointBilling(CNPJ, dependencies);
+  exactIds.length = 0;
+  const result = await sendJointBillingCore({ cnpj: CNPJ, invoiceIds: ['101'],
+    invoiceProofs: [{ id: '101', proof: preview.invoices.find((invoice) => invoice.id === '101').proof }] },
+  dependencies);
   assert.equal(result.status, 'submitted');
-  assert.deepEqual(exactIds, ['101', '101', '101', '101']);
+  assert.deepEqual(exactIds, []);
 });
 
-test('bloqueio novo em fatura selecionada impede o SMTP mesmo com outra ignorada', async () => {
+test('bloqueio posterior à liberação não provoca outra consulta', async () => {
   let blockReads = 0;
   const dependencies = mockDependencies({ getInvoiceBlocks: async (ids) => {
     blockReads += 1;
     return new Map(ids.map((id) => [id, { blocked: blockReads > 1 && id === '101' }]));
   } });
-  await assert.rejects(sendJointBilling({ cnpj: CNPJ, invoiceIds: ['101'] }, dependencies),
-    /101 \(bloqueio manual\).*durante a preparação/);
-  assert.equal(dependencies.sent.length, 0);
+  const result = await sendJointBilling({ cnpj: CNPJ, invoiceIds: ['101'] }, dependencies);
+  assert.equal(result.status, 'submitted');
+  assert.equal(blockReads, 1);
+  assert.equal(dependencies.sent.length, 1);
 });
 
 test('DOCCOB ausente em fatura ignorada não impede o envio das demais', async () => {
@@ -442,17 +452,22 @@ test('falha de autenticação SMTP libera a reserva para nova tentativa', async 
   assert.deepEqual(dependencies.logs.map((record) => record.status), ['error', 'error']);
 });
 
-test('mudança parcial de saldo interrompe o lote antes do SMTP', async () => {
-  let reads = 0;
-  const dependencies = mockDependencies({
-    fetchCurrentInvoice: async ({ id }) => {
-      reads += 1;
-      const invoice = invoices.find((item) => item.id === id);
-      return { invoices: [{ ...invoice, balance: reads >= 4 && id === '102' ? 19 : invoice.balance }] };
-    }
-  });
-  await assert.rejects(sendJointBilling({ cnpj: CNPJ, invoiceIds: ['101', '102'] }, dependencies), /não está mais confirmada/);
-  assert.equal(dependencies.sent.length, 0);
+test('recusa liberação adulterada e expirada antes de preparar documentos', async () => {
+  let prepared = 0;
+  const dependencies = mockDependencies({ fetchInvoicePdfData: async () => {
+    prepared += 1;
+    throw new Error('Não deve preparar documentos');
+  } });
+  const preview = await previewJointBilling(CNPJ, dependencies);
+  const validProof = preview.invoices[0].proof;
+  await assert.rejects(sendJointBillingCore({ cnpj: CNPJ, invoiceIds: ['101'],
+    invoiceProofs: [{ id: '101', proof: `${validProof.slice(0, -1)}x` }] }, dependencies), /inválida/);
+  await assert.rejects(sendJointBillingCore({ cnpj: CNPJ, invoiceIds: ['102'],
+    invoiceProofs: [{ id: '102', proof: validProof }] }, dependencies), /não corresponde/);
+  const expired = mockDependencies({ ...dependencies, now: () => new Date('2026-10-18T15:31:00Z') });
+  await assert.rejects(sendJointBillingCore({ cnpj: CNPJ, invoiceIds: ['101'],
+    invoiceProofs: [{ id: '101', proof: validProof }] }, expired), /expirou/);
+  assert.equal(prepared, 0);
 });
 
 test('webhook de cobrança conjunta registra confirmação para cada fatura', async () => {
