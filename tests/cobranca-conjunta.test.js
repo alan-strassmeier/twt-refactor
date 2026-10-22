@@ -6,7 +6,8 @@ const {
   refreshJointBillingInvoice,
   sendJointBilling: sendJointBillingCore
 } = require('../server/faturamento/cobranca-conjunta');
-const { jointBillingSubject, jointBillingText, jointBillingHtml, sendJointBillingEmail } = require('../server/faturamento/cobranca-email');
+const { jointBillingSubject, jointBillingText, jointBillingHtml, sendJointBillingEmail,
+  zohoConfig } = require('../server/faturamento/cobranca-email');
 const { processWebhookPayload } = require('../server/faturamento/cobranca-webhook');
 const { processInvoiceEvent } = require('../server/faturamento/cobranca-processor');
 const billingStore = require('../server/faturamento/cobranca-store');
@@ -415,7 +416,7 @@ test('envio conjunto manda uma mensagem, dois PDFs e registra ambas as faturas',
   assert.match(dependencies.sent[0].clientReference, /^twt-joint-/);
 });
 
-test('envio conjunto inclui Adriano em cópia sem alterar os destinatários principais', async () => {
+test('envio conjunto usa BILLING_ALERT_EMAIL em cópia sem alterar os destinatários principais', async () => {
   let message;
   await sendJointBillingEmail({
     recipients: [{ firstName: 'Ana', lastName: '', email: 'ana@example.com' }],
@@ -429,10 +430,14 @@ test('envio conjunto inclui Adriano em cópia sem alterar os destinatários prin
       message = value;
       return { messageId: 'smtp-1', accepted: ['ana@example.com', 'adrianoldepaula@gmail.com'], rejected: [] };
     } },
-    config: { fromName: 'TWT LOG', fromEmail: 'faturamento@twt.com.br' }
+    config: zohoConfig({
+      ZOHO_SMTP_USER: 'faturamento@twt.com.br',
+      ZOHO_SMTP_PASSWORD: 'senha-de-teste',
+      BILLING_ALERT_EMAIL: 'financeiro-interno@example.com'
+    })
   });
   assert.deepEqual(message.to, [{ name: 'Ana', address: 'ana@example.com' }]);
-  assert.equal(message.cc, 'adrianoldepaula@gmail.com');
+  assert.equal(message.cc, 'financeiro-interno@example.com');
 });
 
 test('envio usa a liberação da prévia sem nova consulta financeira', async () => {
