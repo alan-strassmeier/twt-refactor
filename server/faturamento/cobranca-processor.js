@@ -1124,7 +1124,7 @@ const resendBillingInvoice = async (invoiceId, dependencies = {}) => {
     });
   }
   if ((await (dependencies.getInvoiceBlock || store.getInvoiceBlock)(normalizedId))?.blocked) {
-    throw Object.assign(new Error('O envio desta fatura está bloqueado manualmente.'), {
+    throw Object.assign(new Error('O envio desta fatura está bloqueado por uma pendência ou bloqueio manual.'), {
       statusCode: 409,
       expose: true
     });

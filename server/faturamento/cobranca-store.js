@@ -33,6 +33,8 @@ const KEYS = Object.freeze({
   logs: 'faturamento:cobranca:logs:v1',
   invoiceBlocks: 'faturamento:cobranca:faturas-bloqueadas:v1',
   bankReconciliationFailures: 'faturamento:cobranca:falhas-liquidacao-automatica:v1',
+  bankReconciliationIssues: 'faturamento:cobranca:pendencias-liquidacao:v1',
+  bankReconciliationIgnored: 'faturamento:cobranca:liquidacao-ignorada:v1',
   recentIssuedCursor: 'faturamento:cobranca:cursor:emissoes-72h:v1',
   openInvoiceCursor: 'faturamento:cobranca:cursor:abertas:v1',
   reconciliationCursor: 'faturamento:cobranca:cursor:reconciliacao:v1',
@@ -478,14 +480,28 @@ const resolveLog = async (id, note = '', command = redisCommand) => {
 
 const getInvoiceBlock = async (invoiceId, command = redisCommand) => {
   const normalizedId = requiredInvoiceId(invoiceId);
-  return parseRecord(await command('HGET', KEYS.invoiceBlocks, normalizedId));
+  const manual = parseRecord(await command('HGET', KEYS.invoiceBlocks, normalizedId));
+  if (manual?.blocked) return manual;
+  const [failed, ignored] = await Promise.all([
+    command('SISMEMBER', KEYS.bankReconciliationFailures, normalizedId),
+    command('SISMEMBER', KEYS.bankReconciliationIgnored, normalizedId)
+  ]);
+  return Number(failed) || Number(ignored)
+    ? { invoiceId: normalizedId, blocked: true, reason: 'bank_reconciliation' } : null;
 };
 
 const getInvoiceBlocks = async (invoiceIds, command = redisCommand) => {
   const ids = [...new Set((invoiceIds || []).map(requiredInvoiceId))];
   if (!ids.length) return new Map();
-  const values = await command('HMGET', KEYS.invoiceBlocks, ...ids) || [];
-  return new Map(ids.map((id, index) => [id, parseRecord(values[index])]));
+  const [values, failures, ignored] = await Promise.all([
+    command('HMGET', KEYS.invoiceBlocks, ...ids),
+    command('SMEMBERS', KEYS.bankReconciliationFailures),
+    command('SMEMBERS', KEYS.bankReconciliationIgnored)
+  ]);
+  const financialBlocks = new Set([...(failures || []), ...(ignored || [])].map(String));
+  return new Map(ids.map((id, index) => [id,
+    parseRecord(values?.[index]) || (financialBlocks.has(id)
+      ? { invoiceId: id, blocked: true, reason: 'bank_reconciliation' } : null)]));
 };
 
 const setInvoiceBlocked = async (invoiceId, blocked, command = redisCommand) => {
@@ -507,15 +523,49 @@ const setInvoiceBlocked = async (invoiceId, blocked, command = redisCommand) => 
 };
 
 const listBlockedInvoiceIds = async (command = redisCommand) => {
-  const [manual, bankFailures] = await Promise.all([
+  const [manual, bankFailures, ignored] = await Promise.all([
     command('HKEYS', KEYS.invoiceBlocks),
-    command('SMEMBERS', KEYS.bankReconciliationFailures)
+    command('SMEMBERS', KEYS.bankReconciliationFailures),
+    command('SMEMBERS', KEYS.bankReconciliationIgnored)
   ]);
-  return [...new Set([...(manual || []), ...(bankFailures || [])].map(String))];
+  return [...new Set([...(manual || []), ...(bankFailures || []), ...(ignored || [])].map(String))];
+};
+
+const listIgnoredBankReconciliationIds = async (command = redisCommand) =>
+  (await command('SMEMBERS', KEYS.bankReconciliationIgnored) || []).map(String);
+
+const listBankReconciliationIssues = async (command = redisCommand) => {
+  const [flat, failures, ignored] = await Promise.all([
+    command('HGETALL', KEYS.bankReconciliationIssues),
+    command('SMEMBERS', KEYS.bankReconciliationFailures),
+    command('SMEMBERS', KEYS.bankReconciliationIgnored)
+  ]);
+  const records = new Map();
+  for (let index = 0; index < (flat || []).length; index += 2) {
+    const invoiceId = String(flat[index]);
+    const record = parseRecord(flat[index + 1]);
+    if (record) records.set(invoiceId, record);
+  }
+  const failedIds = new Set((failures || []).map(String));
+  const ignoredIds = new Set((ignored || []).map(String));
+  return [...new Set([...records.keys(), ...failedIds, ...ignoredIds])]
+    .map((invoiceId) => ({
+      invoiceId,
+      bank: String(records.get(invoiceId)?.bank || ''),
+      message: String(records.get(invoiceId)?.message || 'Falha anterior sem detalhes salvos.'),
+      httpStatus: Number(records.get(invoiceId)?.httpStatus) || null,
+      firstSeenAt: records.get(invoiceId)?.firstSeenAt || null,
+      lastSeenAt: records.get(invoiceId)?.lastSeenAt || null,
+      ignoredAt: records.get(invoiceId)?.ignoredAt || null,
+      status: ignoredIds.has(invoiceId) ? 'ignored' : 'active'
+    }))
+    .filter((issue) => issue.status === 'ignored' || failedIds.has(issue.invoiceId))
+    .sort((left, right) => String(right.lastSeenAt || '').localeCompare(String(left.lastSeenAt || '')) ||
+      left.invoiceId.localeCompare(right.invoiceId, undefined, { numeric: true }));
 };
 
 const updateBankReconciliationFailures = async ({ failed = [], cleared = [] } = {}, command = redisCommand) => {
-  const failedIds = [...new Set(failed.map(requiredInvoiceId))];
+  const failedIds = [...new Set(failed.map((item) => requiredInvoiceId(item?.invoiceId || item)))];
   const clearedIds = [...new Set(cleared.map(requiredInvoiceId))];
   if (failedIds.some((id) => clearedIds.includes(id))) {
     throw new Error('Uma fatura não pode falhar e ser liberada no mesmo lote.');
@@ -523,7 +573,64 @@ const updateBankReconciliationFailures = async ({ failed = [], cleared = [] } = 
   // Registrar falhas primeiro: se a persistência falhar, o agendador não
   // avança o cursor nem inicia os e-mails.
   if (failedIds.length) await command('SADD', KEYS.bankReconciliationFailures, ...failedIds);
+  for (const item of failed) {
+    if (!item || typeof item !== 'object') continue;
+    const invoiceId = requiredInvoiceId(item.invoiceId);
+    const previous = parseRecord(await command('HGET', KEYS.bankReconciliationIssues, invoiceId), {});
+    const now = new Date().toISOString();
+    await command('HSET', KEYS.bankReconciliationIssues, invoiceId, JSON.stringify({
+      invoiceId,
+      bank: String(item.bank || previous.bank || '').slice(0, 32),
+      message: String(item.message || previous.message || 'Conciliação não concluída.').slice(0, 300),
+      httpStatus: Number.isInteger(item.httpStatus) ? item.httpStatus : null,
+      firstSeenAt: previous.firstSeenAt || now,
+      lastSeenAt: now
+    }));
+  }
   if (clearedIds.length) await command('SREM', KEYS.bankReconciliationFailures, ...clearedIds);
+  if (clearedIds.length) await command('HDEL', KEYS.bankReconciliationIssues, ...clearedIds);
+};
+
+const ignoreBankReconciliationIssue = async (invoiceId, command = redisCommand) => {
+  const id = requiredInvoiceId(invoiceId);
+  const [failed, previousValue] = await Promise.all([
+    command('SISMEMBER', KEYS.bankReconciliationFailures, id),
+    command('HGET', KEYS.bankReconciliationIssues, id)
+  ]);
+  if (!Number(failed) && !previousValue) {
+    throw Object.assign(new Error('Pendência de liquidação não encontrada.'), { statusCode: 404, expose: true });
+  }
+  const previous = parseRecord(previousValue, {});
+  const now = new Date().toISOString();
+  // Ignorar retira a fatura somente da fila de liquidação. A falha permanece
+  // como bloqueio de cobrança enquanto o estado bancário não for confirmado.
+  await command('SADD', KEYS.bankReconciliationIgnored, id);
+  await command('HSET', KEYS.bankReconciliationIssues, id, JSON.stringify({
+    ...previous,
+    invoiceId: id,
+    message: previous.message || 'Falha anterior sem detalhes salvos.',
+    firstSeenAt: previous.firstSeenAt || now,
+    lastSeenAt: previous.lastSeenAt || now,
+    ignoredAt: now
+  }));
+  return { invoiceId: id, status: 'ignored' };
+};
+
+const resumeBankReconciliationIssue = async (invoiceId, command = redisCommand) => {
+  const id = requiredInvoiceId(invoiceId);
+  if (!Number(await command('SISMEMBER', KEYS.bankReconciliationIgnored, id))) {
+    throw Object.assign(new Error('A fatura não está ignorada na liquidação.'), { statusCode: 404, expose: true });
+  }
+  const previous = parseRecord(await command('HGET', KEYS.bankReconciliationIssues, id), {});
+  // Continua bloqueada para cobrança até uma conferência sem erro.
+  await command('SADD', KEYS.bankReconciliationFailures, id);
+  await command('SREM', KEYS.bankReconciliationIgnored, id);
+  await command('HSET', KEYS.bankReconciliationIssues, id, JSON.stringify({
+    ...previous,
+    invoiceId: id,
+    ignoredAt: null
+  }));
+  return { invoiceId: id, status: 'active' };
 };
 
 const saoPauloDate = (value) => {
@@ -792,7 +899,11 @@ module.exports = {
   getInvoiceBlocks,
   setInvoiceBlocked,
   listBlockedInvoiceIds,
+  listIgnoredBankReconciliationIds,
+  listBankReconciliationIssues,
   updateBankReconciliationFailures,
+  ignoreBankReconciliationIssue,
+  resumeBankReconciliationIssue,
   saoPauloDate,
   filteredLogs,
   listLogs,

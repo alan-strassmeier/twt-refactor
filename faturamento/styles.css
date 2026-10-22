@@ -1351,6 +1351,19 @@ body.modal-open {
   min-width: 710px;
 }
 
+.liquidation-issues-table {
+  min-width: 850px;
+}
+
+.liquidation-issues-table td:nth-child(3) {
+  max-width: 520px;
+  overflow-wrap: anywhere;
+}
+
+.liquidation-issues-table td:last-child {
+  white-space: nowrap;
+}
+
 .liquidation-batch-issues {
   margin: 0;
   padding: 12px 18px 12px 34px;

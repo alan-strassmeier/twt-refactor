@@ -25,7 +25,11 @@ const {
   getInvoiceBlock,
   setInvoiceBlocked,
   listBlockedInvoiceIds,
+  listIgnoredBankReconciliationIds,
+  listBankReconciliationIssues,
   updateBankReconciliationFailures,
+  ignoreBankReconciliationIssue,
+  resumeBankReconciliationIssue,
   removePending,
   listDismissedIssues,
   dismissIssue,
@@ -807,7 +811,9 @@ test('lote do agendador persiste isolamento e reinicia após conferir tudo', asy
   await runCronBankReconciliationBatch(dependencies);
   assert.equal(cursor, '');
   assert.deepEqual(updates, [
-    { failed: ['11839', '11840'], cleared: ['11901'] },
+    { failed: [{ invoiceId: '11839', bank: 'itau' },
+      { invoiceId: '11840', status: 'in_progress', message: 'Outra conciliação está em andamento.' }],
+    cleared: ['11901'] },
     { failed: [], cleared: ['11904'] }
   ]);
   assert.deepEqual(inputs.map((input) => input.afterInvoiceId), ['11838', '11901']);
@@ -2374,6 +2380,7 @@ test('persiste e remove o bloqueio de envio por fatura', async () => {
     if (operation === 'HGET') return blocks.get(field) || null;
     if (operation === 'HKEYS') return [...blocks.keys()];
     if (operation === 'SMEMBERS') return [];
+    if (operation === 'SISMEMBER') return 0;
     if (operation === 'HDEL') return blocks.delete(field) ? 1 : 0;
     throw new Error(`Comando inesperado: ${operation}`);
   };
@@ -2401,11 +2408,68 @@ test('isola falha bancária no Redis até uma conferência sem erro', async () =
       values.forEach((value) => failures.delete(value));
       return values.length;
     }
+    if (operation === 'HDEL') return 0;
     throw new Error(`Comando inesperado: ${operation}`);
   };
   await updateBankReconciliationFailures({ failed: ['011827'] }, command);
   assert.deepEqual(await listBlockedInvoiceIds(command), ['11827']);
   await updateBankReconciliationFailures({ cleared: ['11827'] }, command);
+  assert.deepEqual(await listBlockedInvoiceIds(command), []);
+});
+
+test('pendência bancária guarda erro, permite ignorar sem liberar cobrança e depois reativar', async () => {
+  const hashes = new Map();
+  const sets = new Map();
+  const command = async (operation, key, ...args) => {
+    const hash = hashes.get(key) || new Map();
+    const set = sets.get(key) || new Set();
+    if (operation === 'HGET') return hash.get(args[0]) || null;
+    if (operation === 'HGETALL') return [...hash.entries()].flat();
+    if (operation === 'HKEYS') return [...hash.keys()];
+    if (operation === 'HSET') {
+      hash.set(args[0], args[1]);
+      hashes.set(key, hash);
+      return 1;
+    }
+    if (operation === 'HDEL') {
+      args.forEach((id) => hash.delete(id));
+      hashes.set(key, hash);
+      return 1;
+    }
+    if (operation === 'SMEMBERS') return [...set];
+    if (operation === 'SISMEMBER') return set.has(args[0]) ? 1 : 0;
+    if (operation === 'SADD') {
+      args.forEach((id) => set.add(id));
+      sets.set(key, set);
+      return args.length;
+    }
+    if (operation === 'SREM') {
+      args.forEach((id) => set.delete(id));
+      sets.set(key, set);
+      return args.length;
+    }
+    throw new Error(`Comando inesperado: ${operation}`);
+  };
+  await updateBankReconciliationFailures({ failed: [{
+    invoiceId: '011912', bank: 'itau',
+    message: 'Não foi possível processar essa requisição.'
+  }] }, command);
+  let issues = await listBankReconciliationIssues(command);
+  assert.equal(issues.length, 1);
+  assert.equal(issues[0].invoiceId, '11912');
+  assert.equal(issues[0].message, 'Não foi possível processar essa requisição.');
+  assert.equal(issues[0].status, 'active');
+  await ignoreBankReconciliationIssue('11912', command);
+  issues = await listBankReconciliationIssues(command);
+  assert.equal(issues[0].status, 'ignored');
+  assert.deepEqual(await listIgnoredBankReconciliationIds(command), ['11912']);
+  assert.deepEqual(await listBlockedInvoiceIds(command), ['11912']);
+  assert.equal((await getInvoiceBlock('11912', command)).reason, 'bank_reconciliation');
+  await resumeBankReconciliationIssue('11912', command);
+  assert.deepEqual(await listIgnoredBankReconciliationIds(command), []);
+  assert.equal((await listBankReconciliationIssues(command))[0].status, 'active');
+  await updateBankReconciliationFailures({ cleared: ['11912'] }, command);
+  assert.deepEqual(await listBankReconciliationIssues(command), []);
   assert.deepEqual(await listBlockedInvoiceIds(command), []);
 });
 
@@ -2638,7 +2702,7 @@ test('reenvio manual respeita o bloqueio da fatura', async () => {
     findDoccobForInvoice: async () => { doccobLookups += 1; }
   }), (error) => {
     assert.equal(error.statusCode, 409);
-    assert.match(error.message, /bloqueado manualmente/i);
+    assert.match(error.message, /bloqueado por uma pendência ou bloqueio manual/i);
     return true;
   });
   assert.equal(doccobLookups, 0);
@@ -2958,6 +3022,10 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(html, /id="liquidationWorkspace"/);
   assert.match(html, /id="liquidationLogRows"/);
   assert.match(html, /id="refreshLiquidationLog"/);
+  assert.match(html, /id="liquidationIssueRows"/);
+  assert.match(html, /id="refreshLiquidationIssues"/);
+  assert.match(source, /bank-reconciliation-issues/);
+  assert.match(apiSource, /handleBankReconciliationIssues/);
   assert.match(html, /id="focusLiquidationButton"[^>]*>Liquidar faturas<\/button>/);
   assert.match(html, /<h2>Liquidar boleto<\/h2>/);
   assert.match(html, /id="itauReconciliationRunButton"[^>]*>[\s\S]*?Liquidar este boleto/);

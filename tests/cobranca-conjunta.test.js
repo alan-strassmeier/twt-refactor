@@ -319,13 +319,16 @@ test('consulta bloqueios e reservas em lotes Redis sem uma chamada por fatura', 
   const commands = [];
   const command = async (...args) => {
     commands.push(args);
+    if (args[0] === 'SMEMBERS') return args[1] === billingStore.KEYS.bankReconciliationIgnored
+      ? ['101'] : [];
     return [null, JSON.stringify({ blocked: true })];
   };
   const blocks = await billingStore.getInvoiceBlocks(['101', '102'], command);
   const deliveries = await billingStore.getJointDeliveries(['101', '102'], command);
-  assert.equal(commands.length, 2);
+  assert.equal(commands.length, 4);
   assert.equal(commands[0][0], 'HMGET');
-  assert.equal(commands[1][0], 'HMGET');
+  assert.equal(commands[3][0], 'HMGET');
+  assert.equal(blocks.get('101').reason, 'bank_reconciliation');
   assert.equal(blocks.get('102').blocked, true);
   assert.equal(deliveries.get('102').blocked, true);
 });
