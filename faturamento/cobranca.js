@@ -587,6 +587,14 @@
 
   const selectedJointInvoices = () => (state.jointPreview?.invoices || [])
     .filter((invoice) => !state.jointExcludedIds.has(invoice.id));
+  const jointBlockLabel = (invoice) => {
+    const reasons = [];
+    if (invoice.blockKind === 'manual') reasons.push('bloqueio manual');
+    if (invoice.blockKind === 'bank_reconciliation') reasons.push('pendência de liquidação bancária');
+    if (invoice.unverified) reasons.push('situação não confirmada na Brudam');
+    if (invoice.jointSent) reasons.push('já enviada em conjunto');
+    return `${invoice.id} (${reasons.join(' e ') || 'envio bloqueado'})`;
+  };
 
   const updateJointSelection = () => {
     const selected = selectedJointInvoices();
@@ -645,7 +653,9 @@
     } else if (!selected.length) {
       setMessage('Selecione ao menos uma fatura para o envio.', 'warning');
     } else if (selected.some((invoice) => invoice.blocked || invoice.jointSent)) {
-      setMessage('Ignore neste envio as faturas bloqueadas ou já enviadas em conjunto para continuar com as demais.', 'warning');
+      const blocked = selected.filter((invoice) => invoice.blocked || invoice.jointSent);
+      setMessage(`Faturas que impedem o envio: ${blocked.map(jointBlockLabel).join('; ')}. `
+        + 'Ignore-as neste envio para continuar com as demais.', 'warning');
     } else {
       setMessage(`${selected.length} fatura(s) selecionada(s) para envio. Confira antes de continuar.`, 'success');
     }

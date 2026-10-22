@@ -77,6 +77,8 @@ test('prévia lista apenas faturas vencidas em aberto e marca bloqueios sem esco
   assert.deepEqual(preview.invoices.map((invoice) => invoice.id), ['101', '102']);
   assert.equal(preview.invoices[1].blocked, true);
   assert.equal(preview.invoices[1].unverified, false);
+  assert.equal(preview.invoices[1].blockKind, 'manual');
+  assert.match(preview.invoices[1].blockReason, /bloqueio manual/);
   assert.equal(preview.blockedCount, 1);
   assert.equal(preview.totalBalance, 70.25);
   assert.equal(preview.recipients.length, 2);
@@ -123,7 +125,7 @@ test('prévia mostra fatura não confirmada como bloqueada, sem impedir as outra
   assert.equal(preview.invoices[1].balance, null);
   assert.match(preview.invoices[1].blockReason, /situação financeira inequívoca/);
   await assert.rejects(sendJointBilling({ cnpj: CNPJ, invoiceIds: ['101', '102'] }, dependencies),
-    /selecionada\(s\) com envio bloqueado/);
+    /102 \(situação não confirmada na Brudam\)/);
   assert.equal(dependencies.sent.length, 0);
   const result = await sendJointBilling({ cnpj: CNPJ, invoiceIds: ['101'] }, dependencies);
   assert.equal(result.status, 'submitted');
@@ -335,7 +337,22 @@ test('não envia se algum DOCCOB faltar', async () => {
 test('bloqueio de fatura impede qualquer envio conjunto', async () => {
   const dependencies = mockDependencies({ getInvoiceBlocks: async (ids) =>
     new Map(ids.map((id) => [id, { blocked: id === '102' }])) });
-  await assert.rejects(sendJointBilling({ cnpj: CNPJ, invoiceIds: ['101', '102'] }, dependencies), /bloqueado/);
+  await assert.rejects(sendJointBilling({ cnpj: CNPJ, invoiceIds: ['101', '102'] }, dependencies),
+    /102 \(bloqueio manual\)/);
+  assert.equal(dependencies.sent.length, 0);
+});
+
+test('bloqueio bancário é identificado separadamente do manual na prévia e no envio', async () => {
+  const dependencies = mockDependencies({ getInvoiceBlocks: async (ids) => new Map(ids.map((id) => [id,
+    id === '101' ? { blocked: true } : { blocked: true, reason: 'bank_reconciliation' }
+  ])) });
+  const preview = await previewJointBilling(CNPJ, dependencies);
+  assert.equal(preview.invoices[0].blockKind, 'manual');
+  assert.equal(preview.invoices[1].blockKind, 'bank_reconciliation');
+  assert.match(preview.invoices[1].blockReason, /conciliação bancária/);
+  await assert.rejects(sendJointBilling({ cnpj: CNPJ, invoiceIds: ['101', '102'] }, dependencies),
+    (error) => /101 \(bloqueio manual\)/.test(error.message)
+      && /102 \(pendência de conciliação bancária\)/.test(error.message));
   assert.equal(dependencies.sent.length, 0);
 });
 
@@ -393,7 +410,7 @@ test('bloqueio novo em fatura selecionada impede o SMTP mesmo com outra ignorada
     return new Map(ids.map((id) => [id, { blocked: blockReads > 1 && id === '101' }]));
   } });
   await assert.rejects(sendJointBilling({ cnpj: CNPJ, invoiceIds: ['101'] }, dependencies),
-    /bloqueada durante a preparação/);
+    /101 \(bloqueio manual\).*durante a preparação/);
   assert.equal(dependencies.sent.length, 0);
 });
 

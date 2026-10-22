@@ -32,6 +32,17 @@ const overdueDays = (dueAt, today) => Math.floor((Date.parse(`${today}T00:00:00Z
   - Date.parse(`${String(dueAt || '').slice(0, 10)}T00:00:00Z`)) / 86400000);
 const isOverdue = (invoice, today) =>
   automaticBillingEventForInvoice(invoice, today) === EVENT_TYPES.overdue;
+const blockKind = (block) => !block?.blocked ? ''
+  : block.reason === 'bank_reconciliation' ? 'bank_reconciliation' : 'manual';
+const blockDescription = (kind) => kind === 'manual' ? 'bloqueio manual'
+  : kind === 'bank_reconciliation' ? 'pendência de conciliação bancária' : '';
+const blockingDetails = (invoice) => {
+  const reasons = [blockDescription(invoice.blockKind)];
+  if (invoice.unverified) reasons.push('situação não confirmada na Brudam');
+  return `${invoice.id} (${reasons.filter(Boolean).join(' e ') || 'envio bloqueado'})`;
+};
+const blockingMessage = (invoices, suffix) =>
+  `Fatura(s) com envio bloqueado: ${invoices.map(blockingDetails).join('; ')}. ${suffix}`;
 
 const fetchExactInvoice = async (id, dependencies = {}) => {
   const fetch = dependencies.fetchCurrentInvoice || dependencies.fetchInvoices || fetchInvoices;
@@ -128,6 +139,8 @@ const previewJointBilling = async (cnpj, dependencies = {}, onlyInvoiceIds = nul
   ]);
   const entries = invoices.map((invoice) => {
     const id = invoiceId(invoice.id);
+    const block = blocks.get(id);
+    const kind = blockKind(block);
     return {
       id: invoiceId(invoice.id),
       issuedAt: invoice.issuedAt,
@@ -135,8 +148,9 @@ const previewJointBilling = async (cnpj, dependencies = {}, onlyInvoiceIds = nul
       balance: invoice.unverified ? null : Number(invoice.balance),
       overdueDays: overdueDays(invoice.dueAt, today),
       unverified: Boolean(invoice.unverified),
-      blocked: Boolean(invoice.unverified || blocks.get(id)?.blocked),
-      blockReason: invoice.blockReason || (blocks.get(id)?.blocked ? 'Envio bloqueado para esta fatura.' : ''),
+      blocked: Boolean(invoice.unverified || block?.blocked),
+      blockKind: kind,
+      blockReason: [invoice.blockReason, blockDescription(kind)].filter(Boolean).join(' · '),
       jointSent: Boolean(jointDeliveries.get(id))
     };
   });
@@ -162,6 +176,8 @@ const refreshJointBillingInvoice = async ({ cnpj: cnpjInput, invoiceId: requeste
   const category = await getCategory(cnpj);
   if (!category) throw fail('Empresa não cadastrada nos e-mails de cobrança.', 404);
   const today = saoPauloDate(dependencies.now ? dependencies.now() : new Date());
+  const blocks = await (dependencies.getInvoiceBlocks || store.getInvoiceBlocks)([id]);
+  const kind = blockKind(blocks.get(id));
   let current;
   try {
     current = await fetchExactInvoice(id, dependencies);
@@ -169,28 +185,27 @@ const refreshJointBillingInvoice = async ({ cnpj: cnpjInput, invoiceId: requeste
     const upstreamStatus = Number(error.cause?.statusCode || error.cause?.upstreamStatus || 0);
     return { id, removed: false, invoice: {
       id, balance: null, unverified: true, blocked: true,
-      upstreamStatus: upstreamStatus || null,
-      blockReason: error.message.replace(/\s*Nenhum e-mail foi enviado\.\s*$/, '')
+      upstreamStatus: upstreamStatus || null, blockKind: kind,
+      blockReason: [error.message.replace(/\s*Nenhum e-mail foi enviado\.\s*$/, ''),
+        blockDescription(kind)].filter(Boolean).join(' · ')
     } };
   }
   if (digits(current.clientDocument) !== cnpj) {
     return { id, removed: false, invoice: {
-      id, balance: null, unverified: true, blocked: true, upstreamStatus: null,
-      blockReason: `O cliente da fatura ${id} não pôde ser confirmado na Brudam.`
+      id, balance: null, unverified: true, blocked: true, upstreamStatus: null, blockKind: kind,
+      blockReason: [`O cliente da fatura ${id} não pôde ser confirmado na Brudam.`,
+        blockDescription(kind)].filter(Boolean).join(' · ')
     } };
   }
   if (String(current.status) !== '0' || !isPendingInvoice(current) || !isOverdue(current, today)) {
     return { id, removed: true };
   }
-  const [blocks, jointDeliveries] = await Promise.all([
-    (dependencies.getInvoiceBlocks || store.getInvoiceBlocks)([id]),
-    (dependencies.getJointDeliveries || store.getJointDeliveries)([id])
-  ]);
+  const jointDeliveries = await (dependencies.getJointDeliveries || store.getJointDeliveries)([id]);
   return { id, removed: false, invoice: {
     id, issuedAt: current.issuedAt, dueAt: current.dueAt,
     balance: Number(current.balance), overdueDays: overdueDays(current.dueAt, today),
     unverified: false, upstreamStatus: null, blocked: Boolean(blocks.get(id)?.blocked),
-    blockReason: blocks.get(id)?.blocked ? 'Envio bloqueado para esta fatura.' : '',
+    blockKind: kind, blockReason: blockDescription(kind),
     jointSent: Boolean(jointDeliveries.get(id))
   } };
 };
@@ -256,8 +271,9 @@ const sendJointBilling = async ({ cnpj: cnpjInput, invoiceIds }, dependencies = 
   if (selected.some((invoice) => !invoice)) {
     throw fail('Uma fatura selecionada não está mais vencida e em aberto. Atualize a consulta antes de enviar.');
   }
-  if (selected.some((invoice) => invoice.blocked)) {
-    throw fail('Há fatura(s) selecionada(s) com envio bloqueado. Ignore-as neste envio para continuar com as demais.');
+  const blockedSelected = selected.filter((invoice) => invoice.blocked);
+  if (blockedSelected.length) {
+    throw fail(blockingMessage(blockedSelected, 'Ignore-as neste envio para continuar com as demais.'));
   }
   if (selected.some((invoice) => invoice.jointSent)) {
     throw fail('Há fatura(s) selecionada(s) já reservadas ou enviadas em conjunto. Ignore-as para continuar com as demais.');
@@ -286,6 +302,10 @@ const sendJointBilling = async ({ cnpj: cnpjInput, invoiceIds }, dependencies = 
   if (latestSelected.some((invoice) => !invoice)) {
     throw fail('Uma fatura selecionada mudou durante a preparação. Nenhum e-mail foi enviado.');
   }
+  const newlyBlocked = latestSelected.filter((invoice) => invoice.blocked);
+  if (newlyBlocked.length) {
+    throw fail(blockingMessage(newlyBlocked, 'O bloqueio surgiu durante a preparação. Nenhum e-mail foi enviado.'));
+  }
   if (selected.some((invoice, index) => cents(invoice.balance) !== cents(latestSelected[index].balance)
     || invoice.dueAt !== latestSelected[index].dueAt)) {
     throw fail('O saldo de uma fatura mudou durante a preparação. Atualize a consulta antes de enviar.');
@@ -293,9 +313,6 @@ const sendJointBilling = async ({ cnpj: cnpjInput, invoiceIds }, dependencies = 
   if (preview.company.name !== latest.company.name
     || preview.company.billingMethod !== latest.company.billingMethod) {
     throw fail('O cadastro da empresa mudou durante a preparação. Atualize a consulta antes de enviar.');
-  }
-  if (latestSelected.some((invoice) => invoice.blocked)) {
-    throw fail('Uma fatura selecionada foi bloqueada durante a preparação. Nenhum e-mail foi enviado.');
   }
   if (latestSelected.some((invoice) => invoice.jointSent)) {
     throw fail('Uma fatura selecionada foi reservada por outro envio conjunto. Nenhum e-mail foi enviado.');
