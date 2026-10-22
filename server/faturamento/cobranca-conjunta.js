@@ -20,6 +20,8 @@ const { deliveryReference } = require('./cobranca-webhook');
 const store = require('./cobranca-store');
 
 const MAX_ATTACHMENT_BYTES = 18 * 1024 * 1024;
+const INVOICE_CHECK_CONCURRENCY = 3;
+const EMPTY_INVOICE_RETRIES = 3;
 const fail = (message, statusCode = 409) => Object.assign(new Error(message), { statusCode, expose: true });
 const digits = (value) => String(value || '').replace(/\D/g, '');
 const invoiceId = (value) => String(value || '').trim().replace(/^0+(?=\d)/, '');
@@ -33,24 +35,31 @@ const isOverdue = (invoice, today) =>
 
 const fetchExactInvoice = async (id, dependencies = {}) => {
   const fetch = dependencies.fetchCurrentInvoice || dependencies.fetchInvoices || fetchInvoices;
-  let result;
-  try {
-    result = await retryTransientNetworkRequest(() => fetch({ id, limit: 100, fresh: true }));
-  } catch (error) {
-    throw Object.assign(fail(
-      `Não foi possível confirmar a situação da fatura ${id} na Brudam. Nenhum e-mail foi enviado.`, 503
-    ), { cause: error });
+  const wait = dependencies.waitBeforeInvoiceRetry || ((milliseconds) =>
+    new Promise((resolve) => setTimeout(resolve, milliseconds)));
+  for (let attempt = 1; attempt <= EMPTY_INVOICE_RETRIES; attempt += 1) {
+    let result;
+    try {
+      result = await retryTransientNetworkRequest(() => fetch({ id, limit: 100, fresh: true }));
+    } catch (error) {
+      throw Object.assign(fail(
+        `Não foi possível confirmar a situação da fatura ${id} na Brudam. Nenhum e-mail foi enviado.`, 503
+      ), { cause: error });
+    }
+    const matches = (result?.invoices || []).filter((item) => invoiceId(item.id) === id);
+    if (matches.length === 1) return matches[0];
+    if (matches.length > 1) {
+      throw fail(`A Brudam retornou registros duplicados para a fatura ${id}. Nenhum e-mail foi enviado.`, 503);
+    }
+    if (attempt === EMPTY_INVOICE_RETRIES) break;
+    await wait(200 * attempt);
   }
-  const matches = (result?.invoices || []).filter((item) => invoiceId(item.id) === id);
-  if (matches.length !== 1) {
-    throw fail(
-      `A Brudam não retornou uma situação financeira inequívoca para a fatura ${id}. Nenhum e-mail foi enviado.`, 503
-    );
-  }
-  return matches[0];
+  throw fail(
+    `A Brudam não retornou uma situação financeira inequívoca para a fatura ${id} após ${EMPTY_INVOICE_RETRIES} consultas. Nenhum e-mail foi enviado.`, 503
+  );
 };
 
-const companyAndInvoices = async (cnpjInput, dependencies = {}) => {
+const companyAndInvoices = async (cnpjInput, dependencies = {}, onlyInvoiceIds = null) => {
   const cnpj = digits(cnpjInput);
   if (cnpj.length !== 14) throw fail('Informe um CNPJ válido.', 422);
   const getCategory = dependencies.getCategory || store.getCategory;
@@ -66,36 +75,40 @@ const companyAndInvoices = async (cnpjInput, dependencies = {}) => {
   const candidates = (result?.invoices || []).filter((invoice) =>
     digits(invoice.clientDocument) === cnpj && String(invoice.status) === '0'
     && isPendingInvoice(invoice) && isOverdue(invoice, today));
-  const candidateIds = new Set(candidates.map((invoice) => invoiceId(invoice.id)));
-  const invoices = [];
-  const unverifiedInvoices = [];
-  for (const id of candidateIds) {
-    let current;
-    try {
-      current = await fetchExactInvoice(id, dependencies);
-    } catch (error) {
-      const listed = candidates.find((invoice) => invoiceId(invoice.id) === id);
-      unverifiedInvoices.push({ id, issuedAt: listed.issuedAt, dueAt: listed.dueAt,
-        balance: null, unverified: true,
-        blockReason: error.message.replace(/\s*Nenhum e-mail foi enviado\.\s*$/, '') });
-      continue;
+  const candidatesById = new Map(candidates.map((invoice) => [invoiceId(invoice.id), invoice]));
+  const candidateEntries = [...candidatesById.entries()]
+    .filter(([id]) => !onlyInvoiceIds || onlyInvoiceIds.has(id));
+  const checked = new Array(candidateEntries.length);
+  let nextIndex = 0;
+  await Promise.all(Array.from({ length: Math.min(INVOICE_CHECK_CONCURRENCY, candidateEntries.length) }, async () => {
+    while (nextIndex < candidateEntries.length) {
+      const index = nextIndex++;
+      const [id, listed] = candidateEntries[index];
+      let current;
+      try {
+        current = await fetchExactInvoice(id, dependencies);
+      } catch (error) {
+        checked[index] = { id, issuedAt: listed.issuedAt, dueAt: listed.dueAt,
+          balance: null, unverified: true,
+          blockReason: error.message.replace(/\s*Nenhum e-mail foi enviado\.\s*$/, '') };
+        continue;
+      }
+      if (String(current.status) !== '0' || !isPendingInvoice(current)) continue;
+      if (digits(current.clientDocument) !== cnpj) {
+        checked[index] = { id, issuedAt: listed.issuedAt, dueAt: listed.dueAt,
+          balance: null, unverified: true,
+          blockReason: `O cliente da fatura ${id} não pôde ser confirmado na Brudam.` };
+        continue;
+      }
+      if (isOverdue(current, today)) checked[index] = current;
     }
-    if (String(current.status) !== '0' || !isPendingInvoice(current)) continue;
-    if (digits(current.clientDocument) !== cnpj) {
-      const listed = candidates.find((invoice) => invoiceId(invoice.id) === id);
-      unverifiedInvoices.push({ id, issuedAt: listed.issuedAt, dueAt: listed.dueAt,
-        balance: null, unverified: true,
-        blockReason: `O cliente da fatura ${id} não pôde ser confirmado na Brudam.` });
-      continue;
-    }
-    if (isOverdue(current, today)) invoices.push(current);
-  }
-  return { cnpj, category, invoices: [...invoices, ...unverifiedInvoices].sort((a, b) =>
+  }));
+  return { cnpj, category, invoices: checked.filter(Boolean).sort((a, b) =>
     BigInt(invoiceId(a.id)) < BigInt(invoiceId(b.id)) ? -1 : 1), today };
 };
 
-const previewJointBilling = async (cnpj, dependencies = {}) => {
-  const { category, invoices, today } = await companyAndInvoices(cnpj, dependencies);
+const previewJointBilling = async (cnpj, dependencies = {}, onlyInvoiceIds = null) => {
+  const { category, invoices, today } = await companyAndInvoices(cnpj, dependencies, onlyInvoiceIds);
   const ids = invoices.map((invoice) => invoiceId(invoice.id));
   const [blocks, jointDeliveries] = await Promise.all([
     (dependencies.getInvoiceBlocks || store.getInvoiceBlocks)(ids),
@@ -179,7 +192,8 @@ const sendJointBilling = async ({ cnpj: cnpjInput, invoiceIds }, dependencies = 
   if (!expectedIds || expectedIds.length !== invoiceIds.length) {
     throw fail('Confira a lista de faturas antes de enviar.', 422);
   }
-  const preview = await previewJointBilling(cnpjInput, dependencies);
+  const selectedIds = new Set(expectedIds);
+  const preview = await previewJointBilling(cnpjInput, dependencies, selectedIds);
   const cnpj = preview.company.cnpj;
   const selected = expectedIds.map((id) => preview.invoices.find((invoice) => invoice.id === id));
   if (selected.some((invoice) => !invoice)) {
@@ -210,7 +224,7 @@ const sendJointBilling = async ({ cnpj: cnpjInput, invoiceIds }, dependencies = 
   }
 
   // A lista e o estado financeiro são novamente conferidos imediatamente antes do SMTP.
-  const latest = await previewJointBilling(cnpj, dependencies);
+  const latest = await previewJointBilling(cnpj, dependencies, selectedIds);
   const latestSelected = expectedIds.map((id) => latest.invoices.find((invoice) => invoice.id === id));
   if (latestSelected.some((invoice) => !invoice)) {
     throw fail('Uma fatura selecionada mudou durante a preparação. Nenhum e-mail foi enviado.');

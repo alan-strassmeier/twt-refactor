@@ -64,6 +64,7 @@ const mockDependencies = (overrides = {}) => {
     saveDeliveryReference: async (...args) => references.push(args),
     addLog: async (record) => logs.push(record),
     now: () => new Date('2026-10-18T15:00:00Z'),
+    waitBeforeInvoiceRetry: async () => {},
     ...overrides
   };
 };
@@ -124,6 +125,42 @@ test('prévia mostra fatura não confirmada como bloqueada, sem impedir as outra
   const result = await sendJointBilling({ cnpj: CNPJ, invoiceIds: ['101'] }, dependencies);
   assert.equal(result.status, 'submitted');
   assert.deepEqual(dependencies.sent[0].invoiceIds, ['101']);
+});
+
+test('consulta individual vazia transitória é repetida antes de bloquear a fatura', async () => {
+  let attempts = 0;
+  const dependencies = mockDependencies({ fetchCurrentInvoice: async ({ id }) => {
+    if (id !== '102') return { invoices: [invoices[0]] };
+    attempts += 1;
+    return { invoices: attempts < 3 ? [] : [invoices[1]] };
+  } });
+  const preview = await previewJointBilling(CNPJ, dependencies);
+  assert.equal(attempts, 3);
+  assert.deepEqual(preview.invoices.map((invoice) => invoice.id), ['101', '102']);
+  assert.equal(preview.invoices[1].blocked, false);
+  assert.equal(preview.invoices[1].balance, 20);
+});
+
+test('prévia limita a três consultas individuais simultâneas para muitos vencimentos', async () => {
+  const manyInvoices = Array.from({ length: 18 }, (_, index) => ({
+    ...invoices[0], id: String(1000 + index)
+  }));
+  let active = 0;
+  let maximum = 0;
+  const dependencies = mockDependencies({
+    fetchInvoices: async () => ({ invoices: manyInvoices, pagination: { allCompanyInvoicesLoaded: true } }),
+    fetchCurrentInvoice: async ({ id }) => {
+      active += 1;
+      maximum = Math.max(maximum, active);
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      active -= 1;
+      return { invoices: manyInvoices.filter((invoice) => invoice.id === id) };
+    }
+  });
+  const preview = await previewJointBilling(CNPJ, dependencies);
+  assert.equal(preview.invoices.length, manyInvoices.length);
+  assert.equal(preview.blockedCount, 0);
+  assert.ok(maximum > 1 && maximum <= 3);
 });
 
 test('divergência de cliente fica visível, mas não pode entrar no envio', async () => {
@@ -270,6 +307,24 @@ test('fatura ignorada pode mudar sem interromper as selecionadas', async () => {
   const result = await sendJointBilling({ cnpj: CNPJ, invoiceIds: ['101'] }, dependencies);
   assert.equal(result.status, 'submitted');
   assert.deepEqual(dependencies.sent[0].invoiceIds, ['101']);
+  assert.equal(reads, 0);
+});
+
+test('envio parcial confere individualmente só as selecionadas, mesmo com muitas vencidas', async () => {
+  const listed = [...invoices, ...Array.from({ length: 20 }, (_, index) => ({
+    ...invoices[0], id: String(1000 + index)
+  }))];
+  const exactIds = [];
+  const dependencies = mockDependencies({
+    fetchInvoices: async () => ({ invoices: listed, pagination: { allCompanyInvoicesLoaded: true } }),
+    fetchCurrentInvoice: async ({ id }) => {
+      exactIds.push(id);
+      return { invoices: listed.filter((invoice) => invoice.id === id) };
+    }
+  });
+  const result = await sendJointBilling({ cnpj: CNPJ, invoiceIds: ['101'] }, dependencies);
+  assert.equal(result.status, 'submitted');
+  assert.deepEqual(exactIds, ['101', '101', '101', '101']);
 });
 
 test('bloqueio novo em fatura selecionada impede o SMTP mesmo com outra ignorada', async () => {

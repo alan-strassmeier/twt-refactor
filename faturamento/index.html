@@ -10,7 +10,7 @@
   <link rel="stylesheet" href="/faturamento/styles.css?v=22">
   <script src="/faturamento/sort.js?v=1" defer></script>
   <script src="/faturamento/app.js?v=21" defer></script>
-  <script src="/faturamento/cobranca.js?v=12" defer></script>
+  <script src="/faturamento/cobranca.js?v=13" defer></script>
   <script src="/faturamento/clientes-inativos.js?v=2" defer></script>
 </head>
 <body>
@@ -524,47 +524,6 @@
             </div>
           </section>
 
-          <section class="collection-card" aria-labelledby="liquidationIssuesTitle">
-            <div class="collection-card-heading">
-              <div>
-                <h2 id="liquidationIssuesTitle">Pendências da liquidação</h2>
-                <p>Erros dos lotes manuais e automáticos. Ignorar retira a fatura das próximas conferências bancárias, mas mantém a cobrança dela bloqueada até a situação ser esclarecida.</p>
-              </div>
-              <button class="button button-quiet" id="refreshLiquidationIssues" type="button">Atualizar pendências</button>
-            </div>
-            <p class="dashboard-message collection-message" id="liquidationIssuesMessage" role="status" aria-live="polite"></p>
-            <div class="table-scroll collection-table-scroll">
-              <table class="collection-table liquidation-issues-table">
-                <thead><tr><th>Fatura</th><th>Banco</th><th>Erro</th><th>Última falha</th><th>Estado</th><th>Ação</th></tr></thead>
-                <tbody id="liquidationIssueRows"></tbody>
-              </table>
-              <div class="collection-empty" id="liquidationIssuesEmpty" hidden>
-                <strong>Nenhuma pendência de liquidação</strong>
-                <p>As falhas identificadas nas conferências aparecerão aqui.</p>
-              </div>
-            </div>
-          </section>
-
-          <section class="collection-card" aria-labelledby="liquidationLogTitle">
-            <div class="collection-card-heading">
-              <div>
-                <h2 id="liquidationLogTitle">Histórico de liquidações</h2>
-                <p>Baixas de boletos registradas no Redis e aprovações de planilhas feitas a partir desta versão.</p>
-              </div>
-              <button class="button button-quiet" id="refreshLiquidationLog" type="button">Atualizar log</button>
-            </div>
-            <div class="table-scroll collection-table-scroll">
-              <table class="collection-table liquidation-log-table">
-                <thead><tr><th>Concluída em</th><th>Fatura</th><th>Origem</th><th>Data do pagamento</th><th>Valor pago</th><th>Resultado</th></tr></thead>
-                <tbody id="liquidationLogRows"></tbody>
-              </table>
-              <div class="collection-empty" id="liquidationLogEmpty" hidden>
-                <strong>Nenhuma liquidação registrada</strong>
-                <p>O histórico será preenchido quando uma baixa for confirmada na Brudam.</p>
-              </div>
-            </div>
-          </section>
-
           <section class="collection-card" id="paymentImportSection" aria-labelledby="paymentImportTitle">
             <div class="collection-card-heading">
               <div>
@@ -618,6 +577,48 @@
               </details>
             </div>
           </section>
+
+          <section class="collection-card" aria-labelledby="liquidationIssuesTitle">
+            <div class="collection-card-heading">
+              <div>
+                <h2 id="liquidationIssuesTitle">Pendências da liquidação</h2>
+                <p>Erros dos lotes manuais e automáticos. Ignorar retira a fatura das próximas conferências bancárias, mas mantém a cobrança dela bloqueada até a situação ser esclarecida.</p>
+              </div>
+              <button class="button button-quiet" id="refreshLiquidationIssues" type="button">Atualizar pendências</button>
+            </div>
+            <p class="dashboard-message collection-message" id="liquidationIssuesMessage" role="status" aria-live="polite"></p>
+            <div class="table-scroll collection-table-scroll">
+              <table class="collection-table liquidation-issues-table">
+                <thead><tr><th>Fatura</th><th>Banco</th><th>Erro</th><th>Última falha</th><th>Estado</th><th>Ação</th></tr></thead>
+                <tbody id="liquidationIssueRows"></tbody>
+              </table>
+              <div class="collection-empty" id="liquidationIssuesEmpty" hidden>
+                <strong>Nenhuma pendência de liquidação</strong>
+                <p>As falhas identificadas nas conferências aparecerão aqui.</p>
+              </div>
+            </div>
+          </section>
+
+          <section class="collection-card" aria-labelledby="liquidationLogTitle">
+            <div class="collection-card-heading">
+              <div>
+                <h2 id="liquidationLogTitle">Histórico de liquidações</h2>
+                <p>Somente baixas concluídas pelo sistema, incluindo aprovações de planilhas feitas a partir desta versão.</p>
+              </div>
+              <button class="button button-quiet" id="refreshLiquidationLog" type="button">Atualizar log</button>
+            </div>
+            <div class="table-scroll collection-table-scroll">
+              <table class="collection-table liquidation-log-table">
+                <thead><tr><th>Concluída em</th><th>Fatura</th><th>Origem</th><th>Data do pagamento</th><th>Valor pago</th></tr></thead>
+                <tbody id="liquidationLogRows"></tbody>
+              </table>
+              <div class="collection-empty" id="liquidationLogEmpty" hidden>
+                <strong>Nenhuma liquidação registrada</strong>
+                <p>O histórico será preenchido quando uma baixa for confirmada na Brudam.</p>
+              </div>
+            </div>
+          </section>
+
         </section>
       </section>
     </main>
