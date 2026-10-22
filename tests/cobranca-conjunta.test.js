@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
   previewJointBilling,
+  refreshJointBillingInvoice,
   sendJointBilling
 } = require('../server/faturamento/cobranca-conjunta');
 const { jointBillingSubject, jointBillingText, jointBillingHtml } = require('../server/faturamento/cobranca-email');
@@ -75,6 +76,7 @@ test('prévia lista apenas faturas vencidas em aberto e marca bloqueios sem esco
   const preview = await previewJointBilling(CNPJ, dependencies);
   assert.deepEqual(preview.invoices.map((invoice) => invoice.id), ['101', '102']);
   assert.equal(preview.invoices[1].blocked, true);
+  assert.equal(preview.invoices[1].unverified, false);
   assert.equal(preview.blockedCount, 1);
   assert.equal(preview.totalBalance, 70.25);
   assert.equal(preview.recipients.length, 2);
@@ -117,6 +119,7 @@ test('prévia mostra fatura não confirmada como bloqueada, sem impedir as outra
   const preview = await previewJointBilling(CNPJ, dependencies);
   assert.deepEqual(preview.invoices.map((invoice) => invoice.id), ['101', '102']);
   assert.equal(preview.invoices[1].blocked, true);
+  assert.equal(preview.invoices[1].unverified, true);
   assert.equal(preview.invoices[1].balance, null);
   assert.match(preview.invoices[1].blockReason, /situação financeira inequívoca/);
   await assert.rejects(sendJointBilling({ cnpj: CNPJ, invoiceIds: ['101', '102'] }, dependencies),
@@ -125,6 +128,49 @@ test('prévia mostra fatura não confirmada como bloqueada, sem impedir as outra
   const result = await sendJointBilling({ cnpj: CNPJ, invoiceIds: ['101'] }, dependencies);
   assert.equal(result.status, 'submitted');
   assert.deepEqual(dependencies.sent[0].invoiceIds, ['101']);
+});
+
+test('atualização de erro consulta só a fatura indicada, sem refazer a lista da empresa', async () => {
+  const queried = [];
+  const dependencies = mockDependencies({
+    fetchCurrentInvoice: async ({ id }) => {
+      queried.push(id);
+      return { invoices: invoices.filter((invoice) => invoice.id === id) };
+    }
+  });
+  const result = await refreshJointBillingInvoice({ cnpj: CNPJ, invoiceId: '102' }, dependencies);
+  assert.deepEqual(queried, ['102']);
+  assert.equal(dependencies.calls.length, 0);
+  assert.equal(result.invoice.unverified, false);
+  assert.equal(result.invoice.blocked, false);
+  assert.equal(result.invoice.balance, 20);
+});
+
+test('atualização remove da prévia a fatura que deixou de estar aberta', async () => {
+  const dependencies = mockDependencies({
+    fetchCurrentInvoice: async () => ({ invoices: [{ ...invoices[1], status: '1', balance: 0 }] })
+  });
+  const result = await refreshJointBillingInvoice({ cnpj: CNPJ, invoiceId: '102' }, dependencies);
+  assert.deepEqual(result, { id: '102', removed: true });
+  assert.equal(dependencies.calls.length, 0);
+});
+
+test('HTTP 429 mantém apenas a fatura reconsultada bloqueada', async () => {
+  const queried = [];
+  const dependencies = mockDependencies({
+    fetchCurrentInvoice: async ({ id }) => {
+      queried.push(id);
+      throw Object.assign(new Error('Too many requests'), { statusCode: 429 });
+    }
+  });
+  const result = await refreshJointBillingInvoice({ cnpj: CNPJ, invoiceId: '102' }, dependencies);
+  assert.ok(queried.length >= 1);
+  assert.ok(queried.every((id) => id === '102'));
+  assert.equal(dependencies.calls.length, 0);
+  assert.equal(result.invoice.unverified, true);
+  assert.equal(result.invoice.blocked, true);
+  assert.equal(result.invoice.upstreamStatus, 429);
+  assert.match(result.invoice.blockReason, /HTTP 429/);
 });
 
 test('consulta individual vazia transitória é repetida antes de bloquear a fatura', async () => {

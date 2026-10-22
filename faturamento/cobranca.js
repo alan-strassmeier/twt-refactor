@@ -20,6 +20,7 @@
     jointRecipients: document.getElementById('jointBillingRecipients'),
     jointTotal: document.getElementById('jointBillingTotal'),
     jointRows: document.getElementById('jointBillingRows'),
+    jointRefreshButton: document.getElementById('refreshJointBillingButton'),
     jointSendButton: document.getElementById('sendJointBillingButton'),
     itauReconciliationPreviewForm: document.getElementById('itauReconciliationPreviewForm'),
     itauReconciliationInvoiceId: document.getElementById('itauReconciliationInvoiceId'),
@@ -591,6 +592,10 @@
     const selected = selectedJointInvoices();
     const total = selected.reduce((sum, invoice) => sum + (Number(invoice.balance) || 0), 0);
     elements.jointTotal.textContent = `${selected.length} selecionada(s) · Total: ${formatMoney(total)}`;
+    const errorCount = (state.jointPreview?.invoices || []).filter((invoice) => invoice.unverified).length;
+    elements.jointRefreshButton.disabled = state.loading || errorCount === 0;
+    elements.jointRefreshButton.title = errorCount
+      ? `Reconsultar somente ${errorCount} fatura(s) com erro` : 'Nenhuma fatura com erro para atualizar';
     elements.jointSendButton.disabled = state.loading || !selected.length
       || !state.jointPreview?.recipients?.length
       || selected.some((invoice) => invoice.blocked || invoice.jointSent);
@@ -1424,6 +1429,59 @@
       elements.jointMatches.appendChild(button);
     }
     setMessage('Selecione a empresa para consultar as faturas.', '');
+  });
+
+  elements.jointRefreshButton.addEventListener('click', async () => {
+    const preview = state.jointPreview;
+    const errorIds = (preview?.invoices || []).filter((invoice) => invoice.unverified)
+      .map((invoice) => invoice.id);
+    if (!errorIds.length || state.loading) return;
+    let updated = 0;
+    let removed = 0;
+    setLoading(true);
+    updateJointSelection();
+    try {
+      for (let index = 0; index < errorIds.length; index += 1) {
+        const id = errorIds[index];
+        setMessage(`Atualizando fatura ${id} (${index + 1}/${errorIds.length})…`);
+        const result = await requestJson(endpoint('joint-billing-refresh'), {
+          method: 'POST',
+          body: JSON.stringify({ cnpj: preview.company.cnpj, invoiceId: id })
+        });
+        if (result.id !== id || (!result.removed && !result.invoice)) {
+          throw new Error(`Resposta inválida ao atualizar a fatura ${id}.`);
+        }
+        if (result.removed) {
+          preview.invoices = preview.invoices.filter((invoice) => invoice.id !== id);
+          state.jointExcludedIds.delete(id);
+          removed += 1;
+        } else {
+          preview.invoices = preview.invoices.map((invoice) => invoice.id === id
+            ? { ...invoice, ...result.invoice,
+              issuedAt: result.invoice.issuedAt || invoice.issuedAt,
+              dueAt: result.invoice.dueAt || invoice.dueAt }
+            : invoice);
+          if (!result.invoice.unverified) updated += 1;
+        }
+        preview.totalBalance = Math.round(preview.invoices.reduce(
+          (sum, invoice) => sum + (Number(invoice.balance) || 0), 0) * 100) / 100;
+        preview.blockedCount = preview.invoices.filter((invoice) => invoice.blocked).length;
+        preview.jointSentCount = preview.invoices.filter((invoice) => invoice.jointSent).length;
+        renderJointPreview(preview);
+        if (index + 1 < errorIds.length) {
+          await new Promise((resolve) => setTimeout(resolve,
+            result.invoice?.upstreamStatus === 429 ? 2000 : 350));
+        }
+      }
+      const remaining = preview.invoices.filter((invoice) => invoice.unverified).length;
+      setMessage(`${updated} fatura(s) confirmada(s), ${removed} removida(s) por não estarem mais vencidas em aberto`
+        + ` e ${remaining} ainda com erro.`, remaining ? 'warning' : 'success');
+    } catch (error) {
+      setMessage(`Atualização parcial: ${error.message} As demais faturas não foram reconsultadas.`, 'error');
+    } finally {
+      setLoading(false);
+      updateJointSelection();
+    }
   });
 
   elements.jointSendButton.addEventListener('click', async () => {

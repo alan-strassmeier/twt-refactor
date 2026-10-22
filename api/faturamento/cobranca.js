@@ -17,7 +17,9 @@ const {
 const { fetchInvoices } = require('../../server/faturamento/brudam');
 const { findDoccobForInvoice } = require('../../server/faturamento/r2-doccob');
 const { getBankSlipRecord } = require('../../server/faturamento/boleto-store');
-const { previewJointBilling, sendJointBilling } = require('../../server/faturamento/cobranca-conjunta');
+const {
+  previewJointBilling, refreshJointBillingInvoice, sendJointBilling
+} = require('../../server/faturamento/cobranca-conjunta');
 const { listLiquidationLog } = require('../../server/faturamento/liquidation-log');
 const {
   analyzePaymentImport,
@@ -992,6 +994,18 @@ const handleJointBilling = async (req, res, query) => {
   }
 };
 
+const handleJointBillingRefresh = async (req, res) => {
+  if (!requireSession(req, res)) return;
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', 'POST');
+    sendJson(res, 405, { message: 'Método não permitido.' });
+    return;
+  }
+  if (!requireSameOrigin(req, res)) return;
+  const body = await parseJsonBody(req, 1024);
+  sendJson(res, 200, await refreshJointBillingInvoice(body));
+};
+
 const handleWebhook = async (req, res) => {
   const config = webhookConfig();
   if (req.method === 'GET' || req.method === 'HEAD') {
@@ -1060,6 +1074,7 @@ module.exports = async (req, res) => {
     if (query.route === 'logs') return await handleLogs(req, res, query);
     if (query.route === 'resend') return await handleResend(req, res);
     if (query.route === 'joint-billing') return await handleJointBilling(req, res, query);
+    if (query.route === 'joint-billing-refresh') return await handleJointBillingRefresh(req, res);
     if (query.route === 'process') return await handleProcess(req, res, query);
     if (query.route === 'webhook') return await handleWebhook(req, res);
     sendJson(res, 404, { message: 'Rota de cobrança não encontrada.' });
