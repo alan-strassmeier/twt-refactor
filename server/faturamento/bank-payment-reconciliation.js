@@ -909,10 +909,15 @@ const reconcileBankPayments = async ({
   const listRecords = dependencies.listBankSlipRecords || (manualFullScan
     ? () => bankSlipStore.listBankSlipRecords(undefined, { count: 500, maxIterations: 100 })
     : bankSlipStore.listBankSlipRecords);
-  const records = await listRecords();
+  const [records, ignoredIds] = await Promise.all([
+    listRecords(),
+    (dependencies.listIgnoredBankReconciliationIds || billingStore.listIgnoredBankReconciliationIds)()
+  ]);
+  const ignored = new Set(ignoredIds.map(String));
   const active = records.filter((record) => (
     record?.state === 'ready' &&
     BANKS.has(record.bank) &&
+    !ignored.has(String(record.invoiceId)) &&
     record.reconciliation?.status !== 'completed' &&
     (record.bank !== 'itau' || record.reconciliation?.status === 'submission_pending' ||
       manualFullScan || itauAllowlist === null || itauAllowlist.has(String(record.invoiceId)))
@@ -921,7 +926,7 @@ const reconcileBankPayments = async ({
     if (!manualFullScan) {
       await (dependencies.saveReconciliationCursor || billingStore.saveReconciliationCursor)(0);
     }
-    return { checked: 0, settled: 0, alreadySettled: 0, pending: 0, errors: [],
+    return { checked: 0, settled: 0, alreadySettled: 0, pending: 0, errors: [], results: [],
       ...(manualFullScan ? { hasMore: false, nextCursor: '', totalCandidates: 0 } : {}) };
   }
   const batchSize = Math.max(1, Math.min(Number(maxRecords) || 8, 25));
@@ -987,7 +992,9 @@ const reconcileBankPayments = async ({
         invoiceId: String(record.invoiceId),
         bank: record.bank,
         status: 'error',
-        message: String(error.message || error).slice(0, 300)
+        message: String(error.message || error).slice(0, 300),
+        ...(Number.isInteger(error?.upstreamStatus)
+          ? { httpStatus: error.upstreamStatus } : {})
       };
     }
   });

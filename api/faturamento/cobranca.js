@@ -476,10 +476,14 @@ const handleInvoiceBlock = async (req, res) => {
   }
   const body = await parseJsonBody(req, 4096);
   const result = await store.setInvoiceBlocked(body.invoiceId, body.blocked);
+  const remainingBlock = result.blocked ? result : await store.getInvoiceBlock(result.invoiceId);
   sendJson(res, 200, {
     ...result,
+    blocked: Boolean(remainingBlock?.blocked),
     message: result.blocked
       ? `Envio da fatura ${result.invoiceId} bloqueado.`
+      : remainingBlock?.reason === 'bank_reconciliation'
+        ? `Bloqueio manual removido, mas a fatura ${result.invoiceId} continua bloqueada para cobrança por pendência bancária.`
       : `Envio da fatura ${result.invoiceId} liberado.`
   });
 };
@@ -528,6 +532,43 @@ const handleLiquidationLog = async (req, res) => {
     return;
   }
   sendJson(res, 200, { entries: await listLiquidationLog() });
+};
+
+const handleBankReconciliationIssues = async (req, res) => {
+  if (!requireSession(req, res)) return;
+  if (req.method === 'GET') {
+    sendJson(res, 200, { issues: await store.listBankReconciliationIssues() });
+    return;
+  }
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', 'GET, POST');
+    sendJson(res, 405, { message: 'Método não permitido.' });
+    return;
+  }
+  if (!requireSameOrigin(req, res)) return;
+  const body = await parseJsonBody(req, 512);
+  if (!['ignore', 'resume'].includes(body.action)) {
+    sendJson(res, 422, { message: 'Ação de pendência inválida.' });
+    return;
+  }
+  const runId = randomUUID();
+  if (!await store.claimProcessingRun(runId)) {
+    sendJson(res, 409, { message: 'Uma conferência está em andamento. Tente novamente em instantes.' });
+    return;
+  }
+  try {
+    const result = body.action === 'ignore'
+      ? await store.ignoreBankReconciliationIssue(body.invoiceId)
+      : await store.resumeBankReconciliationIssue(body.invoiceId);
+    sendJson(res, 200, {
+      ...result,
+      message: body.action === 'ignore'
+        ? `Fatura ${result.invoiceId} retirada da fila de liquidação. A cobrança dela continua bloqueada até uma verificação segura.`
+        : `Fatura ${result.invoiceId} devolvida à fila de liquidação.`
+    });
+  } finally {
+    await store.releaseProcessingRun(runId);
+  }
 };
 
 const handleBankDiagnostic = async (req, res) => {
@@ -672,12 +713,18 @@ const handleBankReconciliationBatch = async (req, res) => {
     return;
   }
   try {
-    sendJson(res, 200, await reconcileBankPayments({
+    const result = await reconcileBankPayments({
       currentDate: saoPauloDate(),
       maxRecords: 8,
       manualFullScan: true,
       afterInvoiceId
-    }));
+    });
+    await store.updateBankReconciliationFailures({
+      failed: result.results.filter((item) => ['error', 'in_progress'].includes(item.status)),
+      cleared: result.results.filter((item) => ['pending', 'liquidated', 'already_settled'].includes(item.status))
+        .map((item) => item.invoiceId)
+    });
+    sendJson(res, 200, result);
   } finally {
     await store.releaseProcessingRun(runId).catch((error) => {
       console.error('[faturamento:liquidacao:liberacao]', error);
@@ -718,7 +765,9 @@ const runCronBankReconciliationBatch = async (dependencies = {}) => {
   // entre execuções. Somente uma nova conferência sem erro libera cada ID.
   await (dependencies.updateFailures || store.updateBankReconciliationFailures)({
     failed: result.results.filter((item) => ['error', 'in_progress'].includes(item.status))
-      .map((item) => item.invoiceId),
+      .map((item) => item.status === 'error'
+        ? result.errors.find((error) => String(error.invoiceId) === String(item.invoiceId))
+        : { ...item, message: 'Outra conciliação está em andamento.' }),
     cleared: result.results.filter((item) => ['pending', 'liquidated', 'already_settled'].includes(item.status))
       .map((item) => item.invoiceId)
   });
@@ -983,6 +1032,7 @@ module.exports = async (req, res) => {
     if (query.route === 'invoice-block') return await handleInvoiceBlock(req, res);
     if (query.route === 'payment-import') return await handlePaymentImport(req, res, query);
     if (query.route === 'liquidation-log') return await handleLiquidationLog(req, res);
+    if (query.route === 'bank-reconciliation-issues') return await handleBankReconciliationIssues(req, res);
     if (query.route === 'bank-diagnostic') return await handleBankDiagnostic(req, res);
     if (query.route === 'itau-v2-diagnostic') return await handleItauDetailDiagnostic(req, res, query);
     if (query.route === 'itau-reconciliation-preview') {

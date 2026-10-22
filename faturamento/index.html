@@ -7,10 +7,10 @@
   <meta name="theme-color" content="#112a40">
   <title>Faturamento | TWT Airpack</title>
   <link rel="icon" href="/favicon.ico">
-  <link rel="stylesheet" href="/faturamento/styles.css?v=20">
+  <link rel="stylesheet" href="/faturamento/styles.css?v=21">
   <script src="/faturamento/sort.js?v=1" defer></script>
   <script src="/faturamento/app.js?v=21" defer></script>
-  <script src="/faturamento/cobranca.js?v=10" defer></script>
+  <script src="/faturamento/cobranca.js?v=11" defer></script>
   <script src="/faturamento/clientes-inativos.js?v=2" defer></script>
 </head>
 <body>
@@ -521,6 +521,27 @@
               </form>
               <p class="dashboard-message collection-message" id="itauReconciliationPreviewResult"
                 role="status" aria-live="polite"></p>
+            </div>
+          </section>
+
+          <section class="collection-card" aria-labelledby="liquidationIssuesTitle">
+            <div class="collection-card-heading">
+              <div>
+                <h2 id="liquidationIssuesTitle">Pendências da liquidação</h2>
+                <p>Erros dos lotes manuais e automáticos. Ignorar retira a fatura das próximas conferências bancárias, mas mantém a cobrança dela bloqueada até a situação ser esclarecida.</p>
+              </div>
+              <button class="button button-quiet" id="refreshLiquidationIssues" type="button">Atualizar pendências</button>
+            </div>
+            <p class="dashboard-message collection-message" id="liquidationIssuesMessage" role="status" aria-live="polite"></p>
+            <div class="table-scroll collection-table-scroll">
+              <table class="collection-table liquidation-issues-table">
+                <thead><tr><th>Fatura</th><th>Banco</th><th>Erro</th><th>Última falha</th><th>Estado</th><th>Ação</th></tr></thead>
+                <tbody id="liquidationIssueRows"></tbody>
+              </table>
+              <div class="collection-empty" id="liquidationIssuesEmpty" hidden>
+                <strong>Nenhuma pendência de liquidação</strong>
+                <p>As falhas identificadas nas conferências aparecerão aqui.</p>
+              </div>
             </div>
           </section>
 

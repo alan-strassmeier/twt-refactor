@@ -29,6 +29,10 @@
     focusLiquidationButton: document.getElementById('focusLiquidationButton'),
     liquidationMessage: document.getElementById('liquidationMessage'),
     liquidationBatchIssues: document.getElementById('liquidationBatchIssues'),
+    refreshLiquidationIssues: document.getElementById('refreshLiquidationIssues'),
+    liquidationIssuesMessage: document.getElementById('liquidationIssuesMessage'),
+    liquidationIssueRows: document.getElementById('liquidationIssueRows'),
+    liquidationIssuesEmpty: document.getElementById('liquidationIssuesEmpty'),
     refreshLiquidationLog: document.getElementById('refreshLiquidationLog'),
     liquidationLogRows: document.getElementById('liquidationLogRows'),
     liquidationLogEmpty: document.getElementById('liquidationLogEmpty'),
@@ -92,6 +96,8 @@
     loading: false,
     liquidationLogLoaded: false,
     liquidationLogLoading: false,
+    liquidationIssuesLoaded: false,
+    liquidationIssuesLoading: false,
     bulkCursor: '',
     bulkTotals: { checked: 0, settled: 0, alreadySettled: 0, pending: 0, errors: 0 },
     bulkIssues: [],
@@ -207,7 +213,9 @@
     state.loading = loading;
     document.querySelectorAll('#collectionWorkspace button, #collectionWorkspace input, #collectionWorkspace select, '
       + '#liquidationWorkspace button, #liquidationWorkspace input, #liquidationWorkspace select').forEach((control) => {
-      control.disabled = loading || (control === elements.refreshLiquidationLog && state.liquidationLogLoading);
+      control.disabled = loading ||
+        (control === elements.refreshLiquidationLog && state.liquidationLogLoading) ||
+        (control === elements.refreshLiquidationIssues && state.liquidationIssuesLoading);
     });
     elements.previousLogPage.disabled = loading || state.logPage <= 1;
     elements.nextLogPage.disabled = loading || state.logPage >= state.logTotalPages;
@@ -1044,6 +1052,70 @@
     elements.liquidationLogEmpty.hidden = rows.length > 0;
   };
 
+  const renderLiquidationIssues = (issues) => {
+    const rows = issues.map((issue) => {
+      const row = document.createElement('tr');
+      appendInvoiceNavigationCell(row, issue.invoiceId);
+      appendCell(row, issue.bank === 'itau' ? 'Itaú' : issue.bank === 'bradesco' ? 'Bradesco' : '—');
+      appendCell(row, `${issue.httpStatus ? `HTTP ${issue.httpStatus} · ` : ''}${issue.message || 'Falha sem detalhes salvos.'}`);
+      appendCell(row, formatDateTime(issue.lastSeenAt));
+      appendCell(row, issue.status === 'ignored' ? 'Ignorada na liquidação' : 'Pendente');
+      const actionCell = document.createElement('td');
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'button button-quiet';
+      button.textContent = issue.status === 'ignored' ? 'Reativar' : 'Ignorar erro';
+      button.addEventListener('click', async () => {
+        const ignoring = issue.status !== 'ignored';
+        if (!window.confirm(ignoring
+          ? `Retirar a fatura ${issue.invoiceId} da fila de liquidação? A cobrança dela continuará bloqueada até uma conferência segura.`
+          : `Devolver a fatura ${issue.invoiceId} à fila de liquidação? A próxima conferência bancária tentará processá-la novamente.`
+        )) return;
+        button.disabled = true;
+        try {
+          const result = await requestJson(endpoint('bank-reconciliation-issues'), {
+            method: 'POST',
+            body: JSON.stringify({ invoiceId: issue.invoiceId, action: ignoring ? 'ignore' : 'resume' })
+          });
+          await loadLiquidationIssues();
+          elements.liquidationIssuesMessage.textContent = result.message;
+          elements.liquidationIssuesMessage.dataset.kind = 'success';
+        } catch (error) {
+          elements.liquidationIssuesMessage.textContent = error.message;
+          elements.liquidationIssuesMessage.dataset.kind = 'error';
+        } finally {
+          button.disabled = false;
+        }
+      });
+      actionCell.appendChild(button);
+      row.appendChild(actionCell);
+      return row;
+    });
+    elements.liquidationIssueRows.replaceChildren(...rows);
+    elements.liquidationIssuesEmpty.hidden = rows.length > 0;
+  };
+
+  async function loadLiquidationIssues() {
+    if (state.liquidationIssuesLoading) return;
+    state.liquidationIssuesLoading = true;
+    elements.refreshLiquidationIssues.disabled = true;
+    elements.refreshLiquidationIssues.textContent = 'Atualizando…';
+    try {
+      const result = await requestJson(endpoint('bank-reconciliation-issues'));
+      renderLiquidationIssues(Array.isArray(result.issues) ? result.issues : []);
+      state.liquidationIssuesLoaded = true;
+      elements.liquidationIssuesMessage.textContent = '';
+      elements.liquidationIssuesMessage.dataset.kind = '';
+    } catch (error) {
+      elements.liquidationIssuesMessage.textContent = error.message;
+      elements.liquidationIssuesMessage.dataset.kind = 'error';
+    } finally {
+      state.liquidationIssuesLoading = false;
+      elements.refreshLiquidationIssues.disabled = state.loading;
+      elements.refreshLiquidationIssues.textContent = 'Atualizar pendências';
+    }
+  }
+
   async function loadLiquidationLog() {
     if (state.liquidationLogLoading) return;
     state.liquidationLogLoading = true;
@@ -1100,7 +1172,10 @@
     });
     elements.backToTopButton.hidden = true;
     if (collection && !state.loaded) loadCollection();
-    if (area === 'liquidation' && !state.liquidationLogLoaded) loadLiquidationLog();
+    if (area === 'liquidation') {
+      if (!state.liquidationLogLoaded) loadLiquidationLog();
+      if (!state.liquidationIssuesLoaded) loadLiquidationIssues();
+    }
   };
 
   const setCollectionSection = (sectionId, { focus = false } = {}) => {
@@ -1167,6 +1242,7 @@
         elements.liquidationMessage.dataset.kind = '';
       }
       await loadLiquidationLog();
+      await loadLiquidationIssues();
       const totals = state.bulkTotals;
       elements.liquidationMessage.textContent =
         `${hasMore ? 'Limite de lotes atingido; clique em Continuar liquidação. ' : 'Conferência concluída. '}` +
@@ -1192,6 +1268,7 @@
     }
   });
   elements.refreshLiquidationLog.addEventListener('click', () => loadLiquidationLog());
+  elements.refreshLiquidationIssues.addEventListener('click', () => loadLiquidationIssues());
 
   elements.collectionSectionButtons.forEach((button, index) => {
     button.addEventListener('click', () => setCollectionSection(button.dataset.collectionSection));

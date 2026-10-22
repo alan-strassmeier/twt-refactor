@@ -11,8 +11,13 @@ const {
   previewBankReconciliation,
   reconcileBankInvoice,
   reconcilePaidRecord,
-  reconcileBankPayments
+  reconcileBankPayments: reconcileBankPaymentsCore
 } = require('../server/faturamento/bank-payment-reconciliation');
+
+const reconcileBankPayments = (input, dependencies = {}) => reconcileBankPaymentsCore(input, {
+  listIgnoredBankReconciliationIds: async () => [],
+  ...dependencies
+});
 
 const itauDetail = ({
   status = 'Paga', amount = '200.00', paymentAmounts = ['200.00'],
@@ -678,6 +683,33 @@ test('varredura manual percorre todos os boletos prontos sem mover o cursor auto
   assert.equal(cursorReads, 0);
   assert.equal(cursorWrites, 0);
   assert.deepEqual(criteria, { paymentDateFrom: '2026-08-17', paymentDateTo: '2026-10-15' });
+});
+
+test('fatura ignorada sai da fila automática e da varredura manual sem impedir outras', async () => {
+  const dependencies = {
+    listIgnoredBankReconciliationIds: async () => ['11901'],
+    listBankSlipRecords: async () => ['11901', '11902'].map((invoiceId, index) => ({
+      state: 'ready', invoiceId, bank: 'bradesco', amount: 100,
+      ourNumber: String(21000 + index)
+    })),
+    getReconciliationCursor: async () => 0,
+    saveReconciliationCursor: async () => {},
+    bradescoConfig: {},
+    listBradescoSettledBankSlips: async () => []
+  };
+  for (const manualFullScan of [false, true]) {
+    const result = await reconcileBankPayments({
+      currentDate: '2026-10-16', manualFullScan
+    }, dependencies);
+    assert.deepEqual(result.results.map((item) => item.invoiceId), ['11902']);
+    assert.equal(result.pending, 1);
+  }
+  const empty = await reconcileBankPayments({ currentDate: '2026-10-16', manualFullScan: true }, {
+    ...dependencies,
+    listIgnoredBankReconciliationIds: async () => ['11901', '11902']
+  });
+  assert.deepEqual(empty.results, []);
+  assert.equal(empty.hasMore, false);
 });
 
 test('varredura manual inclui Itaú fora da lista restrita do agendador', async () => {
