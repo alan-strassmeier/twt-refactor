@@ -606,7 +606,7 @@
       ? `Reconsultar somente ${errorCount} fatura(s) com erro` : 'Nenhuma fatura com erro para atualizar';
     elements.jointSendButton.disabled = state.loading || !selected.length
       || !state.jointPreview?.recipients?.length
-      || selected.some((invoice) => invoice.blocked || invoice.jointSent);
+      || selected.some((invoice) => invoice.blocked || invoice.jointSent || !invoice.proof);
   };
 
   const renderJointPreview = (preview) => {
@@ -656,6 +656,8 @@
       const blocked = selected.filter((invoice) => invoice.blocked || invoice.jointSent);
       setMessage(`Faturas que impedem o envio: ${blocked.map(jointBlockLabel).join('; ')}. `
         + 'Ignore-as neste envio para continuar com as demais.', 'warning');
+    } else if (selected.some((invoice) => !invoice.proof)) {
+      setMessage('A liberação de uma fatura está incompleta. Busque as faturas novamente antes de enviar.', 'warning');
     } else {
       setMessage(`${selected.length} fatura(s) selecionada(s) para envio. Confira antes de continuar.`, 'success');
     }
@@ -1498,15 +1500,16 @@
     const preview = state.jointPreview;
     const selected = selectedJointInvoices();
     if (!selected.length || !preview?.recipients?.length
-      || selected.some((invoice) => invoice.blocked || invoice.jointSent)) return;
+      || selected.some((invoice) => invoice.blocked || invoice.jointSent || !invoice.proof)) return;
     const invoiceIds = selected.map((invoice) => invoice.id);
-    if (!window.confirm(`Enviar uma única cobrança para ${preview.company.name}, com ${invoiceIds.length} fatura(s) e anexos, a ${preview.recipients.length} destinatário(s)?`)) return;
+    const invoiceProofs = selected.map(({ id, proof }) => ({ id, proof }));
+    if (!window.confirm(`Enviar uma única cobrança para ${preview.company.name}, com ${invoiceIds.length} fatura(s) e anexos, a ${preview.recipients.length} destinatário(s)? A situação financeira não será conferida novamente.`)) return;
     setLoading(true);
-    setMessage('Preparando anexos e reconfirmando os saldos na Brudam…');
+    setMessage('Preparando os anexos das faturas liberadas…');
     try {
       const result = await requestJson(endpoint('joint-billing'), {
         method: 'POST',
-        body: JSON.stringify({ cnpj: preview.company.cnpj, invoiceIds })
+        body: JSON.stringify({ cnpj: preview.company.cnpj, invoiceIds, invoiceProofs })
       });
       state.jointPreview = null;
       state.jointExcludedIds.clear();
