@@ -141,6 +141,19 @@ test('consulta individual vazia transitória é repetida antes de bloquear a fat
   assert.equal(preview.invoices[1].balance, 20);
 });
 
+test('erro HTTP 5xx transitório na consulta individual é repetido', async () => {
+  let attempts = 0;
+  const dependencies = mockDependencies({ fetchCurrentInvoice: async ({ id }) => {
+    if (id !== '102') return { invoices: [invoices[0]] };
+    attempts += 1;
+    if (attempts < 3) throw Object.assign(new Error('Falha temporária'), { statusCode: 502 });
+    return { invoices: [invoices[1]] };
+  } });
+  const preview = await previewJointBilling(CNPJ, dependencies);
+  assert.equal(attempts, 3);
+  assert.equal(preview.invoices[1].blocked, false);
+});
+
 test('prévia limita a três consultas individuais simultâneas para muitos vencimentos', async () => {
   const manyInvoices = Array.from({ length: 18 }, (_, index) => ({
     ...invoices[0], id: String(1000 + index)

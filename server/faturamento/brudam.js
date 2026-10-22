@@ -881,64 +881,102 @@ const fetchDebtorSummary = async (input) => {
   return summary;
 };
 
-const fetchInvoices = async (input) => {
+const fetchInvoices = async (input, { requestPage = requestInvoices } = {}) => {
   const view = String(input?.view || 'list').trim().toLowerCase();
   if (view === 'debtors') return fetchDebtorSummary(input);
   if (view !== 'list') {
     throw Object.assign(new Error('Modo de visualização inválido.'), { statusCode: 422 });
   }
   const { query, limit, skip, exactId, exactCnpj } = buildInvoiceQuery(input);
-  let { response, payload } = await requestInvoices(query);
-  let rawInvoices = invoiceListFromPayload(payload);
-  if (!response.ok || Number(payload?.status) !== 1 || rawInvoices === null) {
+  let response;
+  let payload;
+  let rawInvoices;
+  let requestError;
+  let fallbackAttempted = false;
+  let upstreamFilter = exactId !== null ? 'id[eq]' : (exactCnpj ? 'cnpj' : 'none');
+  try {
+    ({ response, payload } = await requestPage(query));
+    rawInvoices = invoiceListFromPayload(payload);
+  } catch (error) {
+    requestError = error;
+  }
+  const validPage = () => response?.ok && Number(payload?.status) === 1 && rawInvoices !== null;
+  // Uma falha de transporte já será repetida pelo chamador; tentar outro filtro aqui
+  // duplicaria o tempo de espera. Respostas HTTP inválidas ainda admitem o filtro alternativo.
+  if (!validPage() && exactId !== null && !requestError) {
+    fallbackAttempted = true;
+    try {
+      const fallback = await requestPage(plainInvoiceIdQuery(query, exactId));
+      const fallbackInvoices = invoiceListFromPayload(fallback.payload);
+      if (fallback.response?.ok && Number(fallback.payload?.status) === 1 && fallbackInvoices !== null) {
+        ({ response, payload } = fallback);
+        rawInvoices = fallbackInvoices;
+        requestError = null;
+        upstreamFilter = 'id';
+      } else if (Number(fallback.response?.status) >= 500 && Number(response?.status) < 500) {
+        // Preserve uma falha transitória para o chamador repetir a consulta.
+        response = fallback.response;
+        payload = fallback.payload;
+        rawInvoices = fallbackInvoices;
+      }
+    } catch (error) {
+      requestError = error;
+    }
+  }
+  if (!validPage()) {
     console.error('[faturamento:brudam-response]', {
-      httpStatus: response.status,
+      httpStatus: response?.status,
       apiStatus: payload?.status,
       dataType: Array.isArray(payload?.data) ? 'array' : typeof payload?.data,
       dataKeys: payload?.data && typeof payload.data === 'object'
         ? Object.keys(payload.data).slice(0, 20)
-        : []
+        : [],
+      fallbackAttempted,
+      errorCode: requestError?.code || requestError?.name || ''
     });
+    if (requestError) throw requestError;
     const upstreamMessage = String(payload?.message || '').trim();
     const error = new Error(
       upstreamMessage && upstreamMessage.toUpperCase() !== 'OK'
         ? upstreamMessage
         : 'Formato inesperado no retorno de faturas da Brudam.'
     );
-    error.statusCode = response.status >= 400 ? response.status : 502;
+    error.statusCode = response?.status >= 400 ? response.status : 502;
     throw error;
   }
   let normalizedInvoices = normalizeVisibleInvoices(rawInvoices);
   let invoices = filterInvoicesById(normalizedInvoices, exactId);
   let upstreamCount = rawInvoices.length;
   let upstreamReportedCount = integer(payload?.data?.qtd_lancamentos, { min: 0 });
-  let upstreamFilter = exactId !== null ? 'id[eq]' : (exactCnpj ? 'cnpj' : 'none');
-  let fallbackAttempted = false;
   let allCompanyInvoicesLoaded = false;
   let pagesLoaded = 1;
 
-  if (exactId !== null && invoices.length === 0) {
+  if (exactId !== null && invoices.length === 0 && !fallbackAttempted) {
     fallbackAttempted = true;
     const fallbackQuery = plainInvoiceIdQuery(query, exactId);
-    const fallbackResult = await requestInvoices(fallbackQuery);
-    const fallbackRawInvoices = invoiceListFromPayload(fallbackResult.payload);
-    if (
-      fallbackResult.response.ok &&
-      Number(fallbackResult.payload?.status) === 1 &&
-      fallbackRawInvoices !== null
-    ) {
-      const fallbackNormalizedInvoices = normalizeVisibleInvoices(fallbackRawInvoices);
-      const fallbackInvoices = filterInvoicesById(fallbackNormalizedInvoices, exactId);
-      if (fallbackInvoices.length > 0 || fallbackRawInvoices.length < rawInvoices.length) {
-        response = fallbackResult.response;
-        payload = fallbackResult.payload;
-        rawInvoices = fallbackRawInvoices;
-        normalizedInvoices = fallbackNormalizedInvoices;
-        invoices = fallbackInvoices;
-        upstreamFilter = 'id';
-        upstreamCount = rawInvoices.length;
-        upstreamReportedCount = integer(payload?.data?.qtd_lancamentos, { min: 0 });
+    try {
+      const fallbackResult = await requestPage(fallbackQuery);
+      const fallbackRawInvoices = invoiceListFromPayload(fallbackResult.payload);
+      if (
+        fallbackResult.response.ok &&
+        Number(fallbackResult.payload?.status) === 1 &&
+        fallbackRawInvoices !== null
+      ) {
+        const fallbackNormalizedInvoices = normalizeVisibleInvoices(fallbackRawInvoices);
+        const fallbackInvoices = filterInvoicesById(fallbackNormalizedInvoices, exactId);
+        if (fallbackInvoices.length > 0 || fallbackRawInvoices.length < rawInvoices.length) {
+          response = fallbackResult.response;
+          payload = fallbackResult.payload;
+          rawInvoices = fallbackRawInvoices;
+          normalizedInvoices = fallbackNormalizedInvoices;
+          invoices = fallbackInvoices;
+          upstreamFilter = 'id';
+          upstreamCount = rawInvoices.length;
+          upstreamReportedCount = integer(payload?.data?.qtd_lancamentos, { min: 0 });
+        }
       }
+    } catch {
+      // A primeira consulta válida continua disponível; o chamador decide se a ausência é transitória.
     }
   }
 
