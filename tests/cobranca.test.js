@@ -3032,6 +3032,9 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.doesNotMatch(html, /Liquidar boleto Itaú/);
   assert.doesNotMatch(html, /data-collection-section="paymentImportSection"/);
   assert.match(html, /id="paymentImportForm"/);
+  assert.ok(html.indexOf('id="liquidationManualSection"') < html.indexOf('id="paymentImportSection"'));
+  assert.ok(html.indexOf('id="paymentImportSection"') < html.indexOf('id="liquidationIssuesTitle"'));
+  assert.ok(html.indexOf('id="paymentImportSection"') < html.indexOf('id="liquidationLogTitle"'));
   assert.match(html, /id="approveAllPayments"/);
   assert.doesNotMatch(html, /id="bankDiagnosticButton"/);
   assert.match(html, /id="categorySearchForm"/);

@@ -24,7 +24,7 @@ test('registra somente dados essenciais da baixa por planilha e preserva o hist�
   assert.equal(rows[0].includes('payerTaxId'), false);
 });
 
-test('histórico combina baixas bancárias existentes com planilhas sem mostrar tentativas pendentes', async () => {
+test('histórico mostra somente baixas feitas pelo sistema, sem tentativas nem baixas prévias na Brudam', async () => {
   const result = await listLiquidationLog({
     listBankSlipRecords: async () => [
       {
@@ -49,9 +49,12 @@ test('histórico combina baixas bancárias existentes com planilhas sem mostrar 
     listPaymentLiquidations: async () => [{
       invoiceId: '11840', source: 'white_martins_spreadsheet', outcome: 'liquidated',
       paidAt: '2026-09-29', amount: 1385.65, completedAt: '2026-10-17T15:00:00Z'
+    }, {
+      invoiceId: '11841', source: 'white_martins_spreadsheet', outcome: 'already_settled',
+      paidAt: '2026-09-29', amount: 10, completedAt: '2026-10-18T15:00:00Z'
     }]
   });
-  assert.deepEqual(result.map((row) => row.invoiceId), ['11840', '11838', '11817']);
+  assert.deepEqual(result.map((row) => row.invoiceId), ['11840', '11838']);
   assert.equal(result[1].amount, 128.81);
-  assert.equal(result[2].outcome, 'already_settled');
+  assert.ok(result.every((row) => row.outcome === 'liquidated'));
 });

@@ -56,7 +56,7 @@ const bankLiquidationRows = (records) => records.flatMap((record) => {
       !['itau', 'bradesco'].includes(record.bank) || !validInvoiceId(record.invoiceId) ||
       !validIsoDate(reconciliation.paidAt) || !validTimestamp(reconciliation.reconciledAt) ||
       !Number.isFinite(Number(reconciliation.paidAmount)) || Number(reconciliation.paidAmount) <= 0 ||
-      !['liquidated', 'already_settled'].includes(reconciliation.outcome)) return [];
+      reconciliation.outcome !== 'liquidated') return [];
   return [{
     invoiceId: String(record.invoiceId),
     source: record.bank,
@@ -73,6 +73,7 @@ const listLiquidationLog = async (dependencies = {}) => {
     (dependencies.listPaymentLiquidations || listPaymentLiquidations)()
   ]);
   return [...bankLiquidationRows(bankRecords), ...paymentRecords]
+    .filter((record) => record.outcome === 'liquidated')
     .sort((left, right) => right.completedAt.localeCompare(left.completedAt))
     .slice(0, 100);
 };

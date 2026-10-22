@@ -1068,15 +1068,13 @@
       bradesco: 'Boleto Bradesco',
       white_martins_spreadsheet: 'Planilha White Martins'
     };
-    const rows = entries.map((entry) => {
+    const rows = entries.filter((entry) => entry?.outcome === 'liquidated').map((entry) => {
       const row = document.createElement('tr');
       appendCell(row, formatDateTime(entry.completedAt));
       appendInvoiceNavigationCell(row, entry.invoiceId);
       appendCell(row, sourceNames[entry.source] || '—');
       appendCell(row, formatDate(entry.paidAt));
       appendCell(row, formatMoney(entry.amount));
-      appendCell(row, entry.outcome === 'liquidated'
-        ? 'Liquidada pelo sistema' : 'Já liquidada na Brudam');
       return row;
     });
     elements.liquidationLogRows.replaceChildren(...rows);

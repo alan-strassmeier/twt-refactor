@@ -407,10 +407,10 @@ em si nunca envia uma baixa financeira.
 ### Histórico de liquidações
 
 `GET /api/faturamento/cobranca?route=liquidation-log` exige sessão e retorna
-as 100 liquidações mais recentes para a nova área, sem executar conciliação
-nem alterar a Brudam. As baixas Itaú e Bradesco já concluídas vêm dos
-registros de boleto no Redis; o resultado distingue `liquidated` de
-`already_settled`. Aprovações de planilhas White Martins são registradas em
+as 100 liquidações mais recentes feitas pelo sistema, sem executar conciliação
+nem alterar a Brudam. As baixas Itaú e Bradesco confirmadas vêm dos
+registros de boleto no Redis; registros `already_settled` (baixas já existentes
+na Brudam) não aparecem no histórico. Aprovações de planilhas White Martins são registradas em
 uma lista persistente no Redis a partir desta versão, somente após resposta
 de sucesso da Brudam. A falha ao escrever o histórico não transforma uma
 baixa já aceita em erro que induza novo envio. Importações antigas expiradas
