@@ -3041,6 +3041,9 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(html, /data-collection-section="jointBillingSection"/);
   assert.match(html, /id="jointBillingSearchForm"/);
   assert.match(html, /id="sendJointBillingButton"/);
+  assert.match(html, /id="refreshJointBillingButton"[^>]*>[\s\S]*?Atualizar<\/button>/);
+  assert.match(source, /filter\(\(invoice\) => invoice\.unverified\)[\s\S]*?endpoint\('joint-billing-refresh'\)/);
+  assert.match(apiSource, /query\.route === 'joint-billing-refresh'/);
   assert.match(html, /id="itauReconciliationPreviewForm"/);
   assert.match(html, /id="itauReconciliationRearmButton"/);
   assert.match(html, /id="itauReconciliationRunButton"/);

@@ -7,10 +7,10 @@
   <meta name="theme-color" content="#112a40">
   <title>Faturamento | TWT Airpack</title>
   <link rel="icon" href="/favicon.ico">
-  <link rel="stylesheet" href="/faturamento/styles.css?v=22">
+  <link rel="stylesheet" href="/faturamento/styles.css?v=23">
   <script src="/faturamento/sort.js?v=1" defer></script>
   <script src="/faturamento/app.js?v=21" defer></script>
-  <script src="/faturamento/cobranca.js?v=13" defer></script>
+  <script src="/faturamento/cobranca.js?v=14" defer></script>
   <script src="/faturamento/clientes-inativos.js?v=2" defer></script>
 </head>
 <body>
@@ -420,7 +420,11 @@
               </div>
               <div class="joint-billing-actions">
                 <p>Faturas ignoradas ficam fora apenas deste e-mail, sem alterar o bloqueio ou a situação financeira delas. O envio inclui os documentos de cada fatura selecionada; se algum deles não puder ser confirmado, nenhum e-mail será enviado.</p>
-                <button class="button button-primary" id="sendJointBillingButton" type="button">Enviar cobrança conjunta</button>
+                <div class="joint-billing-buttons">
+                  <button class="button button-quiet" id="refreshJointBillingButton" type="button"
+                    title="Reconsultar somente as faturas com erro">Atualizar</button>
+                  <button class="button button-primary" id="sendJointBillingButton" type="button">Enviar cobrança conjunta</button>
+                </div>
               </div>
             </div>
           </section>
