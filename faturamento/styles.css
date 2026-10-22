@@ -1649,6 +1649,8 @@ body.modal-open {
 
 .joint-billing-overview strong { color: var(--navy-900); }
 
+.joint-billing-ignored { opacity: .6; }
+
 .joint-billing-actions {
   padding: 18px 24px 24px;
   display: flex;

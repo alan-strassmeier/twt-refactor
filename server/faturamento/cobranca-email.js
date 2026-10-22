@@ -241,29 +241,32 @@ const sendBillingEmail = async ({
 
 const jointBillingSubject = 'Faturas vencidas';
 
-const jointBillingText = ({ companyName, invoiceIds, paymentMethod, totalBalance }) => [
-  `Aviso de Faturamento das faturas ${invoiceIds.join(', ')}`,
+const jointBillingText = ({ companyName, invoices, paymentMethod, totalBalance }) => [
+  `Aviso de Faturamento das faturas ${invoices.map(({ id }) => id).join(', ')}`,
   '',
   `Prezado(a) ${companyName}`,
-  'Segue faturas em anexo.',
+  'Seguem as faturas em anexo:',
+  ...invoices.map(({ id, overdueDays }) => `- Fatura ${id}: vencida há ${overdueDays} ${overdueDays === 1 ? 'dia' : 'dias'}`),
+  '',
   `Forma de pagamento: ${paymentMethod}`,
   `Valor Total: ${formatCurrency(totalBalance)}`
 ].join('\n');
 
-const jointBillingHtml = ({ companyName, invoiceIds, paymentMethod, totalBalance }) => `<!doctype html>
+const jointBillingHtml = ({ companyName, invoices, paymentMethod, totalBalance }) => `<!doctype html>
 <html lang="pt-BR"><body style="font-family:Arial,sans-serif;color:#1a3145">
-<h1>Aviso de Faturamento das faturas ${htmlEscape(invoiceIds.join(', '))}</h1>
+<h1>Aviso de Faturamento das faturas ${htmlEscape(invoices.map(({ id }) => id).join(', '))}</h1>
 <p>Prezado(a) ${htmlEscape(companyName)}</p>
-<p>Segue faturas em anexo.</p>
+<p>Seguem as faturas em anexo:</p>
+<ul>${invoices.map(({ id, overdueDays }) => `<li>Fatura ${htmlEscape(id)}: vencida há ${overdueDays} ${overdueDays === 1 ? 'dia' : 'dias'}</li>`).join('')}</ul>
 <p>Forma de pagamento: ${htmlEscape(paymentMethod)}<br>Valor Total: ${htmlEscape(formatCurrency(totalBalance))}</p>
 </body></html>`;
 
 const sendJointBillingEmail = async ({
-  recipients, companyName, invoiceIds, paymentMethod, totalBalance,
+  recipients, companyName, invoices, paymentMethod, totalBalance,
   attachments, clientReference, transport, config = zohoConfig()
 }) => {
   const activeTransport = transport || createZohoTransport(config);
-  const content = { companyName, invoiceIds, paymentMethod, totalBalance };
+  const content = { companyName, invoices, paymentMethod, totalBalance };
   const info = await activeTransport.sendMail({
     disableFileAccess: true,
     disableUrlAccess: true,

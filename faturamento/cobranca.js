@@ -111,7 +111,8 @@
     categoryToDelete: null,
     categoryDeleteTrigger: null,
     emailLogTrigger: null,
-    jointPreview: null
+    jointPreview: null,
+    jointExcludedIds: new Set()
   };
   const endpoint = (route, query = {}) => {
     const params = new URLSearchParams({ route, ...query });
@@ -583,34 +584,65 @@
       || (numeric.length >= 3 && String(category.cnpj).includes(numeric)));
   };
 
+  const selectedJointInvoices = () => (state.jointPreview?.invoices || [])
+    .filter((invoice) => !state.jointExcludedIds.has(invoice.id));
+
+  const updateJointSelection = () => {
+    const selected = selectedJointInvoices();
+    const total = selected.reduce((sum, invoice) => sum + (Number(invoice.balance) || 0), 0);
+    elements.jointTotal.textContent = `${selected.length} selecionada(s) · Total: ${formatMoney(total)}`;
+    elements.jointSendButton.disabled = state.loading || !selected.length
+      || !state.jointPreview?.recipients?.length
+      || selected.some((invoice) => invoice.blocked || invoice.jointSent);
+  };
+
   const renderJointPreview = (preview) => {
     state.jointPreview = preview;
     elements.jointPreview.hidden = false;
     elements.jointCompany.textContent = `${preview.company.name} · ${formatCnpj(preview.company.cnpj)}`;
     elements.jointRecipients.textContent = `${preview.recipients.length} destinatário(s) ativo(s)`;
-    elements.jointTotal.textContent = `Total vencido: ${formatMoney(preview.totalBalance)}`;
     elements.jointRows.replaceChildren(...preview.invoices.map((invoice) => {
       const row = document.createElement('tr');
+      const ignored = state.jointExcludedIds.has(invoice.id);
+      if (ignored) row.classList.add('joint-billing-ignored');
       appendInvoiceNavigationCell(row, invoice.id);
       appendCell(row, formatDate(invoice.issuedAt));
       appendCell(row, formatDate(invoice.dueAt));
-      appendCell(row, formatMoney(invoice.balance));
-      appendCell(row, invoice.blocked ? 'Bloqueado'
+      appendCell(row, invoice.balance == null ? 'Não confirmado' : formatMoney(invoice.balance));
+      const status = appendCell(row, invoice.blocked ? 'Bloqueado'
         : invoice.jointSent ? 'Já enviado em conjunto' : 'Disponível');
+      if (invoice.blockReason) {
+        const reason = document.createElement('small');
+        reason.textContent = invoice.blockReason;
+        status.appendChild(reason);
+      }
+      const action = document.createElement('td');
+      const toggle = document.createElement('button');
+      toggle.type = 'button';
+      toggle.className = 'button button-quiet';
+      toggle.textContent = ignored ? 'Incluir neste envio' : 'Ignorar neste envio';
+      toggle.setAttribute('aria-pressed', String(ignored));
+      toggle.addEventListener('click', () => {
+        if (state.jointExcludedIds.has(invoice.id)) state.jointExcludedIds.delete(invoice.id);
+        else state.jointExcludedIds.add(invoice.id);
+        renderJointPreview(preview);
+      });
+      action.appendChild(toggle);
+      row.appendChild(action);
       return row;
     }));
-    elements.jointSendButton.disabled = preview.invoices.length === 0
-      || preview.recipients.length === 0 || preview.blockedCount > 0 || preview.jointSentCount > 0;
-    if (preview.blockedCount) {
-      setMessage(`${preview.blockedCount} fatura(s) com envio bloqueado. O envio conjunto requer que todas estejam disponíveis.`, 'warning');
-    } else if (preview.jointSentCount) {
-      setMessage(`${preview.jointSentCount} fatura(s) já reservadas ou enviadas em conjunto. Confira os logs antes de repetir.`, 'warning');
-    } else if (!preview.invoices.length) {
+    updateJointSelection();
+    const selected = selectedJointInvoices();
+    if (!preview.invoices.length) {
       setMessage('Esta empresa não possui faturas em aberto vencidas há pelo menos dois dias.', 'warning');
     } else if (!preview.recipients.length) {
       setMessage('Cadastre ao menos um destinatário ativo antes de enviar.', 'warning');
+    } else if (!selected.length) {
+      setMessage('Selecione ao menos uma fatura para o envio.', 'warning');
+    } else if (selected.some((invoice) => invoice.blocked || invoice.jointSent)) {
+      setMessage('Ignore neste envio as faturas bloqueadas ou já enviadas em conjunto para continuar com as demais.', 'warning');
     } else {
-      setMessage(`${preview.invoices.length} fatura(s) vencida(s) em aberto encontradas. Confira antes do envio.`, 'success');
+      setMessage(`${selected.length} fatura(s) selecionada(s) para envio. Confira antes de continuar.`, 'success');
     }
   };
 
@@ -619,6 +651,7 @@
     setMessage(`Buscando faturas vencidas em aberto de ${category.name}…`);
     elements.jointPreview.hidden = true;
     state.jointPreview = null;
+    state.jointExcludedIds.clear();
     try {
       const preview = await requestJson(endpoint('joint-billing', { cnpj: category.cnpj }));
       renderJointPreview(preview);
@@ -626,9 +659,7 @@
       setMessage(error.message, 'error');
     } finally {
       setLoading(false);
-      elements.jointSendButton.disabled = !state.jointPreview?.invoices?.length
-        || !state.jointPreview?.recipients?.length || state.jointPreview.blockedCount > 0
-        || state.jointPreview.jointSentCount > 0;
+      updateJointSelection();
     }
   };
 
@@ -1371,6 +1402,7 @@
     elements.jointMatches.replaceChildren();
     elements.jointPreview.hidden = true;
     state.jointPreview = null;
+    state.jointExcludedIds.clear();
     if (!matches.length) {
       setMessage('Nenhuma empresa cadastrada corresponde à busca.', 'warning');
       return;
@@ -1398,9 +1430,10 @@
 
   elements.jointSendButton.addEventListener('click', async () => {
     const preview = state.jointPreview;
-    if (!preview?.invoices?.length || !preview.recipients?.length
-      || preview.blockedCount || preview.jointSentCount) return;
-    const invoiceIds = preview.invoices.map((invoice) => invoice.id);
+    const selected = selectedJointInvoices();
+    if (!selected.length || !preview?.recipients?.length
+      || selected.some((invoice) => invoice.blocked || invoice.jointSent)) return;
+    const invoiceIds = selected.map((invoice) => invoice.id);
     if (!window.confirm(`Enviar uma única cobrança para ${preview.company.name}, com ${invoiceIds.length} fatura(s) e anexos, a ${preview.recipients.length} destinatário(s)?`)) return;
     setLoading(true);
     setMessage('Preparando anexos e reconfirmando os saldos na Brudam…');
@@ -1410,6 +1443,9 @@
         body: JSON.stringify({ cnpj: preview.company.cnpj, invoiceIds })
       });
       state.jointPreview = null;
+      state.jointExcludedIds.clear();
+      elements.jointPreview.hidden = true;
+      elements.jointRows.replaceChildren();
       elements.jointSendButton.disabled = true;
       setMessage(result.message, result.status === 'review' ? 'warning' : 'success');
       try { await loadLogs({ page: 1 }); } catch {
@@ -1419,7 +1455,7 @@
       setMessage(error.message, 'error');
     } finally {
       setLoading(false);
-      elements.jointSendButton.disabled = !state.jointPreview;
+      updateJointSelection();
     }
   });
 
