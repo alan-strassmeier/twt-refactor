@@ -41,7 +41,8 @@ const DSL_TED_DOC_ACCOUNT = Object.freeze({
 });
 
 const DSL_TED_DOC_LIQUIDATION = Object.freeze({
-  paymentMethodId: 4,
+  // ID interno da opção Transferência TED/DOC na Brudam; 4 não é essa opção.
+  paymentMethodId: 16,
   // A API de liquidação exige o ID interno da opção ITAU-DSL na Brudam.
   // 16666 é o número da conta exibido ao usuário, não o valor de conta_bancaria.
   bankAccountId: 6

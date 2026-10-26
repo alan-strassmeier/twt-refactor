@@ -111,13 +111,13 @@ test('análise usa Vencimento como data de pagamento e ignora diferença para o 
   assert.equal(record.candidates[0].eligible, true);
   assert.equal(record.candidates[0].paymentDate, '2026-09-29');
   assert.deepEqual(record.settings, {
-    paymentMethodId: 4,
+    paymentMethodId: 16,
     bankAccountId: 6
   });
   assert.equal(saved.id, record.id);
 });
 
-test('aprovação reconfere a fatura e usa o ID bancário interno mesmo em importação antiga', async () => {
+test('aprovação reconfere a fatura e usa os IDs internos atuais mesmo em importação antiga', async () => {
   const calls = { completed: [], released: 0, removed: 0 };
   const result = await approveCandidate({
     id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
@@ -153,7 +153,7 @@ test('aprovação reconfere a fatura e usa o ID bancário interno mesmo em impor
     documentos: [{
       id_lancamento: 84583298,
       data_pagamento: '2026-09-29',
-      forma_pagamento: 4,
+      forma_pagamento: 16,
       data_credito_debito: '2026-09-29',
       valor_juros: 0,
       valor_liquidado: 1385.65,
