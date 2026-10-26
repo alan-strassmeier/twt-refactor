@@ -42,7 +42,9 @@ const DSL_TED_DOC_ACCOUNT = Object.freeze({
 
 const DSL_TED_DOC_LIQUIDATION = Object.freeze({
   paymentMethodId: 4,
-  bankAccountId: 16666
+  // A API de liquidação exige o ID interno da opção ITAU-DSL na Brudam.
+  // 16666 é o número da conta exibido ao usuário, não o valor de conta_bancaria.
+  bankAccountId: 6
 });
 
 const isTwtIssuer = (value) => digits(value) === TWT_ISSUER_CNPJ;

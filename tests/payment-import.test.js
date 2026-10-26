@@ -112,12 +112,12 @@ test('análise usa Vencimento como data de pagamento e ignora diferença para o 
   assert.equal(record.candidates[0].paymentDate, '2026-09-29');
   assert.deepEqual(record.settings, {
     paymentMethodId: 4,
-    bankAccountId: 16666
+    bankAccountId: 6
   });
   assert.equal(saved.id, record.id);
 });
 
-test('aprovação reconfere a fatura e envia o contrato oficial de liquidação à Brudam', async () => {
+test('aprovação reconfere a fatura e usa o ID bancário interno mesmo em importação antiga', async () => {
   const calls = { completed: [], released: 0, removed: 0 };
   const result = await approveCandidate({
     id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
@@ -157,7 +157,7 @@ test('aprovação reconfere a fatura e envia o contrato oficial de liquidação 
       data_credito_debito: '2026-09-29',
       valor_juros: 0,
       valor_liquidado: 1385.65,
-      conta_bancaria: 16666
+      conta_bancaria: 6
     }]
   });
   assert.equal(calls.removed, 1);
