@@ -724,6 +724,10 @@ CNPJ corresponda ao DOCCOB, que todas as referências estejam presentes e que o
 valor importado seja igual ao saldo atual. A aprovação pode ser individual ou
 em lote; nenhuma baixa acontece apenas com o envio da planilha.
 
+Na liquidação TED/DOC da conta ITAU-DSL, `conta_bancaria` recebe o ID interno
+Brudam `6`, não o número da conta `16666` exibido no PDF. Importações já
+analisadas antes dessa correção também usam o ID interno no momento da aprovação.
+
 ## PDF da fatura
 
 A coluna `Visualizar` abre `GET /api/faturamento/fatura-pdf?id=...` em uma nova
