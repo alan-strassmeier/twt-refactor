@@ -3050,13 +3050,18 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(source, /state\.collectionSection === 'jointBillingSection' && sectionId !== 'jointBillingSection'/);
   assert.match(source, /if \(selected\.some\(needsJointInvoiceData\)\) \{\s*await retryJointErrors\(preview\)/);
   assert.match(source, /includePdfData: true/);
-  assert.match(source, /const invoicePackages = activeBatch\.map/);
-  assert.match(source, /splitJointBillingInvoices\(selected\)/);
+  assert.match(source, /const invoicePackages = batch\.map/);
+  assert.match(source, /streamJointBillingInvoices\(selected/);
+  const jointSendSource = source.slice(source.indexOf("elements.jointSendButton.addEventListener"),
+    source.indexOf("elements.logsForm.addEventListener"));
+  assert.equal((jointSendSource.match(/window\.confirm\(/g) || []).length, 1);
   assert.match(html, /cobranca-batches\.js/);
   assert.match(source, /endpoint\('joint-billing-prepare'\)/);
-  assert.match(source, /selected\.filter\(needsJointAttachments\)/);
+  assert.match(source, /const prepareJointInvoice = async/);
+  assert.match(source, /jointProofNeedsRefresh\(invoice\.proof\)\) await refresh\(\)/);
+  assert.match(source, /error\.retryStage !== 'refresh'\) throw error;\s*await refresh\(\);\s*result = await prepare\(\)/);
   assert.match(apiSource, /query\.list === '1'[\s\S]*?listJointBilling\(query\.cnpj\)/);
-  assert.match(source, /const invoiceProofs = activeBatch\.map/);
+  assert.match(source, /const invoiceProofs = batch\.map/);
   assert.match(source, /Faturas que impedem o envio:.*blocked\.map\(jointBlockLabel\)/);
   assert.match(apiSource, /query\.route === 'joint-billing-refresh'/);
   assert.match(apiSource, /query\.route === 'joint-billing-prepare'/);

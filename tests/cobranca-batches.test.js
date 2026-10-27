@@ -1,33 +1,139 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { splitJointBillingInvoices, MAX_JOINT_ATTACHMENT_BYTES } =
+const { jointProofNeedsRefresh, streamJointBillingInvoices,
+  MAX_JOINT_ATTACHMENT_BYTES, MAX_BATCH_WAIT_MS } =
   require('../faturamento/cobranca-batches');
 
-test('divide o envio em e-mails de até 18 MB sem separar os anexos de uma fatura', () => {
+test('divide o envio em e-mails de até 18 MB sem separar os anexos de uma fatura', async () => {
   const mb = 1024 * 1024;
-  const batches = splitJointBillingInvoices([
-    { id: '101', preparedBytes: 10 * mb },
-    { id: '102', preparedBytes: 8 * mb },
-    { id: '103', preparedBytes: 9 * mb },
-    { id: '104', preparedBytes: 4 * mb }
-  ]);
-  assert.deepEqual(batches.map((batch) => batch.map(({ id }) => id)),
-    [['101', '102'], ['103', '104']]);
-  assert.ok(batches.every((batch) => batch.reduce((sum, invoice) =>
-    sum + invoice.preparedBytes, 0) <= MAX_JOINT_ATTACHMENT_BYTES));
+  const sent = [];
+  await streamJointBillingInvoices(['101', '102', '103', '104'].map((id) => ({ id })), {
+    prepare: async ({ id }) => ({ 101: 10, 102: 8, 103: 9, 104: 4 })[id] * mb,
+    send: async (batch) => {
+      sent.push(batch.map(({ id }) => id));
+      return { status: 'submitted' };
+    },
+    onPrepareError: async () => { throw new Error('Não esperado'); }
+  });
+  assert.deepEqual(sent, [['101', '102'], ['103', '104']]);
 });
 
-test('anexo individual exatamente no limite ocupa um e-mail próprio', () => {
-  const batches = splitJointBillingInvoices([
-    { id: '101', preparedBytes: MAX_JOINT_ATTACHMENT_BYTES },
-    { id: '102', preparedBytes: 1 }
-  ]);
-  assert.deepEqual(batches.map((batch) => batch.map(({ id }) => id)), [['101'], ['102']]);
+test('anexo individual exatamente no limite ocupa um e-mail próprio', async () => {
+  const sent = [];
+  await streamJointBillingInvoices([{ id: '101' }, { id: '102' }], {
+    prepare: async ({ id }) => id === '101' ? MAX_JOINT_ATTACHMENT_BYTES : 1,
+    send: async (batch) => {
+      sent.push(batch.map(({ id }) => id));
+      return { status: 'submitted' };
+    },
+    onPrepareError: async () => { throw new Error('Não esperado'); }
+  });
+  assert.deepEqual(sent, [['101'], ['102']]);
 });
 
-test('recusa tamanho desconhecido ou fatura individual acima do limite', () => {
-  assert.throws(() => splitJointBillingInvoices([{ id: '101', preparedBytes: null }]),
-    /não foi confirmado/);
-  assert.throws(() => splitJointBillingInvoices([{ id: '101', preparedBytes: MAX_JOINT_ATTACHMENT_BYTES + 1 }]),
-    /ultrapassam 18 MB sozinhos/);
+test('recusa tamanho desconhecido ou fatura individual acima do limite sem barrar as outras', async () => {
+  const errors = [];
+  const sent = [];
+  const outcome = await streamJointBillingInvoices([
+    { id: '101' }, { id: '102' }, { id: '103' }
+  ], {
+    prepare: async ({ id }) => ({ 101: 1, 102: 0, 103: MAX_JOINT_ATTACHMENT_BYTES + 1 })[id],
+    send: async (batch) => {
+      sent.push(batch.map(({ id }) => id));
+      return { status: 'submitted' };
+    },
+    onPrepareError: async ({ id }) => errors.push(id)
+  });
+  assert.deepEqual(sent, [['101']]);
+  assert.deepEqual(errors, ['102', '103']);
+  assert.equal(outcome.errors, 2);
+});
+
+test('envia o grupo assim que o próximo anexo ultrapassaria 18 MB, sem esperar todas as faturas', async () => {
+  const mb = 1024 * 1024;
+  const sent = [];
+  const outcome = await streamJointBillingInvoices([
+    { id: '101' }, { id: '102' }, { id: '103' }
+  ], {
+    prepare: async ({ id }) => ({ 101: 10, 102: 9, 103: 2 })[id] * mb,
+    send: async (batch) => {
+      sent.push(batch.map(({ id }) => id));
+      return { status: 'submitted' };
+    },
+    onPrepareError: async () => { throw new Error('Não esperado'); }
+  });
+  assert.deepEqual(sent, [['101'], ['102', '103']]);
+  assert.deepEqual(outcome, { sentBatches: 2, sentInvoices: 3, errors: 0, review: false });
+});
+
+test('erro em uma fatura não impede o envio das demais; resultado incerto interrompe grupos futuros', async () => {
+  const sent = [];
+  const errors = [];
+  const outcome = await streamJointBillingInvoices([
+    { id: '101' }, { id: '102' }, { id: '103' }, { id: '104' }
+  ], {
+    prepare: async ({ id }) => {
+      if (id === '102') throw new Error('Brudam indisponível');
+      return MAX_JOINT_ATTACHMENT_BYTES;
+    },
+    onPrepareError: async ({ id }) => errors.push(id),
+    send: async (batch) => {
+      sent.push(batch.map(({ id }) => id));
+      return { status: sent.length === 2 ? 'review' : 'submitted' };
+    }
+  });
+  assert.deepEqual(sent, [['101'], ['103']]);
+  assert.deepEqual(errors, ['102']);
+  assert.deepEqual(outcome, { sentBatches: 2, sentInvoices: 2, errors: 1, review: true });
+});
+
+test('grupo pendente é enviado após cinco minutos de preparação, mesmo abaixo de 18 MB', async () => {
+  let clock = 0;
+  const sent = [];
+  await streamJointBillingInvoices([{ id: '101' }, { id: '102' }], {
+    concurrency: 1,
+    now: () => clock,
+    prepare: async ({ id }) => {
+      if (id === '102') clock = MAX_BATCH_WAIT_MS + 1;
+      return 100;
+    },
+    onPrepareError: async () => { throw new Error('Não esperado'); },
+    send: async (batch) => {
+      sent.push(batch.map(({ id }) => id));
+      return { status: 'submitted' };
+    }
+  });
+  assert.deepEqual(sent, [['101'], ['102']]);
+});
+
+test('grupo pronto também é enviado após demora causada por faturas com erro', async () => {
+  let clock = 0;
+  const sent = [];
+  const outcome = await streamJointBillingInvoices([{ id: '101' }, { id: '102' }], {
+    concurrency: 1,
+    now: () => clock,
+    prepare: async ({ id }) => {
+      if (id === '102') {
+        clock = MAX_BATCH_WAIT_MS + 1;
+        throw new Error('Falha de consulta');
+      }
+      return 100;
+    },
+    onPrepareError: async () => {},
+    send: async (batch) => {
+      sent.push(batch.map(({ id }) => id));
+      return { status: 'submitted' };
+    }
+  });
+  assert.deepEqual(sent, [['101']]);
+  assert.equal(outcome.errors, 1);
+});
+
+test('só reconsulta automaticamente uma prova próxima de expirar', () => {
+  const now = Date.now();
+  const proof = (age) => `${Buffer.from(JSON.stringify({ checkedAt: now - age }))
+    .toString('base64url')}.assinatura`;
+  assert.equal(jointProofNeedsRefresh(proof(21 * 60 * 1000), now), false);
+  assert.equal(jointProofNeedsRefresh(proof(22 * 60 * 1000), now), true);
+  assert.equal(jointProofNeedsRefresh('invalida', now), true);
 });
