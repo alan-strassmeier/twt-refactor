@@ -619,6 +619,7 @@
     if (invoice.blockKind === 'bank_reconciliation') reasons.push('pendência de liquidação bancária');
     if (invoice.unverified) reasons.push('situação não confirmada na Brudam');
     if (invoice.jointSent) reasons.push('já enviada em conjunto');
+    if (invoice.sendReview) reasons.push('resultado do envio exige conferência nos logs');
     return `${invoice.id} (${reasons.join(' e ') || 'envio bloqueado'})`;
   };
 
@@ -660,7 +661,8 @@
       appendCell(row, formatDate(invoice.issuedAt));
       appendCell(row, formatDate(invoice.dueAt));
       appendCell(row, invoice.balance == null ? 'Não confirmado' : formatMoney(invoice.balance));
-      const status = appendCell(row, invoice.blocked ? 'Bloqueado'
+      const status = appendCell(row, invoice.sendReview ? 'Conferir envio nos logs'
+        : invoice.blocked ? 'Bloqueado'
         : invoice.jointSent ? 'Já enviado em conjunto'
           : invoice.prepareError ? 'Erro nos anexos'
             : invoice.preparedToken ? 'Anexos prontos' : 'Disponível');
@@ -673,6 +675,7 @@
       const toggle = document.createElement('button');
       toggle.type = 'button';
       toggle.className = 'button button-quiet';
+      toggle.disabled = state.loading;
       toggle.textContent = ignored ? 'Incluir neste envio' : 'Ignorar neste envio';
       toggle.setAttribute('aria-pressed', String(ignored));
       toggle.addEventListener('click', () => {
@@ -800,7 +803,8 @@
             body: JSON.stringify({ cnpj: preview.company.cnpj, invoiceId: invoice.id,
               proof: invoice.proof, snapshot: invoice.snapshot })
           });
-          if (result.id !== invoice.id || !result.token) {
+          if (result.id !== invoice.id || !result.token
+            || !Number.isSafeInteger(result.totalBytes) || result.totalBytes <= 0) {
             throw new Error(`Resposta inválida ao preparar a fatura ${invoice.id}.`);
           }
           invoice.preparedToken = result.token;
@@ -1657,11 +1661,12 @@
     if (!selected.length || !preview?.recipients?.length
       || selected.some((invoice) => invoice.blocked || invoice.jointSent
         || !invoice.proof || !invoice.snapshot)) return;
-    const invoiceIds = selected.map((invoice) => invoice.id);
-    const invoiceProofs = selected.map(({ id, proof }) => ({ id, proof }));
-    if (!window.confirm(`Enviar uma única cobrança para ${preview.company.name}, com ${invoiceIds.length} fatura(s) e anexos, a ${preview.recipients.length} destinatário(s)? A situação financeira não será conferida novamente.`)) return;
+    if (!window.confirm(`Enviar cobrança para ${preview.company.name}, com ${selected.length} fatura(s) e anexos, a ${preview.recipients.length} destinatário(s)? Se os anexos ultrapassarem 18 MB, serão divididos em mais de um e-mail. A situação financeira não será conferida novamente.`)) return;
     setLoading(true);
     setMessage('Preparando os anexos das faturas liberadas…');
+    let sentBatches = 0;
+    let sentInvoices = 0;
+    let activeBatch = null;
     try {
       const failed = await prepareJointAttachments(preview, selected);
       if (failed || selected.some((invoice) => !invoice.preparedToken)) {
@@ -1669,27 +1674,59 @@
           + 'clique em Tentar novamente para processar somente as falhas ou ignore-as neste envio.', 'warning');
         return;
       }
-      const totalBytes = selected.reduce((sum, invoice) => sum + (invoice.preparedBytes || 0), 0);
-      if (totalBytes > 18 * 1024 * 1024) {
-        setMessage('Os anexos ultrapassam 18 MB. Ignore algumas faturas neste envio.', 'warning');
+      const batches = window.splitJointBillingInvoices(selected);
+      if (batches.length > 1 && !window.confirm(`Os anexos serão divididos em ${batches.length} e-mails, cada um com até 18 MB. Cada e-mail listará somente as faturas anexadas nele. Prosseguir?`)) {
+        setMessage('Os anexos preparados foram mantidos nesta página. Clique em Enviar quando quiser prosseguir.', 'warning');
         return;
       }
-      const invoicePackages = selected.map(({ id, preparedToken }) => ({ id, token: preparedToken }));
-      setMessage('Enviando a cobrança conjunta com os anexos já preparados…');
-      const result = await requestJson(endpoint('joint-billing'), {
-        method: 'POST',
-        body: JSON.stringify({ cnpj: preview.company.cnpj, invoiceIds, invoiceProofs,
-          invoicePackages })
-      });
+      for (let index = 0; index < batches.length; index += 1) {
+        activeBatch = batches[index];
+        const invoiceIds = activeBatch.map((invoice) => invoice.id);
+        const invoiceProofs = activeBatch.map(({ id, proof }) => ({ id, proof }));
+        const invoicePackages = activeBatch.map(({ id, preparedToken }) => ({ id, token: preparedToken }));
+        setMessage(`Enviando e-mail ${index + 1}/${batches.length} com ${activeBatch.length} fatura(s)…`);
+        const result = await requestJson(endpoint('joint-billing'), {
+          method: 'POST',
+          body: JSON.stringify({ cnpj: preview.company.cnpj, invoiceIds, invoiceProofs,
+            invoicePackages })
+        });
+        if (!['submitted', 'review'].includes(result.status)
+          || !Array.isArray(result.invoiceIds)
+          || result.invoiceIds.length !== invoiceIds.length
+          || new Set(result.invoiceIds).size !== invoiceIds.length
+          || result.invoiceIds.some((id) => !invoiceIds.includes(id))) {
+          throw new Error('Resposta do envio incompleta. Confira os logs antes de tentar novamente.');
+        }
+        for (const invoice of activeBatch) {
+          invoice.preparedToken = null;
+          invoice.jointSent = result.status !== 'review';
+          invoice.sendReview = result.status === 'review';
+          invoice.blocked = result.status === 'review';
+          invoice.blockReason = result.status === 'review'
+            ? 'O resultado deste e-mail exige conferência nos logs antes de qualquer reenvio.' : '';
+          state.jointExcludedIds.add(invoice.id);
+        }
+        sentBatches += 1;
+        sentInvoices += activeBatch.length;
+        renderJointPreview(preview);
+        activeBatch = null;
+        if (result.status === 'review') {
+          setMessage(`E-mail ${index + 1}/${batches.length} requer conferência nos logs. `
+            + `${sentBatches - 1} e-mail(s) anterior(es) aceito(s); ${batches.length - sentBatches} ainda não enviado(s). `
+            + 'Os grupos já processados não serão reenviados automaticamente.', 'warning');
+          return;
+        }
+      }
       state.jointPreview = null;
       state.jointSendRetry = false;
       state.jointExcludedIds.clear();
       elements.jointPreview.hidden = true;
       elements.jointRows.replaceChildren();
       elements.jointSendButton.disabled = true;
-      setMessage(result.message, result.status === 'review' ? 'warning' : 'success');
+      const message = `${sentBatches} e-mail(s) com ${sentInvoices} fatura(s) aceito(s) pelo servidor de e-mail. A entrega será confirmada nos logs.`;
+      setMessage(message, 'success');
       try { await loadLogs({ page: 1 }); } catch {
-        setMessage(`${result.message} Os logs não puderam ser atualizados agora.`, 'warning');
+        setMessage(`${message} Os logs não puderam ser atualizados agora.`, 'warning');
       }
     } catch (error) {
       state.jointSendRetry = error.retryable === true;
@@ -1706,9 +1743,22 @@
           : invoice);
         renderJointPreview(preview);
       }
-      setMessage(!error.status || error.status >= 500
-        ? `${error.message} Confira os logs de envio antes de tentar novamente; o servidor pode ter aceitado o e-mail.`
-        : error.message, 'error');
+      const uncertainDelivery = activeBatch && (!error.status || error.status >= 500
+        || (error.status === 409 && !error.retryStage));
+      if (uncertainDelivery) {
+        for (const invoice of activeBatch) {
+          invoice.sendReview = true;
+          invoice.blocked = true;
+          invoice.blockReason = 'Resultado deste e-mail incerto. Confira os logs antes de tentar novamente.';
+          state.jointExcludedIds.add(invoice.id);
+        }
+        state.jointSendRetry = false;
+        renderJointPreview(preview);
+      }
+      setMessage(`${sentBatches} e-mail(s) com ${sentInvoices} fatura(s) já aceito(s). ${error.message}`
+        + (uncertainDelivery
+          ? ' O grupo interrompido pode ter sido enviado; confira os logs antes de tentar novamente. Os demais grupos permanecem nesta página.'
+          : ' Os demais grupos permanecem nesta página para nova tentativa.'), 'error');
     } finally {
       setLoading(false);
       updateJointSelection();
