@@ -18,7 +18,8 @@ const { fetchInvoices } = require('../../server/faturamento/brudam');
 const { findDoccobForInvoice } = require('../../server/faturamento/r2-doccob');
 const { getBankSlipRecord } = require('../../server/faturamento/boleto-store');
 const {
-  listJointBilling, previewJointBilling, refreshJointBillingInvoice, sendJointBilling
+  listJointBilling, previewJointBilling, refreshJointBillingInvoice,
+  prepareJointBillingInvoice, sendJointBilling
 } = require('../../server/faturamento/cobranca-conjunta');
 const { listLiquidationLog } = require('../../server/faturamento/liquidation-log');
 const {
@@ -975,6 +976,10 @@ const handleJointBilling = async (req, res, query) => {
   }
   if (!requireSameOrigin(req, res)) return;
   const body = await parseJsonBody(req, 3 * 1024 * 1024);
+  if (!Array.isArray(body.invoicePackages) || body.invoicePackages.length !== body.invoiceIds?.length) {
+    sendJson(res, 409, { message: 'Prepare os anexos de cada fatura antes de enviar.' });
+    return;
+  }
   const runId = randomUUID();
   if (!await store.claimProcessingRun(runId)) {
     sendJson(res, 409, { message: 'Já existe uma operação de cobrança em andamento. Aguarde a conclusão.' });
@@ -1005,6 +1010,18 @@ const handleJointBillingRefresh = async (req, res) => {
   if (!requireSameOrigin(req, res)) return;
   const body = await parseJsonBody(req, 1024);
   sendJson(res, 200, await refreshJointBillingInvoice(body));
+};
+
+const handleJointBillingPrepare = async (req, res) => {
+  if (!requireSession(req, res)) return;
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', 'POST');
+    sendJson(res, 405, { message: 'Método não permitido.' });
+    return;
+  }
+  if (!requireSameOrigin(req, res)) return;
+  const body = await parseJsonBody(req, 1024 * 1024);
+  sendJson(res, 200, await prepareJointBillingInvoice(body));
 };
 
 const handleWebhook = async (req, res) => {
@@ -1076,6 +1093,7 @@ module.exports = async (req, res) => {
     if (query.route === 'resend') return await handleResend(req, res);
     if (query.route === 'joint-billing') return await handleJointBilling(req, res, query);
     if (query.route === 'joint-billing-refresh') return await handleJointBillingRefresh(req, res);
+    if (query.route === 'joint-billing-prepare') return await handleJointBillingPrepare(req, res);
     if (query.route === 'process') return await handleProcess(req, res, query);
     if (query.route === 'webhook') return await handleWebhook(req, res);
     sendJson(res, 404, { message: 'Rota de cobrança não encontrada.' });
@@ -1088,6 +1106,7 @@ module.exports = async (req, res) => {
         : error.message,
       ...(error.retryable === true ? { retryable: true } : {}),
       ...(error.invoiceId ? { invoiceId: String(error.invoiceId) } : {}),
+      ...(error.retryStage ? { retryStage: String(error.retryStage) } : {}),
       ...(Number(error.upstreamStatus) > 0 ? { upstreamStatus: Number(error.upstreamStatus) } : {})
     });
   }

@@ -154,6 +154,7 @@
       error.status = response.status;
       error.retryable = payload.retryable === true;
       error.invoiceId = payload.invoiceId || '';
+      error.retryStage = payload.retryStage || '';
       throw error;
     }
     if (!isJson || !payload || typeof payload !== 'object' || !Object.keys(payload).length) {
@@ -610,6 +611,8 @@
     .filter((invoice) => !state.jointExcludedIds.has(invoice.id));
   const needsJointInvoiceData = (invoice) => invoice.unverified
     || (!invoice.blocked && !invoice.jointSent && (!invoice.proof || !invoice.snapshot));
+  const needsJointAttachments = (invoice) => !invoice.blocked && !invoice.jointSent
+    && !needsJointInvoiceData(invoice) && !invoice.preparedToken;
   const jointBlockLabel = (invoice) => {
     const reasons = [];
     if (invoice.blockKind === 'manual') reasons.push('bloqueio manual');
@@ -628,7 +631,8 @@
       return;
     }
     const selected = selectedJointInvoices();
-    const needsRetry = selected.some(needsJointInvoiceData);
+    const needsRetry = selected.some(needsJointInvoiceData)
+      || selected.some((invoice) => invoice.prepareError);
     const total = selected.reduce((sum, invoice) => sum + (Number(invoice.balance) || 0), 0);
     elements.jointTotal.textContent = `${selected.length} selecionada(s) · Total: ${formatMoney(total)}`;
     const errorCount = (state.jointPreview?.invoices || []).filter(needsJointInvoiceData).length;
@@ -657,10 +661,12 @@
       appendCell(row, formatDate(invoice.dueAt));
       appendCell(row, invoice.balance == null ? 'Não confirmado' : formatMoney(invoice.balance));
       const status = appendCell(row, invoice.blocked ? 'Bloqueado'
-        : invoice.jointSent ? 'Já enviado em conjunto' : 'Disponível');
-      if (invoice.blockReason) {
+        : invoice.jointSent ? 'Já enviado em conjunto'
+          : invoice.prepareError ? 'Erro nos anexos'
+            : invoice.preparedToken ? 'Anexos prontos' : 'Disponível');
+      if (invoice.blockReason || invoice.prepareError) {
         const reason = document.createElement('small');
-        reason.textContent = invoice.blockReason;
+        reason.textContent = invoice.prepareError || invoice.blockReason;
         status.appendChild(reason);
       }
       const action = document.createElement('td');
@@ -688,6 +694,11 @@
       const pending = selected.filter(needsJointInvoiceData);
       setMessage(`${pending.length} fatura(s) sem confirmação: ${pending.map(jointBlockLabel).join('; ')}. `
         + 'Clique em Tentar novamente para consultar somente essas faturas, ou ignore-as neste envio.', 'warning');
+    } else if (selected.some((invoice) => invoice.prepareError)) {
+      const pending = selected.filter((invoice) => invoice.prepareError);
+      setMessage(`${pending.length} fatura(s) com anexo pendente: ${pending.map((invoice) =>
+        `${invoice.id} (${invoice.prepareError})`).join('; ')}. `
+        + 'Tente novamente apenas essas faturas ou ignore-as neste envio.', 'warning');
     } else if (!preview.recipients.length) {
       setMessage('Cadastre ao menos um destinatário ativo antes de enviar.', 'warning');
     } else if (selected.some((invoice) => invoice.blocked || invoice.jointSent)) {
@@ -708,57 +719,63 @@
     let updated = 0;
     let removed = 0;
     let limited = false;
+    let next = 0;
+    let completed = 0;
     setLoading(true);
     updateJointSelection();
     try {
-      for (let index = 0; index < errorIds.length; index += 1) {
-        if (state.jointPreview !== preview) return;
-        const id = errorIds[index];
-        setMessage(`Conferindo fatura ${id} (${index + 1}/${errorIds.length})…`);
-        let result;
-        try {
-          result = await requestJson(endpoint('joint-billing-refresh'), {
-            method: 'POST',
-            body: JSON.stringify({ cnpj: preview.company.cnpj, invoiceId: id,
-              includePdfData: true })
-          });
-          if (result.id !== id || (!result.removed && !result.invoice)) {
-            throw new Error(`Resposta inválida ao consultar a fatura ${id}.`);
+      const worker = async () => {
+        while (next < errorIds.length && state.jointPreview === preview) {
+          const id = errorIds[next++];
+          let result;
+          try {
+            result = await requestJson(endpoint('joint-billing-refresh'), {
+              method: 'POST',
+              body: JSON.stringify({ cnpj: preview.company.cnpj, invoiceId: id,
+                includePdfData: true })
+            });
+            if (result.id !== id || (!result.removed && !result.invoice)) {
+              throw new Error(`Resposta inválida ao consultar a fatura ${id}.`);
+            }
+          } catch (error) {
+            result = { id, removed: false, invoice: {
+              id, balance: null, unverified: true, blocked: true, proof: null,
+              upstreamStatus: error.status || null,
+              blockReason: `Não foi possível consultar a fatura ${id}: ${error.message}`
+            } };
           }
-        } catch (error) {
-          result = { id, removed: false, invoice: {
-            id, balance: null, unverified: true, blocked: true, proof: null,
-            upstreamStatus: error.status || null,
-            blockReason: `Não foi possível consultar a fatura ${id}: ${error.message}`
-          } };
+          if (result.removed) {
+            preview.invoices = preview.invoices.filter((invoice) => invoice.id !== id);
+            state.jointExcludedIds.delete(id);
+            removed += 1;
+          } else {
+            preview.invoices = preview.invoices.map((invoice) => invoice.id === id
+              ? { ...invoice, ...result.invoice,
+                preparedToken: null, prepareError: null,
+                issuedAt: result.invoice.issuedAt || invoice.issuedAt,
+                dueAt: result.invoice.dueAt || invoice.dueAt }
+              : invoice);
+            if (!result.invoice.unverified) updated += 1;
+            limited ||= result.invoice.upstreamStatus === 429;
+          }
+          completed += 1;
+          setMessage(`Faturas conferidas: ${completed}/${errorIds.length} (${updated} confirmadas, `
+            + `${removed} removidas).`);
+          if (next < errorIds.length) await new Promise((resolve) => setTimeout(resolve, 250));
         }
-        if (result.removed) {
-          preview.invoices = preview.invoices.filter((invoice) => invoice.id !== id);
-          state.jointExcludedIds.delete(id);
-          removed += 1;
-        } else {
-          preview.invoices = preview.invoices.map((invoice) => invoice.id === id
-            ? { ...invoice, ...result.invoice,
-              issuedAt: result.invoice.issuedAt || invoice.issuedAt,
-              dueAt: result.invoice.dueAt || invoice.dueAt }
-            : invoice);
-          if (!result.invoice.unverified) updated += 1;
-          limited = result.invoice.upstreamStatus === 429;
-        }
-        preview.totalBalance = Math.round(preview.invoices.reduce(
-          (sum, invoice) => sum + (Number(invoice.balance) || 0), 0) * 100) / 100;
-        preview.blockedCount = preview.invoices.filter((invoice) => invoice.blocked).length;
-        preview.jointSentCount = preview.invoices.filter((invoice) => invoice.jointSent).length;
-        renderJointPreview(preview);
-        if (limited) break;
-        if (index + 1 < errorIds.length) await new Promise((resolve) => setTimeout(resolve, 350));
-      }
+      };
+      await Promise.all(Array.from({ length: Math.min(2, errorIds.length) }, () => worker()));
+      preview.totalBalance = Math.round(preview.invoices.reduce(
+        (sum, invoice) => sum + (Number(invoice.balance) || 0), 0) * 100) / 100;
+      preview.blockedCount = preview.invoices.filter((invoice) => invoice.blocked).length;
+      preview.jointSentCount = preview.invoices.filter((invoice) => invoice.jointSent).length;
+      renderJointPreview(preview);
       const remaining = preview.invoices.filter(needsJointInvoiceData).length;
       const blocked = selectedJointInvoices().filter((invoice) => !needsJointInvoiceData(invoice)
         && (invoice.blocked || invoice.jointSent)).length;
       const summary = `${updated} fatura(s) confirmada(s), ${removed} removida(s) e ${remaining} ainda sem confirmação.`;
       setMessage(limited
-        ? `${summary} A Brudam limitou as consultas (HTTP 429). Clique em Tentar novamente mais tarde; as faturas já conferidas foram mantidas nesta página.`
+        ? `${summary} A Brudam limitou parte das consultas (HTTP 429). Tente novamente mais tarde apenas as que falharam; as demais foram mantidas nesta página.`
         : `${summary}${remaining ? ' Clique em Tentar novamente para consultar só as que falharam.' : ''}`
           + `${blocked ? ` ${blocked} fatura(s) bloqueada(s) precisam ser ignoradas neste envio.` : ''}`,
       remaining || blocked ? 'warning' : 'success');
@@ -766,6 +783,48 @@
       setLoading(false);
       updateJointSelection();
     }
+  };
+
+  const prepareJointAttachments = async (preview, selected) => {
+    const pending = selected.filter(needsJointAttachments);
+    if (!pending.length) return 0;
+    let next = 0;
+    let completed = 0;
+    let failed = 0;
+    const worker = async () => {
+      while (next < pending.length && state.jointPreview === preview) {
+        const invoice = pending[next++];
+        try {
+          const result = await requestJson(endpoint('joint-billing-prepare'), {
+            method: 'POST',
+            body: JSON.stringify({ cnpj: preview.company.cnpj, invoiceId: invoice.id,
+              proof: invoice.proof, snapshot: invoice.snapshot })
+          });
+          if (result.id !== invoice.id || !result.token) {
+            throw new Error(`Resposta inválida ao preparar a fatura ${invoice.id}.`);
+          }
+          invoice.preparedToken = result.token;
+          invoice.preparedBytes = result.totalBytes;
+          invoice.prepareError = null;
+        } catch (error) {
+          invoice.preparedToken = null;
+          invoice.prepareError = error.message;
+          if (error.retryStage === 'refresh') {
+            invoice.unverified = true;
+            invoice.blocked = true;
+            invoice.proof = null;
+            invoice.snapshot = null;
+          }
+          failed += 1;
+        }
+        completed += 1;
+        setMessage(`Anexos preparados: ${completed - failed}/${pending.length}; `
+          + `${failed} com erro. Conferindo ${completed}/${pending.length}…`);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(2, pending.length) }, () => worker()));
+    renderJointPreview(preview);
+    return failed;
   };
 
   const loadJointCompany = async (category) => {
@@ -1600,15 +1659,27 @@
         || !invoice.proof || !invoice.snapshot)) return;
     const invoiceIds = selected.map((invoice) => invoice.id);
     const invoiceProofs = selected.map(({ id, proof }) => ({ id, proof }));
-    const invoiceSnapshots = selected.map(({ id, snapshot }) => ({ id, snapshot }));
     if (!window.confirm(`Enviar uma única cobrança para ${preview.company.name}, com ${invoiceIds.length} fatura(s) e anexos, a ${preview.recipients.length} destinatário(s)? A situação financeira não será conferida novamente.`)) return;
     setLoading(true);
     setMessage('Preparando os anexos das faturas liberadas…');
     try {
+      const failed = await prepareJointAttachments(preview, selected);
+      if (failed || selected.some((invoice) => !invoice.preparedToken)) {
+        setMessage(`${failed} fatura(s) falharam ao preparar os anexos. As demais foram guardadas; `
+          + 'clique em Tentar novamente para processar somente as falhas ou ignore-as neste envio.', 'warning');
+        return;
+      }
+      const totalBytes = selected.reduce((sum, invoice) => sum + (invoice.preparedBytes || 0), 0);
+      if (totalBytes > 18 * 1024 * 1024) {
+        setMessage('Os anexos ultrapassam 18 MB. Ignore algumas faturas neste envio.', 'warning');
+        return;
+      }
+      const invoicePackages = selected.map(({ id, preparedToken }) => ({ id, token: preparedToken }));
+      setMessage('Enviando a cobrança conjunta com os anexos já preparados…');
       const result = await requestJson(endpoint('joint-billing'), {
         method: 'POST',
         body: JSON.stringify({ cnpj: preview.company.cnpj, invoiceIds, invoiceProofs,
-          invoiceSnapshots })
+          invoicePackages })
       });
       state.jointPreview = null;
       state.jointSendRetry = false;
@@ -1621,16 +1692,23 @@
         setMessage(`${result.message} Os logs não puderam ser atualizados agora.`, 'warning');
       }
     } catch (error) {
-      state.jointSendRetry = error.retryable === true || error.status === 429
-        || error.status >= 500 || !error.status;
-      if (error.status === 409 && error.invoiceId) {
+      state.jointSendRetry = error.retryable === true;
+      if (error.invoiceId && error.retryStage === 'prepare') {
+        preview.invoices = preview.invoices.map((invoice) => invoice.id === error.invoiceId
+          ? { ...invoice, preparedToken: null, prepareError: error.message }
+          : invoice);
+        renderJointPreview(preview);
+      } else if (error.invoiceId && error.retryStage === 'refresh') {
         preview.invoices = preview.invoices.map((invoice) => invoice.id === error.invoiceId
           ? { ...invoice, unverified: true, blocked: true, proof: null, snapshot: null,
+            preparedToken: null, prepareError: null,
             blockReason: error.message }
           : invoice);
         renderJointPreview(preview);
       }
-      setMessage(error.message, 'error');
+      setMessage(!error.status || error.status >= 500
+        ? `${error.message} Confira os logs de envio antes de tentar novamente; o servidor pode ter aceitado o e-mail.`
+        : error.message, 'error');
     } finally {
       setLoading(false);
       updateJointSelection();

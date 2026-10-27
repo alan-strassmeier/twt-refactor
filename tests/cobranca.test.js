@@ -3050,11 +3050,14 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(source, /state\.collectionSection === 'jointBillingSection' && sectionId !== 'jointBillingSection'/);
   assert.match(source, /if \(selected\.some\(needsJointInvoiceData\)\) \{\s*await retryJointErrors\(preview\)/);
   assert.match(source, /includePdfData: true/);
-  assert.match(source, /invoiceSnapshots = selected\.map/);
+  assert.match(source, /const invoicePackages = selected\.map/);
+  assert.match(source, /endpoint\('joint-billing-prepare'\)/);
+  assert.match(source, /selected\.filter\(needsJointAttachments\)/);
   assert.match(apiSource, /query\.list === '1'[\s\S]*?listJointBilling\(query\.cnpj\)/);
   assert.match(source, /invoiceProofs: selected\.map|const invoiceProofs = selected\.map/);
   assert.match(source, /Faturas que impedem o envio:.*blocked\.map\(jointBlockLabel\)/);
   assert.match(apiSource, /query\.route === 'joint-billing-refresh'/);
+  assert.match(apiSource, /query\.route === 'joint-billing-prepare'/);
   assert.match(html, /id="itauReconciliationPreviewForm"/);
   assert.match(html, /id="itauReconciliationRearmButton"/);
   assert.match(html, /id="itauReconciliationRunButton"/);
