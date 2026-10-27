@@ -19,15 +19,22 @@ const {
 } = require('./cobranca-email');
 const { deliveryReference } = require('./cobranca-webhook');
 const store = require('./cobranca-store');
+const { savePreparedPackage, loadPreparedPackage } = require('./cobranca-conjunta-cache');
 
 const MAX_ATTACHMENT_BYTES = 18 * 1024 * 1024;
 const INVOICE_CHECK_CONCURRENCY = 3;
 const EMPTY_INVOICE_RETRIES = 3;
 const PREVIEW_PROOF_TTL_MS = 30 * 60 * 1000;
 const MAX_INVOICE_SNAPSHOT_CHARS = 500000;
+const WRITE_BATCH_SIZE = 4;
+const forEachBatch = async (items, callback) => {
+  for (let index = 0; index < items.length; index += WRITE_BATCH_SIZE) {
+    await Promise.all(items.slice(index, index + WRITE_BATCH_SIZE).map(callback));
+  }
+};
 const fail = (message, statusCode = 409) => Object.assign(new Error(message), { statusCode, expose: true });
 const refreshFailure = (id, message) => Object.assign(fail(message, 409), {
-  invoiceId: id, retryable: true
+  invoiceId: id, retryable: true, retryStage: 'refresh'
 });
 const digits = (value) => String(value || '').replace(/\D/g, '');
 const invoiceId = (value) => String(value || '').trim().replace(/^0+(?=\d)/, '');
@@ -405,8 +412,37 @@ const prepareAttachments = async (invoice, category, dependencies, preparedData 
   return attachments;
 };
 
+const prepareJointBillingInvoice = async ({ cnpj: cnpjInput, invoiceId: requestedId,
+  proof, snapshot }, dependencies = {}) => {
+  const cnpj = digits(cnpjInput);
+  const id = invoiceId(requestedId);
+  if (cnpj.length !== 14 || !/^\d{1,20}$/.test(String(requestedId || '')) || id === '0') {
+    throw fail('Informe uma empresa e uma fatura válidas para preparar os anexos.', 422);
+  }
+  const invoice = invoiceFromProof(proof, id, cnpj, dependencies);
+  const data = invoiceDataFromSnapshot(snapshot, proof, id, cnpj, dependencies);
+  const category = await (dependencies.getCategory || store.getCategory)(cnpj);
+  if (!category) throw fail('Empresa não cadastrada nos e-mails de cobrança.', 404);
+  try {
+    const attachments = await prepareAttachments(invoice, category, dependencies, data);
+    const saved = await (dependencies.savePreparedPackage || savePreparedPackage)({
+      cnpj, invoiceId: id, proof, attachments
+    }, { secret: previewSecret(dependencies), now: dependencies.now });
+    return { id, ...saved };
+  } catch (error) {
+    const status = Number(error?.upstreamStatus || error?.statusCode || 0);
+    const reason = status === 429 ? 'A Brudam limitou a consulta dos documentos (HTTP 429).'
+      : String(error?.message || 'Falha desconhecida ao preparar os documentos.').slice(0, 220);
+    throw Object.assign(fail(`Fatura ${id}: ${reason} Nenhum e-mail foi enviado.`,
+      status === 429 ? 429 : status === 413 ? 413 : 503), {
+      invoiceId: id, upstreamStatus: status || null, retryable: status !== 413,
+      retryStage: error?.retryStage || 'prepare', cause: error
+    });
+  }
+};
+
 const sendJointBilling = async ({ cnpj: cnpjInput, invoiceIds, invoiceProofs,
-  invoiceSnapshots }, dependencies = {}) => {
+  invoiceSnapshots, invoicePackages }, dependencies = {}) => {
   const expectedIds = Array.isArray(invoiceIds) && invoiceIds.length > 0
     && invoiceIds.every((id) => /^\d{1,20}$/.test(String(id)) && Number(id) > 0)
     ? sortIds(invoiceIds) : null;
@@ -439,26 +475,53 @@ const sendJointBilling = async ({ cnpj: cnpjInput, invoiceIds, invoiceProofs,
     company: { cnpj, name: initialCategory.name, billingMethod: initialCategory.billingMethod },
     recipients
   };
-  const attachments = [];
-  for (const invoice of selected) {
-    const id = invoiceId(invoice.id);
-    try {
-      const preparedData = invoiceSnapshots === undefined ? null
-        : invoiceDataFromSnapshot(snapshotById.get(id), proofById.get(id), id, cnpj, dependencies);
-      attachments.push(...await prepareAttachments(invoice, initialCategory, dependencies, preparedData));
-    } catch (error) {
-      const upstreamStatus = Number(error?.upstreamStatus || error?.statusCode || 0);
-      const reason = upstreamStatus === 429
-        ? 'A Brudam limitou a consulta dos documentos (HTTP 429).'
-        : String(error?.message || 'Falha desconhecida ao preparar os documentos.').slice(0, 220);
-      throw Object.assign(fail(`Fatura ${id}: ${reason} Nenhum e-mail foi enviado.`,
-        error?.statusCode === 409 ? 409 : upstreamStatus === 429 ? 429 : 503), {
-        invoiceId: id, upstreamStatus: upstreamStatus || null, retryable: true, cause: error
-      });
+  let attachments = [];
+  if (invoicePackages !== undefined) {
+    const packageById = new Map(Array.isArray(invoicePackages)
+      ? invoicePackages.map((item) => [invoiceId(item?.id), item?.token]) : []);
+    if (!Array.isArray(invoicePackages) || packageById.size !== expectedIds.length
+      || invoicePackages.length !== expectedIds.length) {
+      throw fail('Os anexos preparados estão incompletos. Tente novamente apenas as faturas com erro.', 409);
     }
-    if (attachments.reduce((sum, item) => sum + item.content.length, 0) > MAX_ATTACHMENT_BYTES) {
-      throw fail('Os anexos ultrapassam 18 MB. Nenhum e-mail foi enviado.', 413);
+    for (let offset = 0; offset < expectedIds.length; offset += 4) {
+      const group = await Promise.all(expectedIds.slice(offset, offset + 4).map(async (id) => {
+        try {
+          return await (dependencies.loadPreparedPackage || loadPreparedPackage)({
+            token: packageById.get(id), cnpj, invoiceId: id, proof: proofById.get(id)
+          }, { secret: previewSecret(dependencies), now: dependencies.now });
+        } catch (error) {
+          throw Object.assign(fail(`Fatura ${id}: ${error.message} Nenhum e-mail foi enviado.`, 409), {
+            invoiceId: id, retryable: true, retryStage: 'prepare', cause: error
+          });
+        }
+      }));
+      for (const invoiceAttachments of group) attachments.push(...invoiceAttachments);
+      if (attachments.reduce((sum, item) => sum + item.content.length, 0) > MAX_ATTACHMENT_BYTES) {
+        throw fail('Os anexos ultrapassam 18 MB. Ignore algumas faturas neste envio.', 413);
+      }
     }
+  } else {
+    // Mantido para chamadas internas antigas; a rota pública exige anexos preparados.
+    for (const invoice of selected) {
+      const id = invoiceId(invoice.id);
+      try {
+        const preparedData = invoiceSnapshots === undefined ? null
+          : invoiceDataFromSnapshot(snapshotById.get(id), proofById.get(id), id, cnpj, dependencies);
+        attachments.push(...await prepareAttachments(invoice, initialCategory, dependencies, preparedData));
+      } catch (error) {
+        const upstreamStatus = Number(error?.upstreamStatus || error?.statusCode || 0);
+        const reason = upstreamStatus === 429
+          ? 'A Brudam limitou a consulta dos documentos (HTTP 429).'
+          : String(error?.message || 'Falha desconhecida ao preparar os documentos.').slice(0, 220);
+        throw Object.assign(fail(`Fatura ${id}: ${reason} Nenhum e-mail foi enviado.`,
+          error?.statusCode === 409 ? 409 : upstreamStatus === 429 ? 429 : 503), {
+          invoiceId: id, upstreamStatus: upstreamStatus || null, retryable: true, cause: error
+        });
+      }
+    }
+  }
+  if (attachments.reduce((sum, item) => sum + item.content.length, 0) > MAX_ATTACHMENT_BYTES) {
+    throw fail('Os anexos ultrapassam 18 MB. Nenhum e-mail foi enviado.', 413);
   }
 
   const recipientEmails = preview.recipients.map((contact) => contact.email.toLowerCase()).sort();
@@ -499,22 +562,29 @@ const sendJointBilling = async ({ cnpj: cnpjInput, invoiceIds, invoiceProofs,
     invoiceIds: expectedIds, clientReference, emailPreview, jointBilling: true
   };
   const logEach = async (status, message, extra = {}) => {
-    for (const id of expectedIds) {
+    await forEachBatch(expectedIds, async (id) => {
       try {
         await addLog({ ...metadata, ...extra, invoiceId: id, status, message, createdAt: new Date().toISOString() });
       } catch (error) {
         console.error('[faturamento:cobranca-conjunta:log]', { invoiceId: id, message: error.message });
       }
-    }
+    });
   };
   let smtpStarted = false;
   try {
-    for (const id of expectedIds) {
-      if (!await claim(event, id, '__company__', {
+    for (let index = 0; index < expectedIds.length; index += WRITE_BATCH_SIZE) {
+      const ids = expectedIds.slice(index, index + WRITE_BATCH_SIZE);
+      const results = await Promise.allSettled(ids.map((id) => claim(event, id, '__company__', {
         state: 'processing', claimId, createdAt: new Date().toISOString(),
         billingEvent: billingEvents.get(id), batchId
-      })) throw fail(`A fatura ${id} já participa de um envio conjunto. Confira os logs antes de repetir.`);
-      claimedInvoiceIds.push(id);
+      })));
+      let failure = null;
+      results.forEach((result, offset) => {
+        if (result.status === 'fulfilled' && result.value) claimedInvoiceIds.push(ids[offset]);
+        else failure ||= result.status === 'rejected' ? result.reason
+          : fail(`A fatura ${ids[offset]} já participa de um envio conjunto. Confira os logs antes de repetir.`);
+      });
+      if (failure) throw failure;
     }
     const config = dependencies.emailConfig || zohoConfig();
     emailPreview.fromName = config.fromName;
@@ -551,7 +621,7 @@ const sendJointBilling = async ({ cnpj: cnpjInput, invoiceIds, invoiceProofs,
         if (attempt === 1) console.error('[faturamento:cobranca-conjunta:estado]', error);
       }
     }
-    for (const id of claimedInvoiceIds) {
+    await forEachBatch(claimedInvoiceIds, async (id) => {
       try {
         await save(event, id, '__company__', {
           state: partial ? 'review' : 'sent', sentAt: new Date().toISOString(),
@@ -561,7 +631,7 @@ const sendJointBilling = async ({ cnpj: cnpjInput, invoiceIds, invoiceProofs,
         persisted = false;
         console.error('[faturamento:cobranca-conjunta:marcador]', { invoiceId: id, message: error.message });
       }
-    }
+    });
     const status = !persisted || partial ? 'review' : 'submitted';
     await logEach(status, status === 'submitted'
       ? 'Cobrança conjunta aceita pelo SMTP; confirmação de entrega pendente.'
@@ -574,19 +644,19 @@ const sendJointBilling = async ({ cnpj: cnpjInput, invoiceIds, invoiceProofs,
       || ['EAUTH', 'EDNS', 'ENOTFOUND', 'ECONNREFUSED'].includes(code);
     if (definitelyNotAccepted) {
       try { await release(event, batchId, recipientKey, claimId); } catch { /* falha fechada */ }
-      for (const id of claimedInvoiceIds) {
+      await forEachBatch(claimedInvoiceIds, async (id) => {
         try { await release(event, id, '__company__', claimId); } catch { /* falha fechada */ }
-      }
+      });
       await logEach('error', `Cobrança conjunta não enviada${code ? ` (${code})` : ''}.`,
         { retryable: true });
       throw error;
     }
     try { await save(event, batchId, recipientKey, { state: 'review', invoiceIds: expectedIds,
       message: String(error.message).slice(0, 180) }); } catch { /* reserva permanece */ }
-    for (const id of claimedInvoiceIds) {
+    await forEachBatch(claimedInvoiceIds, async (id) => {
       try { await save(event, id, '__company__', { state: 'review',
         billingEvent: billingEvents.get(id), batchId }); } catch { /* reserva permanece */ }
-    }
+    });
     await logEach('review', 'Resultado SMTP incerto; confira no provedor antes de tentar novamente.');
     return { status: 'review', invoiceIds: expectedIds, recipients: recipientEmails };
   }
@@ -594,5 +664,5 @@ const sendJointBilling = async ({ cnpj: cnpjInput, invoiceIds, invoiceProofs,
 
 module.exports = {
   companyAndInvoices, listJointBilling, previewJointBilling,
-  refreshJointBillingInvoice, sendJointBilling, jointBillingText
+  refreshJointBillingInvoice, prepareJointBillingInvoice, sendJointBilling, jointBillingText
 };

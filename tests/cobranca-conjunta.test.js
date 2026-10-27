@@ -4,8 +4,10 @@ const {
   listJointBilling,
   previewJointBilling,
   refreshJointBillingInvoice,
+  prepareJointBillingInvoice,
   sendJointBilling: sendJointBillingCore
 } = require('../server/faturamento/cobranca-conjunta');
+const { savePreparedPackage, loadPreparedPackage } = require('../server/faturamento/cobranca-conjunta-cache');
 const { jointBillingSubject, jointBillingText, jointBillingHtml, sendJointBillingEmail,
   zohoConfig } = require('../server/faturamento/cobranca-email');
 const { processWebhookPayload } = require('../server/faturamento/cobranca-webhook');
@@ -229,6 +231,93 @@ test('após HTTP 429 só a fatura que falhou precisa de nova consulta', async ()
   }, dependencies);
   assert.equal(result.status, 'submitted');
   assert.deepEqual(reads, ['101', '102', '102']);
+});
+
+test('prepara cada fatura uma vez; falha isolada não refaz conferência nem anexos já prontos', async () => {
+  const cache = new Map();
+  const command = async (operation, ...args) => {
+    if (operation === 'SET') { cache.set(args[0], args[1]); return 'OK'; }
+    if (operation === 'MGET') return args.map((key) => cache.get(key) || null);
+    if (operation === 'DEL') { args.forEach((key) => cache.delete(key)); return args.length; }
+    throw new Error(`Comando inesperado: ${operation}`);
+  };
+  const reads = [];
+  const prepared = [];
+  let failSecond = true;
+  const dependencies = mockDependencies({
+    fetchInvoicePdfData: async (id) => {
+      reads.push(id);
+      const invoice = invoices.find((item) => item.id === id);
+      return { invoice: { ...invoice, payment: { type: 'ted_doc' } },
+        client: { document: CNPJ } };
+    },
+    findDoccobForInvoice: async ({ invoiceId: id }) => {
+      prepared.push(id);
+      if (id === '102' && failSecond) throw Object.assign(new Error('limite'), { statusCode: 429 });
+      return { invoice: { issuerCnpj: '00000000000000' } };
+    },
+    savePreparedPackage: (args, options) => savePreparedPackage(args, { ...options, command }),
+    loadPreparedPackage: (args, options) => loadPreparedPackage(args, { ...options, command })
+  });
+  const checks = await Promise.all(['101', '102'].map((id) => refreshJointBillingInvoice({
+    cnpj: CNPJ, invoiceId: id, includePdfData: true
+  }, dependencies)));
+  const prepare = (checked) => prepareJointBillingInvoice({ cnpj: CNPJ,
+    invoiceId: checked.id, proof: checked.invoice.proof, snapshot: checked.invoice.snapshot
+  }, dependencies);
+  const first = await prepare(checks[0]);
+  await assert.rejects(prepare(checks[1]), (error) => error.invoiceId === '102'
+    && error.upstreamStatus === 429 && error.retryStage === 'prepare');
+  failSecond = false;
+  const second = await prepare(checks[1]);
+  dependencies.fetchInvoicePdfData = async () => { throw new Error('Consulta repetida'); };
+  dependencies.findDoccobForInvoice = async () => { throw new Error('Anexos repetidos'); };
+  const result = await sendJointBillingCore({ cnpj: CNPJ, invoiceIds: ['101', '102'],
+    invoiceProofs: checks.map(({ id, invoice }) => ({ id, proof: invoice.proof })),
+    invoicePackages: [{ id: '101', token: first.token }, { id: '102', token: second.token }]
+  }, dependencies);
+  assert.equal(result.status, 'submitted');
+  assert.deepEqual(reads, ['101', '102']);
+  assert.deepEqual(prepared, ['101', '102', '102']);
+  assert.equal(dependencies.sent.length, 1);
+  assert.deepEqual(dependencies.sent[0].attachments.map(({ filename }) => filename),
+    ['fatura-101.pdf', 'fatura-102.pdf']);
+});
+
+test('anexos temporários recusam outra fatura e expiração sem enviar e-mail', async () => {
+  const cache = new Map();
+  const command = async (operation, ...args) => {
+    if (operation === 'SET') { cache.set(args[0], args[1]); return 'OK'; }
+    if (operation === 'MGET') return args.map((key) => cache.get(key) || null);
+    return null;
+  };
+  const proof = 'prova-da-fatura';
+  const saved = await savePreparedPackage({ cnpj: CNPJ, invoiceId: '101', proof,
+    attachments: [{ filename: 'fatura-101.pdf', contentType: 'application/pdf', content: Buffer.from('PDF') }]
+  }, { secret: 'test-only-preview-secret-12345678901234567890', command,
+    now: () => new Date('2026-10-18T15:00:00Z') });
+  const options = { secret: 'test-only-preview-secret-12345678901234567890', command,
+    now: () => new Date('2026-10-18T15:00:00Z') };
+  await assert.rejects(loadPreparedPackage({ token: saved.token, cnpj: CNPJ,
+    invoiceId: '102', proof }, options), /não correspondem/);
+  await assert.rejects(loadPreparedPackage({ token: saved.token, cnpj: CNPJ,
+    invoiceId: '101', proof }, { ...options,
+    now: () => new Date('2026-10-18T16:00:00Z') }), /expiraram/);
+});
+
+test('cache perdido bloqueia somente o pacote afetado antes de qualquer envio', async () => {
+  const dependencies = mockDependencies({ loadPreparedPackage: async ({ invoiceId: id }) => {
+    if (id === '102') throw new Error('Pacote expirado');
+    return [{ filename: 'fatura-101.pdf', contentType: 'application/pdf', content: Buffer.from('PDF') }];
+  } });
+  const preview = await previewJointBilling(CNPJ, dependencies);
+  await assert.rejects(sendJointBillingCore({ cnpj: CNPJ, invoiceIds: ['101', '102'],
+    invoiceProofs: preview.invoices.map(({ id, proof }) => ({ id, proof })),
+    invoicePackages: [{ id: '101', token: 'primeiro' }, { id: '102', token: 'segundo' }]
+  }, dependencies), (error) => error.invoiceId === '102' && error.retryStage === 'prepare'
+    && error.retryable === true);
+  assert.equal(dependencies.sent.length, 0);
+  assert.equal(dependencies.claims.length, 0);
 });
 
 test('recusa dados de fatura adulterados no navegador sem acessar documentos', async () => {
