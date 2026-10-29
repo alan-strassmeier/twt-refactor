@@ -71,6 +71,7 @@ const {
   webhookTokenAuthorized,
   validateWebhook,
   extractWebhookEvents,
+  statusMessage,
   processWebhookPayload
 } = require('../server/faturamento/cobranca-webhook');
 const {
@@ -2562,6 +2563,17 @@ test('interpreta entrega e bounce com a referência e diagnóstico do ZeptoMail'
   assert.match(events[0].diagnostic, /5\.4\.1/);
 });
 
+test('identifica a falha definitiva por destinatário inexistente sem alterar outras falhas', () => {
+  const diagnostic = 'User not found\nReason: bad-mailbox\nMessage: No Such User Here';
+  assert.equal(statusMessage('hard_bounce', diagnostic), 'Usuario nao encontrado');
+  assert.match(statusMessage('hard_bounce', 'Invalid recipient — 550 5.4.1 Access denied'),
+    /Access denied/);
+  assert.match(statusMessage('soft_bounce', diagnostic), /recusou temporariamente/);
+  const source = fs.readFileSync(path.join(__dirname, '../faturamento/cobranca.js'), 'utf8');
+  assert.match(source, /const logErrorMessage = \(record\) =>/);
+  assert.match(source, /record\.status === 'hard_bounce'[\s\S]*?bad-mailbox/);
+});
+
 test('webhook atualiza o envio original e preserva a prévia do e-mail', async () => {
   const saved = [];
   const logs = [];
@@ -3048,7 +3060,9 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(source, /jointInitialRetryCategory[\s\S]*?jointSendButton\.textContent = 'Tentar novamente'/);
   assert.match(source, /const clearJointBillingMemory = \(\) => \{[\s\S]*?state\.jointPreview = null/);
   assert.match(source, /state\.collectionSection === 'jointBillingSection' && sectionId !== 'jointBillingSection'/);
-  assert.match(source, /if \(selected\.some\(needsJointInvoiceData\)\) \{\s*await retryJointErrors\(preview\)/);
+  assert.doesNotMatch(source.slice(source.indexOf('elements.jointSendButton.addEventListener'),
+    source.indexOf('elements.logsForm.addEventListener')),
+  /if \(selected\.some\(needsJointInvoiceData\)\) \{\s*await retryJointErrors\(preview\)/);
   assert.match(source, /includePdfData: true/);
   assert.match(source, /const invoicePackages = batch\.map/);
   assert.match(source, /streamJointBillingInvoices\(selected/);
@@ -3058,7 +3072,7 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(html, /cobranca-batches\.js/);
   assert.match(source, /endpoint\('joint-billing-prepare'\)/);
   assert.match(source, /const prepareJointInvoice = async/);
-  assert.match(source, /jointProofNeedsRefresh\(invoice\.proof\)\) await refresh\(\)/);
+  assert.match(source, /invoice\.unverified \|\| !invoice\.snapshot \|\| window\.jointProofNeedsRefresh\(invoice\.proof\)/);
   assert.match(source, /error\.retryStage !== 'refresh'\) throw error;\s*await refresh\(\);\s*result = await prepare\(\)/);
   assert.match(apiSource, /query\.list === '1'[\s\S]*?listJointBilling\(query\.cnpj\)/);
   assert.match(source, /const invoiceProofs = batch\.map/);

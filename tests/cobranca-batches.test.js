@@ -120,6 +120,7 @@ test('grupo pronto também é enviado após demora causada por faturas com erro'
       return 100;
     },
     onPrepareError: async () => {},
+    wait: async () => {},
     send: async (batch) => {
       sent.push(batch.map(({ id }) => id));
       return { status: 'submitted' };
@@ -127,6 +128,58 @@ test('grupo pronto também é enviado após demora causada por faturas com erro'
   });
   assert.deepEqual(sent, [['101']]);
   assert.equal(outcome.errors, 1);
+});
+
+test('fatura sem confirmação fica em espera enquanto as aptas são enviadas e só ela é refeita', async () => {
+  const attempts = new Map();
+  const sent = [];
+  const delays = [];
+  const outcome = await streamJointBillingInvoices([
+    { id: '101' }, { id: '102' }, { id: '103' }
+  ], {
+    prepare: async ({ id }) => {
+      attempts.set(id, (attempts.get(id) || 0) + 1);
+      if (id === '102' && attempts.get(id) === 1) {
+        throw Object.assign(new Error('Brudam limitou a consulta'), { status: 429 });
+      }
+      return id === '101' ? MAX_JOINT_ATTACHMENT_BYTES : 100;
+    },
+    onPrepareError: async () => {},
+    wait: async (ms) => delays.push(ms),
+    send: async (batch) => {
+      sent.push(batch.map(({ id }) => id));
+      return { status: 'submitted' };
+    }
+  });
+  assert.deepEqual(sent, [['101'], ['103'], ['102']]);
+  assert.deepEqual(Object.fromEntries(attempts), { 101: 1, 102: 2, 103: 1 });
+  assert.deepEqual(delays, [5000]);
+  assert.deepEqual(outcome, { sentBatches: 3, sentInvoices: 3, errors: 0, review: false });
+});
+
+test('encerra a espera após três tentativas sem reenviar faturas já aceitas', async () => {
+  let failedAttempts = 0;
+  const sent = [];
+  const delays = [];
+  const outcome = await streamJointBillingInvoices([{ id: '101' }, { id: '102' }], {
+    prepare: async ({ id }) => {
+      if (id === '102') {
+        failedAttempts += 1;
+        throw Object.assign(new Error('Brudam HTTP 429'), { status: 429 });
+      }
+      return 100;
+    },
+    onPrepareError: async () => {},
+    wait: async (ms) => delays.push(ms),
+    send: async (batch) => {
+      sent.push(batch.map(({ id }) => id));
+      return { status: 'submitted' };
+    }
+  });
+  assert.equal(failedAttempts, 3);
+  assert.deepEqual(delays, [5000, 10000]);
+  assert.deepEqual(sent, [['101']]);
+  assert.deepEqual(outcome, { sentBatches: 1, sentInvoices: 1, errors: 1, review: false });
 });
 
 test('só reconsulta automaticamente uma prova próxima de expirar', () => {

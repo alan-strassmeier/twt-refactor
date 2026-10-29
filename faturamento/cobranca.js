@@ -611,6 +611,8 @@
     .filter((invoice) => !state.jointExcludedIds.has(invoice.id));
   const needsJointInvoiceData = (invoice) => invoice.unverified
     || (!invoice.blocked && !invoice.jointSent && (!invoice.proof || !invoice.snapshot));
+  const blocksJointSend = (invoice) => invoice.jointSent || invoice.sendReview
+    || (invoice.blocked && (!invoice.unverified || invoice.blockKind));
   const jointBlockLabel = (invoice) => {
     const reasons = [];
     if (invoice.blockKind === 'manual') reasons.push('bloqueio manual');
@@ -640,10 +642,8 @@
       ? `Reconsultar somente ${errorCount} fatura(s) com erro` : 'Nenhuma fatura com erro para atualizar';
     elements.jointSendButton.textContent = needsRetry || state.jointSendRetry
       ? 'Tentar novamente' : 'Enviar cobrança conjunta';
-    elements.jointSendButton.disabled = state.loading || !selected.length || (!needsRetry
-      && (!state.jointPreview?.recipients?.length
-        || selected.some((invoice) => invoice.blocked || invoice.jointSent
-          || !invoice.proof || !invoice.snapshot)));
+    elements.jointSendButton.disabled = state.loading || !selected.length
+      || !state.jointPreview?.recipients?.length || selected.some(blocksJointSend);
   };
 
   const renderJointPreview = (preview) => {
@@ -691,21 +691,21 @@
       setMessage('Esta empresa não possui faturas em aberto vencidas há pelo menos dois dias.', 'warning');
     } else if (!selected.length) {
       setMessage('Selecione ao menos uma fatura para o envio.', 'warning');
+    } else if (selected.some(blocksJointSend)) {
+      const blocked = selected.filter(blocksJointSend);
+      setMessage(`Faturas que impedem o envio: ${blocked.map(jointBlockLabel).join('; ')}. `
+        + 'Ignore-as neste envio para continuar com as demais.', 'warning');
     } else if (selected.some(needsJointInvoiceData)) {
       const pending = selected.filter(needsJointInvoiceData);
       setMessage(`${pending.length} fatura(s) sem confirmação: ${pending.map(jointBlockLabel).join('; ')}. `
-        + 'Clique em Tentar novamente para consultar somente essas faturas, ou ignore-as neste envio.', 'warning');
+        + 'Ao enviar, elas serão consultadas novamente em uma fila de espera sem travar as demais.', 'warning');
     } else if (selected.some((invoice) => invoice.prepareError)) {
       const pending = selected.filter((invoice) => invoice.prepareError);
       setMessage(`${pending.length} fatura(s) com anexo pendente: ${pending.map((invoice) =>
         `${invoice.id} (${invoice.prepareError})`).join('; ')}. `
-        + 'Tente novamente apenas essas faturas ou ignore-as neste envio.', 'warning');
+        + 'Ao enviar, somente elas serão preparadas novamente.', 'warning');
     } else if (!preview.recipients.length) {
       setMessage('Cadastre ao menos um destinatário ativo antes de enviar.', 'warning');
-    } else if (selected.some((invoice) => invoice.blocked || invoice.jointSent)) {
-      const blocked = selected.filter((invoice) => invoice.blocked || invoice.jointSent);
-      setMessage(`Faturas que impedem o envio: ${blocked.map(jointBlockLabel).join('; ')}. `
-        + 'Ignore-as neste envio para continuar com as demais.', 'warning');
     } else if (selected.some((invoice) => !invoice.proof)) {
       setMessage('A liberação de uma fatura está incompleta. Busque as faturas novamente antes de enviar.', 'warning');
     } else {
@@ -809,10 +809,15 @@
       });
       if (invoice.unverified || invoice.blocked || invoice.jointSent || !invoice.proof || !invoice.snapshot) {
         throw Object.assign(new Error(invoice.blockReason
-          || `A fatura ${invoice.id} não foi liberada pela Brudam.`), { retryStage: 'refresh' });
+          || `A fatura ${invoice.id} não foi liberada pela Brudam.`), {
+          retryStage: 'refresh', status: invoice.upstreamStatus || undefined,
+          retryable: !invoice.blockKind && !invoice.jointSent
+        });
       }
     };
-    if (window.jointProofNeedsRefresh(invoice.proof)) await refresh();
+    if (invoice.unverified || !invoice.snapshot || window.jointProofNeedsRefresh(invoice.proof)) {
+      await refresh();
+    }
     if (invoice.preparedToken && Number.isSafeInteger(invoice.preparedBytes)) {
       return invoice.preparedBytes;
     }
@@ -1059,6 +1064,16 @@
     'soft_bounce', 'hard_bounce', 'bounced', 'review', 'error', 'waiting_contacts'
   ]);
 
+  const logErrorMessage = (record) => {
+    const message = String(record.message || '');
+    if (record.status === 'hard_bounce'
+      && /bad-mailbox/i.test(message)
+      && /user\s+not\s+found|no\s+such\s+user\s+here/i.test(message)) {
+      return 'Usuario nao encontrado';
+    }
+    return message;
+  };
+
   const renderLogs = (payload) => {
     const logs = Array.isArray(payload.logs) ? payload.logs : [];
     const rows = logs.map((record) => {
@@ -1081,10 +1096,12 @@
         ? 'Não enviado — nova tentativa pendente'
         : STATUS_LABELS[record.status] || record.status || '—');
       status.className = `collection-status status-${record.status || 'unknown'}`;
-      if (record.message) status.title = record.message;
-      if ((retryable || record.status === 'review' || record.legacyReview) && record.message) {
+      const errorMessage = logErrorMessage(record);
+      if (errorMessage) status.title = errorMessage;
+      if ((retryable || record.status === 'review' || record.legacyReview
+        || (record.status === 'hard_bounce' && errorMessage === 'Usuario nao encontrado')) && errorMessage) {
         const detail = document.createElement('small');
-        detail.textContent = record.message;
+        detail.textContent = errorMessage;
         status.appendChild(detail);
       }
       const action = document.createElement('td');
@@ -1662,14 +1679,9 @@
     }
     const preview = state.jointPreview;
     const selected = selectedJointInvoices();
-    if (selected.some(needsJointInvoiceData)) {
-      await retryJointErrors(preview);
-      return;
-    }
     if (!selected.length || !preview?.recipients?.length
-      || selected.some((invoice) => invoice.blocked || invoice.jointSent
-        || !invoice.proof || !invoice.snapshot)) return;
-    if (!window.confirm(`Enviar cobrança para ${preview.company.name}, com ${selected.length} fatura(s) e anexos, a ${preview.recipients.length} destinatário(s)? Cada e-mail pronto será enviado automaticamente, com até 18 MB. Se uma confirmação expirar, somente a fatura afetada será reconsultada antes do envio.`)) return;
+      || selected.some(blocksJointSend)) return;
+    if (!window.confirm(`Enviar cobrança para ${preview.company.name}, com até ${selected.length} fatura(s) e anexos, a ${preview.recipients.length} destinatário(s)? Cada e-mail pronto será enviado automaticamente, com até 18 MB. Faturas cuja situação não puder ser confirmada na Brudam ficarão em espera para novas tentativas; nenhuma será enviada sem confirmação.`)) return;
     setLoading(true);
     setMessage('Preparando os anexos das faturas liberadas…');
     let sentBatches = 0;
@@ -1683,7 +1695,7 @@
             + `${sentBatches} e-mail(s) já aceito(s); preparando fatura ${invoice.id}…`);
           return bytes;
         },
-        onPrepareError: async (invoice, error) => {
+        onPrepareError: async (invoice, error, { attempt, maxAttempts, willRetry }) => {
           if (!invoice.removed) {
             invoice.preparedToken = null;
             invoice.prepareError = error.message;
@@ -1695,7 +1707,8 @@
             }
           }
           renderJointPreview(preview);
-          setMessage(`Fatura ${invoice.id} não enviada: ${error.message} `
+          setMessage(`Fatura ${invoice.id} ${willRetry ? 'na fila de espera' : 'não enviada'} `
+            + `(tentativa ${attempt}/${maxAttempts}): ${error.message} `
             + 'As demais continuam sendo processadas.', 'warning');
         },
         send: async (batch, number) => {
