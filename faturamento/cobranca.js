@@ -634,8 +634,7 @@
       return;
     }
     const selected = selectedJointInvoices();
-    const needsRetry = selected.some(needsJointInvoiceData)
-      || selected.some((invoice) => invoice.prepareError);
+    const needsRetry = selected.some((invoice) => invoice.prepareError);
     const total = selected.reduce((sum, invoice) => sum + (Number(invoice.balance) || 0), 0);
     elements.jointTotal.textContent = `${selected.length} selecionada(s) · Total: ${formatMoney(total)}`;
     const errorCount = selected.filter(needsJointInvoiceData).length;

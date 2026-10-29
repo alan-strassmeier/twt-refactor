@@ -568,6 +568,25 @@ test('falha HTTP 429 ao preparar anexos identifica a fatura e permite tentar nov
   assert.equal(dependencies.sent.length, 0);
 });
 
+test('boleto vencido sem registro gera erro definitivo sem repetir preparação', async () => {
+  const dependencies = mockDependencies({
+    getCategory: async () => ({ ...category, billingMethod: 'bank_slip' }),
+    fetchInvoicePdfData: async (id) => ({
+      invoice: { ...invoices.find((item) => item.id === id), payment: null },
+      client: { document: CNPJ }
+    }),
+    generateInvoiceBankSlip: async () => {
+      throw Object.assign(new Error('O vencimento da fatura já passou.'), { statusCode: 422 });
+    }
+  });
+  const checked = await refreshJointBillingInvoice({ cnpj: CNPJ, invoiceId: '101',
+    includePdfData: true }, dependencies);
+  await assert.rejects(prepareJointBillingInvoice({ cnpj: CNPJ, invoiceId: '101',
+    proof: checked.invoice.proof, snapshot: checked.invoice.snapshot }, dependencies),
+  (error) => error.statusCode === 422 && error.retryable === false
+    && error.invoiceId === '101' && /vencimento da fatura já passou/.test(error.message));
+});
+
 test('não envia se algum DOCCOB faltar', async () => {
   const dependencies = mockDependencies({ findDoccobForInvoice: async ({ invoiceId }) =>
     invoiceId === '102' ? null : { invoice: { issuerCnpj: '00000000000000' } } });

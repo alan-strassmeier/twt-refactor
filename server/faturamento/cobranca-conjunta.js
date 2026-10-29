@@ -433,9 +433,10 @@ const prepareJointBillingInvoice = async ({ cnpj: cnpjInput, invoiceId: requeste
     const status = Number(error?.upstreamStatus || error?.statusCode || 0);
     const reason = status === 429 ? 'A Brudam limitou a consulta dos documentos (HTTP 429).'
       : String(error?.message || 'Falha desconhecida ao preparar os documentos.').slice(0, 220);
+    const permanent = [409, 413, 422].includes(status) || error?.retryable === false;
     throw Object.assign(fail(`Fatura ${id}: ${reason} Nenhum e-mail foi enviado.`,
-      status === 429 ? 429 : status === 413 ? 413 : 503), {
-      invoiceId: id, upstreamStatus: status || null, retryable: status !== 413,
+      status === 429 ? 429 : permanent && status ? status : 503), {
+      invoiceId: id, upstreamStatus: status || null, retryable: !permanent,
       retryStage: error?.retryStage || 'prepare', cause: error
     });
   }

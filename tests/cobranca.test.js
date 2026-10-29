@@ -3056,6 +3056,7 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(html, /id="refreshJointBillingButton"[^>]*>[\s\S]*?Atualizar<\/button>/);
   assert.match(source, /filter\(needsJointInvoiceData\)[\s\S]*?endpoint\('joint-billing-refresh'\)/);
   assert.match(source, /endpoint\('joint-billing', \{ cnpj: category\.cnpj, list: '1' \}\)/);
+  assert.match(source, /const needsRetry = selected\.some\(\(invoice\) => invoice\.prepareError\)/);
   assert.match(source, /jointSendButton\.textContent = needsRetry \|\| state\.jointSendRetry/);
   assert.match(source, /jointInitialRetryCategory[\s\S]*?jointSendButton\.textContent = 'Tentar novamente'/);
   assert.match(source, /const clearJointBillingMemory = \(\) => \{[\s\S]*?state\.jointPreview = null/);
