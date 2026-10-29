@@ -647,6 +647,15 @@ const sendJointBilling = async ({ cnpj: cnpjInput, invoiceIds, invoiceProofs,
     const code = String(error?.code || '').toUpperCase();
     const definitelyNotAccepted = !smtpStarted || error?.deliveryAccepted === false
       || ['EAUTH', 'EDNS', 'ENOTFOUND', 'ECONNREFUSED'].includes(code);
+    console.error('[faturamento:cobranca-conjunta:envio]', {
+      invoiceCount: expectedIds.length,
+      attachmentBytes: attachments.reduce((sum, item) => sum + item.content.length, 0),
+      smtpStarted,
+      definitelyNotAccepted,
+      code: code.slice(0, 32),
+      responseCode: Number(error?.responseCode) || null,
+      command: String(error?.command || '').slice(0, 32)
+    });
     if (definitelyNotAccepted) {
       try { await release(event, batchId, recipientKey, claimId); } catch { /* falha fechada */ }
       await forEachBatch(claimedInvoiceIds, async (id) => {
