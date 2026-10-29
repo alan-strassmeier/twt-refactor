@@ -587,6 +587,12 @@ test('boleto vencido sem registro gera erro definitivo sem repetir preparação'
     && error.invoiceId === '101' && /vencimento da fatura já passou/.test(error.message));
 });
 
+test('servidor recusa e-mail com mais de dez faturas antes de acessar documentos', async () => {
+  const ids = Array.from({ length: 11 }, (_, index) => String(index + 1));
+  await assert.rejects(sendJointBillingCore({ cnpj: CNPJ, invoiceIds: ids },
+    mockDependencies()), (error) => error.statusCode === 413 && /no máximo 10 faturas/.test(error.message));
+});
+
 test('não envia se algum DOCCOB faltar', async () => {
   const dependencies = mockDependencies({ findDoccobForInvoice: async ({ invoiceId }) =>
     invoiceId === '102' ? null : { invoice: { issuerCnpj: '00000000000000' } } });

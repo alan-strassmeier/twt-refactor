@@ -22,6 +22,7 @@ const store = require('./cobranca-store');
 const { savePreparedPackage, loadPreparedPackage } = require('./cobranca-conjunta-cache');
 
 const MAX_ATTACHMENT_BYTES = 18 * 1024 * 1024;
+const MAX_INVOICES_PER_EMAIL = 10;
 const INVOICE_CHECK_CONCURRENCY = 3;
 const EMPTY_INVOICE_RETRIES = 3;
 const PREVIEW_PROOF_TTL_MS = 30 * 60 * 1000;
@@ -449,6 +450,9 @@ const sendJointBilling = async ({ cnpj: cnpjInput, invoiceIds, invoiceProofs,
     ? sortIds(invoiceIds) : null;
   if (!expectedIds || expectedIds.length !== invoiceIds.length) {
     throw fail('Confira a lista de faturas antes de enviar.', 422);
+  }
+  if (expectedIds.length > MAX_INVOICES_PER_EMAIL) {
+    throw fail(`Cada e-mail pode conter no máximo ${MAX_INVOICES_PER_EMAIL} faturas. Divida o envio em grupos menores.`, 413);
   }
   const cnpj = digits(cnpjInput);
   if (cnpj.length !== 14) throw fail('Informe um CNPJ válido.', 422);

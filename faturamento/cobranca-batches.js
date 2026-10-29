@@ -2,6 +2,7 @@
   'use strict';
 
   const MAX_JOINT_ATTACHMENT_BYTES = 18 * 1024 * 1024;
+  const MAX_JOINT_INVOICES_PER_BATCH = 10;
   const MAX_BATCH_WAIT_MS = 5 * 60 * 1000;
   const MAX_PREPARE_ATTEMPTS = 3;
 
@@ -82,7 +83,8 @@
           }
           continue;
         }
-        if (batch.length && (batchBytes + bytes > MAX_JOINT_ATTACHMENT_BYTES
+        if (batch.length && (batch.length >= MAX_JOINT_INVOICES_PER_BATCH
+          || batchBytes + bytes > MAX_JOINT_ATTACHMENT_BYTES
           || now() - batchStartedAt >= MAX_BATCH_WAIT_MS)) {
           const result = await flush();
           if (result?.status === 'review') return {
@@ -92,7 +94,8 @@
         batch.push(invoice);
         batchBytes += bytes;
         batchStartedAt ??= now();
-        if (batchBytes === MAX_JOINT_ATTACHMENT_BYTES) {
+        if (batchBytes === MAX_JOINT_ATTACHMENT_BYTES
+          || batch.length === MAX_JOINT_INVOICES_PER_BATCH) {
           const result = await flush();
           if (result?.status === 'review') return {
             sentBatches, sentInvoices, errors: errors + deferred.length, review: true
@@ -116,6 +119,6 @@
   if (typeof window !== 'undefined') window.streamJointBillingInvoices = streamJointBillingInvoices;
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = { jointProofNeedsRefresh, streamJointBillingInvoices,
-      MAX_JOINT_ATTACHMENT_BYTES, MAX_BATCH_WAIT_MS };
+      MAX_JOINT_ATTACHMENT_BYTES, MAX_JOINT_INVOICES_PER_BATCH, MAX_BATCH_WAIT_MS };
   }
 })();
