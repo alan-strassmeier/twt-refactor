@@ -608,9 +608,11 @@
   };
 
   const selectedJointInvoices = () => (state.jointPreview?.invoices || [])
-    .filter((invoice) => !state.jointExcludedIds.has(invoice.id));
-  const needsJointInvoiceData = (invoice) => invoice.unverified
-    || (!invoice.blocked && !invoice.jointSent && (!invoice.proof || !invoice.snapshot));
+    .filter((invoice) => !state.jointExcludedIds.has(invoice.id)
+      && !invoice.jointSent && !invoice.sendReview);
+  const needsJointInvoiceData = (invoice) => !invoice.jointSent && !invoice.sendReview
+    && !invoice.blockKind && (invoice.unverified
+      || (!invoice.blocked && (!invoice.proof || !invoice.snapshot)));
   const blocksJointSend = (invoice) => invoice.jointSent || invoice.sendReview
     || (invoice.blocked && (!invoice.unverified || invoice.blockKind));
   const jointBlockLabel = (invoice) => {
@@ -636,7 +638,7 @@
       || selected.some((invoice) => invoice.prepareError);
     const total = selected.reduce((sum, invoice) => sum + (Number(invoice.balance) || 0), 0);
     elements.jointTotal.textContent = `${selected.length} selecionada(s) · Total: ${formatMoney(total)}`;
-    const errorCount = (state.jointPreview?.invoices || []).filter(needsJointInvoiceData).length;
+    const errorCount = selected.filter(needsJointInvoiceData).length;
     elements.jointRefreshButton.disabled = state.loading || errorCount === 0;
     elements.jointRefreshButton.title = errorCount
       ? `Reconsultar somente ${errorCount} fatura(s) com erro` : 'Nenhuma fatura com erro para atualizar';
@@ -660,8 +662,8 @@
       appendCell(row, formatDate(invoice.dueAt));
       appendCell(row, invoice.balance == null ? 'Não confirmado' : formatMoney(invoice.balance));
       const status = appendCell(row, invoice.sendReview ? 'Conferir envio nos logs'
-        : invoice.blocked ? 'Bloqueado'
         : invoice.jointSent ? 'Já enviado em conjunto'
+          : invoice.blocked ? 'Bloqueado'
           : invoice.prepareError ? 'Erro nos anexos'
             : invoice.preparedToken ? 'Anexos prontos' : 'Disponível');
       if (invoice.blockReason || invoice.prepareError) {
@@ -673,8 +675,10 @@
       const toggle = document.createElement('button');
       toggle.type = 'button';
       toggle.className = 'button button-quiet';
-      toggle.disabled = state.loading;
-      toggle.textContent = ignored ? 'Incluir neste envio' : 'Ignorar neste envio';
+      toggle.disabled = state.loading || invoice.jointSent || invoice.sendReview;
+      toggle.textContent = invoice.sendReview ? 'Conferir nos logs'
+        : invoice.jointSent ? 'Já enviada'
+          : ignored ? 'Incluir neste envio' : 'Ignorar neste envio';
       toggle.setAttribute('aria-pressed', String(ignored));
       toggle.addEventListener('click', () => {
         if (state.jointExcludedIds.has(invoice.id)) state.jointExcludedIds.delete(invoice.id);
@@ -690,7 +694,7 @@
     if (!preview.invoices.length) {
       setMessage('Esta empresa não possui faturas em aberto vencidas há pelo menos dois dias.', 'warning');
     } else if (!selected.length) {
-      setMessage('Selecione ao menos uma fatura para o envio.', 'warning');
+      setMessage('Nenhuma fatura apta selecionada. Faturas já enviadas não entram novamente na cobrança.', 'warning');
     } else if (selected.some(blocksJointSend)) {
       const blocked = selected.filter(blocksJointSend);
       setMessage(`Faturas que impedem o envio: ${blocked.map(jointBlockLabel).join('; ')}. `
@@ -714,7 +718,7 @@
   };
 
   const retryJointErrors = async (preview) => {
-    const errorIds = (preview?.invoices || []).filter(needsJointInvoiceData)
+    const errorIds = selectedJointInvoices().filter(needsJointInvoiceData)
       .map((invoice) => invoice.id);
     if (!errorIds.length || state.loading) return;
     let updated = 0;
@@ -771,7 +775,7 @@
       preview.blockedCount = preview.invoices.filter((invoice) => invoice.blocked).length;
       preview.jointSentCount = preview.invoices.filter((invoice) => invoice.jointSent).length;
       renderJointPreview(preview);
-      const remaining = preview.invoices.filter(needsJointInvoiceData).length;
+      const remaining = selectedJointInvoices().filter(needsJointInvoiceData).length;
       const blocked = selectedJointInvoices().filter((invoice) => !needsJointInvoiceData(invoice)
         && (invoice.blocked || invoice.jointSent)).length;
       const summary = `${updated} fatura(s) confirmada(s), ${removed} removida(s) e ${remaining} ainda sem confirmação.`;
@@ -858,8 +862,6 @@
       const preview = await requestJson(endpoint('joint-billing', { cnpj: category.cnpj, list: '1' }));
       renderJointPreview(preview);
       listed = true;
-      setLoading(false);
-      await retryJointErrors(preview);
     } catch (error) {
       if (!listed) {
         state.jointInitialRetryCategory = category;

@@ -3060,6 +3060,11 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(source, /jointInitialRetryCategory[\s\S]*?jointSendButton\.textContent = 'Tentar novamente'/);
   assert.match(source, /const clearJointBillingMemory = \(\) => \{[\s\S]*?state\.jointPreview = null/);
   assert.match(source, /state\.collectionSection === 'jointBillingSection' && sectionId !== 'jointBillingSection'/);
+  assert.match(source, /const selectedJointInvoices = \(\) =>[\s\S]*?!invoice\.jointSent && !invoice\.sendReview/);
+  assert.match(source, /const errorIds = selectedJointInvoices\(\)\.filter\(needsJointInvoiceData\)/);
+  const loadJointCompanySource = source.slice(source.indexOf('const loadJointCompany = async'),
+    source.indexOf('const renderPending ='));
+  assert.doesNotMatch(loadJointCompanySource, /await retryJointErrors\(preview\)/);
   assert.doesNotMatch(source.slice(source.indexOf('elements.jointSendButton.addEventListener'),
     source.indexOf('elements.logsForm.addEventListener')),
   /if \(selected\.some\(needsJointInvoiceData\)\) \{\s*await retryJointErrors\(preview\)/);
