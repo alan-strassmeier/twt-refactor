@@ -3,6 +3,7 @@
 
   const MAX_JOINT_ATTACHMENT_BYTES = 18 * 1024 * 1024;
   const MAX_BATCH_WAIT_MS = 5 * 60 * 1000;
+  const MAX_PREPARE_ATTEMPTS = 3;
 
   const jointProofNeedsRefresh = (proof, now = Date.now()) => {
     try {
@@ -19,22 +20,16 @@
   };
 
   const streamJointBillingInvoices = async (invoices, { prepare, send, onPrepareError,
-    concurrency = 2, now = Date.now }) => {
-    const pending = new Map();
-    let nextToStart = 0;
+    concurrency = 2, now = Date.now, maxAttempts = MAX_PREPARE_ATTEMPTS,
+    wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    shouldRetry = (invoice, error) => !invoice.removed && error.retryable !== false
+      && error.status !== 413 }) => {
     let batch = [];
     let batchBytes = 0;
     let batchStartedAt = null;
     let sentBatches = 0;
     let sentInvoices = 0;
     let errors = 0;
-    const fill = () => {
-      while (pending.size < concurrency && nextToStart < invoices.length) {
-        const index = nextToStart++;
-        pending.set(index, Promise.resolve().then(() => prepare(invoices[index]))
-          .then((bytes) => ({ bytes }), (error) => ({ error })));
-      }
-    };
     const flush = async () => {
       if (!batch.length) return null;
       const ready = batch;
@@ -46,44 +41,75 @@
       sentInvoices += ready.length;
       return result;
     };
-    fill();
-    for (let index = 0; index < invoices.length; index += 1) {
-      const invoice = invoices[index];
-      const prepared = await pending.get(index);
-      pending.delete(index);
-      fill();
-      let bytes = prepared?.bytes;
-      let error = prepared?.error;
-      if (!error && (!Number.isSafeInteger(bytes) || bytes <= 0
-        || bytes > MAX_JOINT_ATTACHMENT_BYTES)) {
-        error = new Error(bytes > MAX_JOINT_ATTACHMENT_BYTES
-          ? `Os anexos da fatura ${invoice.id} ultrapassam 18 MB sozinhos.`
-          : `O tamanho dos anexos da fatura ${invoice.id} não foi confirmado.`);
-      }
-      if (error) {
-        errors += 1;
-        await onPrepareError(invoice, error);
-        if (batch.length && now() - batchStartedAt >= MAX_BATCH_WAIT_MS) {
-          const result = await flush();
-          if (result?.status === 'review') return { sentBatches, sentInvoices, errors, review: true };
+    let waiting = invoices;
+    for (let attempt = 1; attempt <= maxAttempts && waiting.length; attempt += 1) {
+      const current = waiting;
+      const deferred = [];
+      const pending = new Map();
+      let nextToStart = 0;
+      const fill = () => {
+        while (pending.size < (attempt === 1 ? concurrency : 1) && nextToStart < current.length) {
+          const index = nextToStart++;
+          pending.set(index, Promise.resolve().then(() => prepare(current[index]))
+            .then((bytes) => ({ bytes }), (error) => ({ error })));
         }
-        continue;
+      };
+      fill();
+      for (let index = 0; index < current.length; index += 1) {
+        const invoice = current[index];
+        const prepared = await pending.get(index);
+        pending.delete(index);
+        fill();
+        let bytes = prepared?.bytes;
+        let error = prepared?.error;
+        if (!error && (!Number.isSafeInteger(bytes) || bytes <= 0
+          || bytes > MAX_JOINT_ATTACHMENT_BYTES)) {
+          error = new Error(bytes > MAX_JOINT_ATTACHMENT_BYTES
+            ? `Os anexos da fatura ${invoice.id} ultrapassam 18 MB sozinhos.`
+            : `O tamanho dos anexos da fatura ${invoice.id} não foi confirmado.`);
+          error.retryable = false;
+        }
+        if (error) {
+          const willRetry = attempt < maxAttempts && shouldRetry(invoice, error);
+          await onPrepareError(invoice, error, { attempt, maxAttempts, willRetry });
+          if (willRetry) deferred.push({ invoice, error });
+          else errors += 1;
+          if (batch.length && now() - batchStartedAt >= MAX_BATCH_WAIT_MS) {
+            const result = await flush();
+            if (result?.status === 'review') return {
+              sentBatches, sentInvoices, errors: errors + deferred.length, review: true
+            };
+          }
+          continue;
+        }
+        if (batch.length && (batchBytes + bytes > MAX_JOINT_ATTACHMENT_BYTES
+          || now() - batchStartedAt >= MAX_BATCH_WAIT_MS)) {
+          const result = await flush();
+          if (result?.status === 'review') return {
+            sentBatches, sentInvoices, errors: errors + deferred.length, review: true
+          };
+        }
+        batch.push(invoice);
+        batchBytes += bytes;
+        batchStartedAt ??= now();
+        if (batchBytes === MAX_JOINT_ATTACHMENT_BYTES) {
+          const result = await flush();
+          if (result?.status === 'review') return {
+            sentBatches, sentInvoices, errors: errors + deferred.length, review: true
+          };
+        }
       }
-      if (batch.length && (batchBytes + bytes > MAX_JOINT_ATTACHMENT_BYTES
-        || now() - batchStartedAt >= MAX_BATCH_WAIT_MS)) {
-        const result = await flush();
-        if (result?.status === 'review') return { sentBatches, sentInvoices, errors, review: true };
-      }
-      batch.push(invoice);
-      batchBytes += bytes;
-      batchStartedAt ??= now();
-      if (batchBytes === MAX_JOINT_ATTACHMENT_BYTES) {
-        const result = await flush();
-        if (result?.status === 'review') return { sentBatches, sentInvoices, errors, review: true };
+      const result = await flush();
+      if (result?.status === 'review') return {
+        sentBatches, sentInvoices, errors: errors + deferred.length, review: true
+      };
+      waiting = deferred.map(({ invoice }) => invoice);
+      if (waiting.length) {
+        const limited = deferred.some(({ error }) => error.status === 429);
+        await wait(limited ? 5000 * attempt : 1000 * attempt);
       }
     }
-    const result = await flush();
-    return { sentBatches, sentInvoices, errors, review: result?.status === 'review' };
+    return { sentBatches, sentInvoices, errors, review: false };
   };
 
   if (typeof window !== 'undefined') window.jointProofNeedsRefresh = jointProofNeedsRefresh;

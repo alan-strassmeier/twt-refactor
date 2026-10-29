@@ -222,6 +222,11 @@ const extractWebhookEvents = (payload) => {
 };
 
 const statusMessage = (status, diagnostic) => {
+  if (status === 'hard_bounce'
+    && /bad-mailbox/i.test(diagnostic)
+    && /user\s+not\s+found|no\s+such\s+user\s+here/i.test(diagnostic)) {
+    return 'Usuario nao encontrado';
+  }
   const base = status === 'delivered'
     ? 'O servidor de e-mail do destinatário aceitou a mensagem.'
     : status === 'soft_bounce'
