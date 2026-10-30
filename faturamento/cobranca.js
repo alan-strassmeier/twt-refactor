@@ -610,6 +610,11 @@
   const selectedJointInvoices = () => (state.jointPreview?.invoices || [])
     .filter((invoice) => !state.jointExcludedIds.has(invoice.id)
       && !invoice.jointSent && !invoice.sendReview);
+  const jointSendSignature = (preview, selected) => [
+    preview?.company?.cnpj || '',
+    selected.map((invoice) => invoice.id).join(','),
+    (preview?.recipients || []).map((recipient) => recipient.email).join(',')
+  ].join('|');
   const needsJointInvoiceData = (invoice) => !invoice.jointSent && !invoice.sendReview
     && !invoice.blockKind && (invoice.unverified
       || (!invoice.blocked && (!invoice.proof || !invoice.snapshot)));
@@ -641,8 +646,11 @@
     elements.jointRefreshButton.disabled = state.loading || errorCount === 0;
     elements.jointRefreshButton.title = errorCount
       ? `Reconsultar somente ${errorCount} fatura(s) com erro` : 'Nenhuma fatura com erro para atualizar';
-    elements.jointSendButton.textContent = needsRetry || state.jointSendRetry
-      ? 'Tentar novamente' : 'Enviar cobrança conjunta';
+    const confirming = elements.jointSendButton.dataset.confirmSignature
+      === jointSendSignature(state.jointPreview, selected);
+    elements.jointSendButton.textContent = confirming
+      ? `Confirmar envio de ${selected.length} fatura(s) a ${state.jointPreview.recipients.length} destinatário(s)`
+      : needsRetry || state.jointSendRetry ? 'Tentar novamente' : 'Enviar cobrança conjunta';
     elements.jointSendButton.disabled = state.loading || !selected.length
       || !state.jointPreview?.recipients?.length || selected.some(blocksJointSend);
   };
@@ -851,6 +859,7 @@
     if (state.loading) return;
     state.jointInitialRetryCategory = null;
     state.jointSendRetry = false;
+    delete elements.jointSendButton.dataset.confirmSignature;
     setLoading(true);
     setMessage(`Buscando faturas vencidas em aberto de ${category.name}…`);
     elements.jointPreview.hidden = true;
@@ -1746,7 +1755,16 @@
     const selected = selectedJointInvoices();
     if (!selected.length || !preview?.recipients?.length
       || selected.some(blocksJointSend)) return;
-    if (!window.confirm(`Enviar cobrança para ${preview.company.name}, com até ${selected.length} fatura(s) e anexos, a ${preview.recipients.length} destinatário(s)? Cada e-mail pronto será enviado automaticamente, com até 18 MB. Faturas cuja situação não puder ser confirmada na Brudam ficarão em espera para novas tentativas; nenhuma será enviada sem confirmação.`)) return;
+    const signature = jointSendSignature(preview, selected);
+    if (elements.jointSendButton.dataset.confirmSignature !== signature) {
+      elements.jointSendButton.dataset.confirmSignature = signature;
+      updateJointSelection();
+      setMessage(`Confirme o envio das ${selected.length} fatura(s) de ${preview.company.name} `
+        + `a ${preview.recipients.length} destinatário(s). Cada e-mail será enviado assim que estiver pronto; `
+        + 'faturas não confirmadas na Brudam ficarão em espera.', 'warning');
+      return;
+    }
+    delete elements.jointSendButton.dataset.confirmSignature;
     setLoading(true);
     setMessage('Preparando os anexos das faturas liberadas…');
     let sentBatches = 0;
