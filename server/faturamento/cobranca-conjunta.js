@@ -676,7 +676,59 @@ const sendJointBilling = async ({ cnpj: cnpjInput, invoiceIds, invoiceProofs,
   }
 };
 
+const confirmJointDelivery = async ({ clientReference, confirmAllRecipients }, dependencies = {}) => {
+  const referenceId = String(clientReference || '').trim();
+  if (!/^twt-joint-[a-z0-9-]{20,120}$/i.test(referenceId) || confirmAllRecipients !== true) {
+    throw fail('Confirme a entrega a todos os destinatários usando a referência do envio conjunto.', 400);
+  }
+  const reference = await (dependencies.getDeliveryReference || store.getDeliveryReference)(referenceId);
+  const ids = reference?.invoiceIds;
+  const recipients = reference?.recipientEmails;
+  if (!reference?.jointBilling || reference.event !== 'joint'
+    || reference.clientReference !== referenceId || !Array.isArray(ids) || !ids.length
+    || !Array.isArray(recipients) || !recipients.length) {
+    throw fail('Envio conjunto não localizado para esta referência.', 404);
+  }
+  const get = dependencies.getDelivery || store.getDelivery;
+  const save = dependencies.saveDelivery || store.saveDelivery;
+  const addLog = dependencies.addLog || store.addLog;
+  const batch = await get('joint', reference.invoiceId, reference.email);
+  if (!batch) throw fail('Reserva do envio conjunto não localizada. Nenhum estado foi alterado.', 409);
+  if (batch.state === 'delivered') return { status: 'delivered', invoiceIds: ids, alreadyConfirmed: true };
+  if (!['review', 'sent'].includes(batch.state)
+    || Object.values(batch.recipientEvents || {}).some((entry) =>
+      ['soft_bounce', 'hard_bounce', 'bounced'].includes(entry?.status))) {
+    throw fail('Há evento incompatível com a entrega completa; confira o histórico no provedor.', 409);
+  }
+  const invoiceRecords = new Map();
+  await forEachBatch(ids, async (id) => {
+    const record = await get('joint', id, '__company__');
+    if (!record || String(record.batchId) !== String(reference.invoiceId)
+      || !['review', 'sent', 'delivered'].includes(record.state)) {
+      throw fail(`A reserva da fatura ${id} não corresponde ao envio confirmado. Nenhum estado foi alterado.`, 409);
+    }
+    invoiceRecords.set(id, record);
+  });
+  const confirmedAt = (dependencies.now ? dependencies.now() : new Date()).toISOString();
+  await forEachBatch(ids, (id) => save('joint', id, '__company__', {
+    ...invoiceRecords.get(id), state: 'delivered', manuallyConfirmedAt: confirmedAt,
+    confirmationSource: 'provider_panel'
+  }));
+  await save('joint', reference.invoiceId, reference.email, {
+    ...batch, state: 'delivered', manuallyConfirmedAt: confirmedAt,
+    confirmationSource: 'provider_panel'
+  });
+  await forEachBatch(ids, (id) => addLog({
+    ...reference, id: randomUUID(), invoiceId: id, createdAt: confirmedAt,
+    email: recipients.join(', '), status: 'delivered', manuallyConfirmedAt: confirmedAt,
+    confirmationSource: 'provider_panel',
+    message: `Entrega aos ${recipients.length} destinatário(s) confirmada manualmente no painel do provedor; nenhum e-mail foi reenviado.`
+  }));
+  return { status: 'delivered', invoiceIds: ids, recipients: recipients.length };
+};
+
 module.exports = {
   companyAndInvoices, listJointBilling, previewJointBilling,
-  refreshJointBillingInvoice, prepareJointBillingInvoice, sendJointBilling, jointBillingText
+  refreshJointBillingInvoice, prepareJointBillingInvoice, sendJointBilling,
+  confirmJointDelivery, jointBillingText
 };

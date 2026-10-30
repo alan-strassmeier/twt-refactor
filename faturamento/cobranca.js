@@ -1142,6 +1142,33 @@
         }
       });
       actionButtons.append(previewButton);
+      if (record.jointBilling && record.status === 'review' && record.clientReference) {
+        const confirmDeliveryButton = document.createElement('button');
+        confirmDeliveryButton.type = 'button';
+        confirmDeliveryButton.className = 'button button-quiet log-confirm-delivery-button';
+        confirmDeliveryButton.textContent = 'Confirmar entrega no provedor';
+        confirmDeliveryButton.addEventListener('click', async () => {
+          const invoiceCount = Array.isArray(record.invoiceIds) ? record.invoiceIds.length : 0;
+          const recipientCount = String(record.email || '').split(',').filter(Boolean).length;
+          if (!window.confirm(`Confirma que o provedor marcou este e-mail com ${invoiceCount} fatura(s) como entregue a todos os ${recipientCount} destinatário(s)? A ação não reenvia e-mails.`)) return;
+          confirmDeliveryButton.disabled = true;
+          setLoading(true);
+          try {
+            await requestJson(endpoint('joint-delivery-confirm'), {
+              method: 'POST',
+              body: JSON.stringify({ clientReference: record.clientReference, confirmAllRecipients: true })
+            });
+            await loadLogs({ page: state.logPage });
+            setMessage('Entrega registrada após conferência no provedor; nenhum e-mail foi reenviado.', 'success');
+          } catch (error) {
+            setMessage(error.message, 'error');
+            confirmDeliveryButton.disabled = false;
+          } finally {
+            setLoading(false);
+          }
+        });
+        actionButtons.append(confirmDeliveryButton);
+      }
       if (RESOLVABLE_LOG_STATUSES.has(record.status) && !retryable) actionButtons.append(resolveButton);
       action.appendChild(actionButtons);
       row.appendChild(action);
