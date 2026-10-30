@@ -175,11 +175,15 @@ const eventDate = (value) => {
 
 const eventDetails = (message) => firstValue(message?.event_data?.details) || {};
 
-const recipientAddress = (emailInfo) => {
-  const addresses = emailInfo?.to?.email_address || emailInfo?.to || [];
-  const first = firstValue(addresses);
-  return String(first?.address || first || '').trim().toLocaleLowerCase('pt-BR');
+const emailAddress = (value) => {
+  if (Array.isArray(value)) return emailAddress(value[0]);
+  if (typeof value === 'string') return value;
+  if (!value || typeof value !== 'object') return '';
+  return emailAddress(value.address || value.email_address || value.emailAddress || value.email);
 };
+
+const recipientAddress = (emailInfo) =>
+  emailAddress(emailInfo?.to).trim().toLocaleLowerCase('pt-BR');
 
 const extractWebhookEvents = (payload) => {
   const messagesValue = payload.event_message ?? payload.eventMessage;

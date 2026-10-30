@@ -769,6 +769,37 @@ test('webhook de cobrança conjunta registra confirmação para cada fatura', as
   assert.equal(delivery.state, 'delivered');
 });
 
+test('webhook de cobrança conjunta identifica destinatário no formato aninhado do provedor', async () => {
+  const dependencies = mockDependencies();
+  await sendJointBilling({ cnpj: CNPJ, invoiceIds: ['101', '102'] }, dependencies);
+  const [reference, savedReference] = dependencies.references[0];
+  const records = [];
+  let delivery = { state: 'review' };
+  const webhookStore = {
+    getDeliveryReference: async () => savedReference,
+    claimWebhookEvent: async () => true,
+    releaseWebhookEvent: async () => true,
+    getDelivery: async () => delivery,
+    saveDelivery: async (_event, _id, _email, record) => { delivery = record; },
+    addLog: async (record) => records.push(record)
+  };
+  for (const [index, email] of ['ana@example.com', 'beto@example.com'].entries()) {
+    const to = index === 0
+      ? [{ email_address: { address: email, name: 'Destinatário' } }]
+      : { email_address: { address: email, name: 'Destinatário' } };
+    await processWebhookPayload({
+      event_name: ['delivered'], webhook_request_id: `joint-nested-${index}`,
+      event_message: [{ request_id: `nested-${index}`, email_info: {
+        client_reference: reference, to
+      } }]
+    }, { store: webhookStore, now: () => new Date('2026-10-18T16:00:00Z') });
+  }
+  assert.deepEqual(records.map((record) => record.email), [
+    'ana@example.com', 'ana@example.com', 'beto@example.com', 'beto@example.com'
+  ]);
+  assert.equal(delivery.state, 'delivered');
+});
+
 test('mensagem contém números, empresa, pagamento e soma em reais', () => {
   const content = { companyName: 'Empresa Exemplo', invoices: [
     { id: '101', overdueDays: 8 }, { id: '102', overdueDays: 1 }
