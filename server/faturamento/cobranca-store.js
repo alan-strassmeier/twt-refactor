@@ -426,6 +426,51 @@ const saveDeliveryReference = (reference, record, command = redisCommand) => com
 const getDeliveryReference = async (reference, command = redisCommand) =>
   parseRecord(await command('HGET', KEYS.deliveryReferences, String(reference)));
 
+const RETRACT_MANUAL_JOINT_DELIVERY_SCRIPT = `
+  local referenceRaw = redis.call('HGET', KEYS[2], ARGV[1])
+  if not referenceRaw then return 0 end
+  local reference = cjson.decode(referenceRaw)
+  if reference.clientReference ~= ARGV[1] or reference.jointBilling ~= true
+    or reference.correctedAt then return 0 end
+  if type(reference.invoiceIds) ~= 'table' or #reference.invoiceIds ~= #ARGV - 4 then return 0 end
+  local batchRaw = redis.call('HGET', KEYS[1], ARGV[2])
+  if not batchRaw then return 0 end
+  local batch = cjson.decode(batchRaw)
+  if batch.state ~= 'delivered' or batch.confirmationSource ~= 'provider_panel'
+    or batch.manuallyConfirmedAt ~= ARGV[3] or batch.messageId
+    or (batch.recipientEvents and next(batch.recipientEvents)) then return 0 end
+  for index = 5, #ARGV do
+    if ARGV[index] ~= 'joint:' .. tostring(reference.invoiceIds[index - 4]) .. ':__company__'
+      then return 0 end
+    local raw = redis.call('HGET', KEYS[1], ARGV[index])
+    if not raw then return 0 end
+    local record = cjson.decode(raw)
+    if record.state ~= 'delivered' or record.confirmationSource ~= 'provider_panel'
+      or record.manuallyConfirmedAt ~= ARGV[3]
+      or tostring(record.batchId) ~= tostring(reference.invoiceId) then return 0 end
+  end
+  batch.state = 'not_sent'
+  batch.correctedAt = ARGV[4]
+  batch.correctionReason = 'provider_reference_absent'
+  reference.correctedAt = ARGV[4]
+  reference.correctionReason = 'provider_reference_absent'
+  redis.call('HSET', KEYS[1], ARGV[2], cjson.encode(batch))
+  redis.call('HSET', KEYS[2], ARGV[1], cjson.encode(reference))
+  for index = 5, #ARGV do redis.call('HDEL', KEYS[1], ARGV[index]) end
+  return #ARGV - 4
+`;
+
+const retractManualJointDelivery = async ({ clientReference, invoiceIds, batchId, cnpj,
+  confirmedAt, correctedAt }, command = redisCommand) => {
+  const ids = [...new Set((invoiceIds || []).map(requiredInvoiceId))];
+  if (!ids.length) return false;
+  const fields = ids.map((id) => deliveryField('joint', id, '__company__'));
+  return Number(await command('EVAL', RETRACT_MANUAL_JOINT_DELIVERY_SCRIPT, '2',
+    KEYS.deliveries, KEYS.deliveryReferences, String(clientReference),
+    deliveryField('joint', requiredInvoiceId(batchId), requiredCnpj(cnpj)),
+    String(confirmedAt), String(correctedAt), ...fields)) === ids.length;
+};
+
 const webhookEventKey = (eventId) => `${KEYS.webhookEvents}:${String(eventId)}`;
 
 const claimWebhookEvent = async (eventId, command = redisCommand) => (
@@ -891,6 +936,7 @@ module.exports = {
   saveDelivery,
   saveDeliveryReference,
   getDeliveryReference,
+  retractManualJointDelivery,
   claimWebhookEvent,
   releaseWebhookEvent,
   addLog,

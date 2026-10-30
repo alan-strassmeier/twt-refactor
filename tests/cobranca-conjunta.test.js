@@ -6,6 +6,7 @@ const {
   refreshJointBillingInvoice,
   prepareJointBillingInvoice,
   confirmJointDelivery,
+  retractJointDeliveryConfirmation,
   sendJointBilling: sendJointBillingCore
 } = require('../server/faturamento/cobranca-conjunta');
 const { savePreparedPackage, loadPreparedPackage } = require('../server/faturamento/cobranca-conjunta-cache');
@@ -852,6 +853,80 @@ test('confirmação manual não sobrescreve rejeição registrada pelo provedor'
     saveDelivery: async () => { saves += 1; }
   }), /evento incompatível/);
   assert.equal(saves, 0);
+});
+
+test('corrige confirmação manual de lote sem envio no provedor e libera apenas suas faturas', async () => {
+  const clientReference = 'twt-joint-1234567890-0123456789abcdef';
+  const batchId = '1234567890';
+  const confirmedAt = '2026-10-30T12:00:00.000Z';
+  const reference = {
+    clientReference, jointBilling: true, event: 'joint', invoiceId: batchId,
+    email: CNPJ, clientCnpj: CNPJ, clientName: 'Empresa Exemplo',
+    invoiceIds: ['101', '102'], recipientEmails: ['ana@example.com', 'beto@example.com']
+  };
+  const records = new Map([
+    [`joint:${batchId}:${CNPJ}`, { state: 'delivered', confirmationSource: 'provider_panel',
+      manuallyConfirmedAt: confirmedAt }],
+    ['joint:101:__company__', { state: 'delivered', confirmationSource: 'provider_panel',
+      manuallyConfirmedAt: confirmedAt, batchId }],
+    ['joint:102:__company__', { state: 'delivered', confirmationSource: 'provider_panel',
+      manuallyConfirmedAt: confirmedAt, batchId }]
+  ]);
+  const logs = [];
+  const dependencies = {
+    getDeliveryReference: async () => reference,
+    getDelivery: async (event, id, email) => records.get(`${event}:${id}:${email}`),
+    retractManualJointDelivery: async ({ invoiceIds, confirmedAt: expected }) => {
+      assert.deepEqual(invoiceIds, ['101', '102']);
+      assert.equal(expected, confirmedAt);
+      records.delete('joint:101:__company__');
+      records.delete('joint:102:__company__');
+      reference.correctedAt = '2026-10-30T13:00:00.000Z';
+      return true;
+    },
+    addLog: async (record) => logs.push(record),
+    now: () => new Date('2026-10-30T13:00:00Z')
+  };
+  await assert.rejects(retractJointDeliveryConfirmation({ clientReference,
+    confirmProviderReferenceAbsent: false }, dependencies), /Confirme que a referência/);
+  const result = await retractJointDeliveryConfirmation({ clientReference,
+    confirmProviderReferenceAbsent: true }, dependencies);
+  assert.equal(result.corrected, 2);
+  assert.equal(records.has('joint:101:__company__'), false);
+  assert.deepEqual(logs.map((record) => record.status), ['not_sent', 'not_sent']);
+  const repeated = await retractJointDeliveryConfirmation({ clientReference,
+    confirmProviderReferenceAbsent: true }, dependencies);
+  assert.equal(repeated.alreadyCorrected, true);
+  assert.equal(logs.length, 2);
+});
+
+test('não libera lote com evidência de aceite SMTP após confirmação manual', async () => {
+  const clientReference = 'twt-joint-1234567890-0123456789abcdef';
+  let retractions = 0;
+  await assert.rejects(retractJointDeliveryConfirmation({ clientReference,
+    confirmProviderReferenceAbsent: true }, {
+    getDeliveryReference: async () => ({ clientReference, jointBilling: true, event: 'joint',
+      invoiceId: '1234567890', email: CNPJ, invoiceIds: ['101'],
+      recipientEmails: ['ana@example.com'] }),
+    getDelivery: async () => ({ state: 'delivered', confirmationSource: 'provider_panel',
+      manuallyConfirmedAt: '2026-10-30T12:00:00.000Z', messageId: 'accepted@example.com' }),
+    retractManualJointDelivery: async () => { retractions += 1; return true; }
+  }), /evidência de envio/);
+  assert.equal(retractions, 0);
+});
+
+test('correção da entrega usa uma transação Redis para liberar todos os marcadores', async () => {
+  const calls = [];
+  const result = await billingStore.retractManualJointDelivery({
+    clientReference: 'twt-joint-1234567890-0123456789abcdef',
+    invoiceIds: ['101', '102'], batchId: '1234567890', cnpj: CNPJ,
+    confirmedAt: '2026-10-30T12:00:00.000Z', correctedAt: '2026-10-30T13:00:00.000Z'
+  }, async (...args) => { calls.push(args); return 2; });
+  assert.equal(result, true);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], 'EVAL');
+  assert.equal(calls[0][2], '2');
+  assert.deepEqual(calls[0].slice(-2), ['joint:101:__company__', 'joint:102:__company__']);
 });
 
 test('mensagem contém números, empresa, pagamento e soma em reais', () => {

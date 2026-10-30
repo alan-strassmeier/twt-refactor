@@ -1057,6 +1057,7 @@
     hard_bounce: 'Falha definitiva',
     bounced: 'Entrega recusada',
     review: 'Requer conferência',
+    not_sent: 'Não enviado — confirmação corrigida',
     error: 'Erro',
     waiting_contacts: 'Sem destinatário',
     resolved: 'Resolvido manualmente'
@@ -1172,6 +1173,38 @@
           }
         });
         actionButtons.append(confirmDeliveryButton);
+      }
+      if (record.jointBilling && record.status === 'delivered'
+        && record.confirmationSource === 'provider_panel' && record.clientReference) {
+        const retractButton = document.createElement('button');
+        retractButton.type = 'button';
+        retractButton.className = 'button button-quiet';
+        retractButton.textContent = 'Corrigir confirmação';
+        retractButton.addEventListener('click', async () => {
+          const invoiceCount = Array.isArray(record.invoiceIds) ? record.invoiceIds.length : 0;
+          if (retractButton.dataset.confirmPending !== 'true') {
+            retractButton.dataset.confirmPending = 'true';
+            retractButton.textContent = `Confirmar: referência ausente no provedor · liberar ${invoiceCount} fatura(s)`;
+            return;
+          }
+          retractButton.disabled = true;
+          setLoading(true);
+          try {
+            await requestJson(endpoint('joint-delivery-retract'), {
+              method: 'POST',
+              body: JSON.stringify({ clientReference: record.clientReference,
+                confirmProviderReferenceAbsent: true })
+            });
+            await loadLogs({ page: state.logPage });
+            setMessage('Confirmação corrigida; as faturas foram liberadas para nova conferência antes do envio.', 'success');
+          } catch (error) {
+            setMessage(error.message, 'error');
+            retractButton.disabled = false;
+          } finally {
+            setLoading(false);
+          }
+        });
+        actionButtons.append(retractButton);
       }
       if (RESOLVABLE_LOG_STATUSES.has(record.status) && !retryable) actionButtons.append(resolveButton);
       action.appendChild(actionButtons);

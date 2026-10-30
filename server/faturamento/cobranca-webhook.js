@@ -259,7 +259,7 @@ const processWebhookPayload = async (payload, dependencies = {}) => {
       continue;
     }
     const reference = await store.getDeliveryReference(event.clientReference);
-    if (!reference) {
+    if (!reference || reference.correctedAt) {
       summary.ignored += 1;
       continue;
     }

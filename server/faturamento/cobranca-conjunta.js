@@ -727,8 +727,53 @@ const confirmJointDelivery = async ({ clientReference, confirmAllRecipients }, d
   return { status: 'delivered', invoiceIds: ids, recipients: recipients.length };
 };
 
+const retractJointDeliveryConfirmation = async ({ clientReference, confirmProviderReferenceAbsent }, dependencies = {}) => {
+  const referenceId = String(clientReference || '').trim();
+  if (!/^twt-joint-[a-z0-9-]{20,120}$/i.test(referenceId)
+    || confirmProviderReferenceAbsent !== true) {
+    throw fail('Confirme que a referência do lote não existe no provedor antes de corrigir a entrega.', 400);
+  }
+  const reference = await (dependencies.getDeliveryReference || store.getDeliveryReference)(referenceId);
+  const ids = reference?.invoiceIds;
+  if (!reference?.jointBilling || reference.event !== 'joint'
+    || reference.clientReference !== referenceId || !Array.isArray(ids) || !ids.length
+    || !Array.isArray(reference.recipientEmails) || !reference.recipientEmails.length) {
+    throw fail('Envio conjunto não localizado para esta referência.', 404);
+  }
+  if (reference.correctedAt) return { status: 'not_sent', invoiceIds: ids, alreadyCorrected: true };
+  const get = dependencies.getDelivery || store.getDelivery;
+  const batch = await get('joint', reference.invoiceId, reference.email);
+  if (batch?.state !== 'delivered' || batch.confirmationSource !== 'provider_panel'
+    || !batch.manuallyConfirmedAt || batch.messageId
+    || Object.keys(batch.recipientEvents || {}).length) {
+    throw fail('O lote possui evidência de envio ou não foi confirmado manualmente; correção bloqueada.', 409);
+  }
+  const confirmedAt = batch.manuallyConfirmedAt;
+  await forEachBatch(ids, async (id) => {
+    const record = await get('joint', id, '__company__');
+    if (record?.state !== 'delivered' || record.confirmationSource !== 'provider_panel'
+      || record.manuallyConfirmedAt !== confirmedAt
+      || String(record.batchId) !== String(reference.invoiceId)) {
+      throw fail(`A fatura ${id} não corresponde ao lote confirmado manualmente. Nenhum estado foi alterado.`, 409);
+    }
+  });
+  const correctedAt = (dependencies.now ? dependencies.now() : new Date()).toISOString();
+  const retract = dependencies.retractManualJointDelivery || store.retractManualJointDelivery;
+  const corrected = await retract({ clientReference: referenceId, invoiceIds: ids,
+    batchId: reference.invoiceId, cnpj: reference.email, confirmedAt, correctedAt });
+  if (!corrected) throw fail('O lote mudou durante a correção; confira os logs antes de tentar novamente.', 409);
+  const addLog = dependencies.addLog || store.addLog;
+  await forEachBatch(ids, (id) => addLog({
+    ...reference, id: randomUUID(), invoiceId: id, createdAt: correctedAt,
+    email: reference.recipientEmails.join(', '), status: 'not_sent', correctedAt,
+    correctionSource: 'provider_reference_absent',
+    message: 'Confirmação manual corrigida: referência não localizada no provedor. Fatura liberada para nova conferência e envio.'
+  }));
+  return { status: 'not_sent', invoiceIds: ids, corrected: ids.length };
+};
+
 module.exports = {
   companyAndInvoices, listJointBilling, previewJointBilling,
   refreshJointBillingInvoice, prepareJointBillingInvoice, sendJointBilling,
-  confirmJointDelivery, jointBillingText
+  confirmJointDelivery, retractJointDeliveryConfirmation, jointBillingText
 };
