@@ -3016,6 +3016,8 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(html, /id="previousLogPage"/);
   assert.match(source, /appendInvoiceNavigationCell/);
   assert.match(source, /Marcar resolvido/);
+  assert.match(source, /confirmDeliveryButton\.dataset\.confirmPending !== 'true'/);
+  assert.match(source, /endpoint\('joint-delivery-confirm'\)/);
   assert.match(apiSource, /store\.resolveLog\(body\.id, body\.note\)/);
   assert.match(html, /id="categoryDeleteModal"/);
   assert.match(html, /id="emailLogModal"/);

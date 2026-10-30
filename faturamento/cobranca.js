@@ -1150,7 +1150,11 @@
         confirmDeliveryButton.addEventListener('click', async () => {
           const invoiceCount = Array.isArray(record.invoiceIds) ? record.invoiceIds.length : 0;
           const recipientCount = String(record.email || '').split(',').filter(Boolean).length;
-          if (!window.confirm(`Confirma que o provedor marcou este e-mail com ${invoiceCount} fatura(s) como entregue a todos os ${recipientCount} destinatário(s)? A ação não reenvia e-mails.`)) return;
+          if (confirmDeliveryButton.dataset.confirmPending !== 'true') {
+            confirmDeliveryButton.dataset.confirmPending = 'true';
+            confirmDeliveryButton.textContent = `Confirmar ${invoiceCount} fatura(s) para ${recipientCount} destinatário(s) · sem reenvio`;
+            return;
+          }
           confirmDeliveryButton.disabled = true;
           setLoading(true);
           try {
