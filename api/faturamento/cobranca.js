@@ -19,7 +19,8 @@ const { findDoccobForInvoice } = require('../../server/faturamento/r2-doccob');
 const { getBankSlipRecord } = require('../../server/faturamento/boleto-store');
 const {
   listJointBilling, previewJointBilling, refreshJointBillingInvoice,
-  prepareJointBillingInvoice, sendJointBilling
+  prepareJointBillingInvoice, sendJointBilling, confirmJointDelivery,
+  retractJointDeliveryConfirmation
 } = require('../../server/faturamento/cobranca-conjunta');
 const { listLiquidationLog } = require('../../server/faturamento/liquidation-log');
 const {
@@ -1024,6 +1025,30 @@ const handleJointBillingPrepare = async (req, res) => {
   sendJson(res, 200, await prepareJointBillingInvoice(body));
 };
 
+const handleJointDeliveryConfirmation = async (req, res) => {
+  if (!requireSession(req, res)) return;
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', 'POST');
+    sendJson(res, 405, { message: 'Método não permitido.' });
+    return;
+  }
+  if (!requireSameOrigin(req, res)) return;
+  const body = await parseJsonBody(req, 1024);
+  sendJson(res, 200, await confirmJointDelivery(body));
+};
+
+const handleJointDeliveryRetraction = async (req, res) => {
+  if (!requireSession(req, res)) return;
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', 'POST');
+    sendJson(res, 405, { message: 'Método não permitido.' });
+    return;
+  }
+  if (!requireSameOrigin(req, res)) return;
+  const body = await parseJsonBody(req, 1024);
+  sendJson(res, 200, await retractJointDeliveryConfirmation(body));
+};
+
 const handleWebhook = async (req, res) => {
   const config = webhookConfig();
   if (req.method === 'GET' || req.method === 'HEAD') {
@@ -1094,6 +1119,8 @@ module.exports = async (req, res) => {
     if (query.route === 'joint-billing') return await handleJointBilling(req, res, query);
     if (query.route === 'joint-billing-refresh') return await handleJointBillingRefresh(req, res);
     if (query.route === 'joint-billing-prepare') return await handleJointBillingPrepare(req, res);
+    if (query.route === 'joint-delivery-confirm') return await handleJointDeliveryConfirmation(req, res);
+    if (query.route === 'joint-delivery-retract') return await handleJointDeliveryRetraction(req, res);
     if (query.route === 'process') return await handleProcess(req, res, query);
     if (query.route === 'webhook') return await handleWebhook(req, res);
     sendJson(res, 404, { message: 'Rota de cobrança não encontrada.' });

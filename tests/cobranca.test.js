@@ -3016,6 +3016,8 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(html, /id="previousLogPage"/);
   assert.match(source, /appendInvoiceNavigationCell/);
   assert.match(source, /Marcar resolvido/);
+  assert.match(source, /confirmDeliveryButton\.dataset\.confirmPending !== 'true'/);
+  assert.match(source, /endpoint\('joint-delivery-confirm'\)/);
   assert.match(apiSource, /store\.resolveLog\(body\.id, body\.note\)/);
   assert.match(html, /id="categoryDeleteModal"/);
   assert.match(html, /id="emailLogModal"/);
@@ -3056,10 +3058,16 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(html, /id="refreshJointBillingButton"[^>]*>[\s\S]*?Atualizar<\/button>/);
   assert.match(source, /filter\(needsJointInvoiceData\)[\s\S]*?endpoint\('joint-billing-refresh'\)/);
   assert.match(source, /endpoint\('joint-billing', \{ cnpj: category\.cnpj, list: '1' \}\)/);
+  assert.match(source, /const needsRetry = selected\.some\(\(invoice\) => invoice\.prepareError\)/);
   assert.match(source, /jointSendButton\.textContent = needsRetry \|\| state\.jointSendRetry/);
   assert.match(source, /jointInitialRetryCategory[\s\S]*?jointSendButton\.textContent = 'Tentar novamente'/);
   assert.match(source, /const clearJointBillingMemory = \(\) => \{[\s\S]*?state\.jointPreview = null/);
   assert.match(source, /state\.collectionSection === 'jointBillingSection' && sectionId !== 'jointBillingSection'/);
+  assert.match(source, /const selectedJointInvoices = \(\) =>[\s\S]*?!invoice\.jointSent && !invoice\.sendReview/);
+  assert.match(source, /const errorIds = selectedJointInvoices\(\)\.filter\(needsJointInvoiceData\)/);
+  const loadJointCompanySource = source.slice(source.indexOf('const loadJointCompany = async'),
+    source.indexOf('const renderPending ='));
+  assert.doesNotMatch(loadJointCompanySource, /await retryJointErrors\(preview\)/);
   assert.doesNotMatch(source.slice(source.indexOf('elements.jointSendButton.addEventListener'),
     source.indexOf('elements.logsForm.addEventListener')),
   /if \(selected\.some\(needsJointInvoiceData\)\) \{\s*await retryJointErrors\(preview\)/);

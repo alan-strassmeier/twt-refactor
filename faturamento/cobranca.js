@@ -608,9 +608,16 @@
   };
 
   const selectedJointInvoices = () => (state.jointPreview?.invoices || [])
-    .filter((invoice) => !state.jointExcludedIds.has(invoice.id));
-  const needsJointInvoiceData = (invoice) => invoice.unverified
-    || (!invoice.blocked && !invoice.jointSent && (!invoice.proof || !invoice.snapshot));
+    .filter((invoice) => !state.jointExcludedIds.has(invoice.id)
+      && !invoice.jointSent && !invoice.sendReview);
+  const jointSendSignature = (preview, selected) => [
+    preview?.company?.cnpj || '',
+    selected.map((invoice) => invoice.id).join(','),
+    (preview?.recipients || []).map((recipient) => recipient.email).join(',')
+  ].join('|');
+  const needsJointInvoiceData = (invoice) => !invoice.jointSent && !invoice.sendReview
+    && !invoice.blockKind && (invoice.unverified
+      || (!invoice.blocked && (!invoice.proof || !invoice.snapshot)));
   const blocksJointSend = (invoice) => invoice.jointSent || invoice.sendReview
     || (invoice.blocked && (!invoice.unverified || invoice.blockKind));
   const jointBlockLabel = (invoice) => {
@@ -632,16 +639,18 @@
       return;
     }
     const selected = selectedJointInvoices();
-    const needsRetry = selected.some(needsJointInvoiceData)
-      || selected.some((invoice) => invoice.prepareError);
+    const needsRetry = selected.some((invoice) => invoice.prepareError);
     const total = selected.reduce((sum, invoice) => sum + (Number(invoice.balance) || 0), 0);
     elements.jointTotal.textContent = `${selected.length} selecionada(s) · Total: ${formatMoney(total)}`;
-    const errorCount = (state.jointPreview?.invoices || []).filter(needsJointInvoiceData).length;
+    const errorCount = selected.filter(needsJointInvoiceData).length;
     elements.jointRefreshButton.disabled = state.loading || errorCount === 0;
     elements.jointRefreshButton.title = errorCount
       ? `Reconsultar somente ${errorCount} fatura(s) com erro` : 'Nenhuma fatura com erro para atualizar';
-    elements.jointSendButton.textContent = needsRetry || state.jointSendRetry
-      ? 'Tentar novamente' : 'Enviar cobrança conjunta';
+    const confirming = elements.jointSendButton.dataset.confirmSignature
+      === jointSendSignature(state.jointPreview, selected);
+    elements.jointSendButton.textContent = confirming
+      ? `Confirmar envio de ${selected.length} fatura(s) a ${state.jointPreview.recipients.length} destinatário(s)`
+      : needsRetry || state.jointSendRetry ? 'Tentar novamente' : 'Enviar cobrança conjunta';
     elements.jointSendButton.disabled = state.loading || !selected.length
       || !state.jointPreview?.recipients?.length || selected.some(blocksJointSend);
   };
@@ -660,8 +669,8 @@
       appendCell(row, formatDate(invoice.dueAt));
       appendCell(row, invoice.balance == null ? 'Não confirmado' : formatMoney(invoice.balance));
       const status = appendCell(row, invoice.sendReview ? 'Conferir envio nos logs'
-        : invoice.blocked ? 'Bloqueado'
         : invoice.jointSent ? 'Já enviado em conjunto'
+          : invoice.blocked ? 'Bloqueado'
           : invoice.prepareError ? 'Erro nos anexos'
             : invoice.preparedToken ? 'Anexos prontos' : 'Disponível');
       if (invoice.blockReason || invoice.prepareError) {
@@ -673,8 +682,10 @@
       const toggle = document.createElement('button');
       toggle.type = 'button';
       toggle.className = 'button button-quiet';
-      toggle.disabled = state.loading;
-      toggle.textContent = ignored ? 'Incluir neste envio' : 'Ignorar neste envio';
+      toggle.disabled = state.loading || invoice.jointSent || invoice.sendReview;
+      toggle.textContent = invoice.sendReview ? 'Conferir nos logs'
+        : invoice.jointSent ? 'Já enviada'
+          : ignored ? 'Incluir neste envio' : 'Ignorar neste envio';
       toggle.setAttribute('aria-pressed', String(ignored));
       toggle.addEventListener('click', () => {
         if (state.jointExcludedIds.has(invoice.id)) state.jointExcludedIds.delete(invoice.id);
@@ -690,7 +701,7 @@
     if (!preview.invoices.length) {
       setMessage('Esta empresa não possui faturas em aberto vencidas há pelo menos dois dias.', 'warning');
     } else if (!selected.length) {
-      setMessage('Selecione ao menos uma fatura para o envio.', 'warning');
+      setMessage('Nenhuma fatura apta selecionada. Faturas já enviadas não entram novamente na cobrança.', 'warning');
     } else if (selected.some(blocksJointSend)) {
       const blocked = selected.filter(blocksJointSend);
       setMessage(`Faturas que impedem o envio: ${blocked.map(jointBlockLabel).join('; ')}. `
@@ -714,7 +725,7 @@
   };
 
   const retryJointErrors = async (preview) => {
-    const errorIds = (preview?.invoices || []).filter(needsJointInvoiceData)
+    const errorIds = selectedJointInvoices().filter(needsJointInvoiceData)
       .map((invoice) => invoice.id);
     if (!errorIds.length || state.loading) return;
     let updated = 0;
@@ -771,7 +782,7 @@
       preview.blockedCount = preview.invoices.filter((invoice) => invoice.blocked).length;
       preview.jointSentCount = preview.invoices.filter((invoice) => invoice.jointSent).length;
       renderJointPreview(preview);
-      const remaining = preview.invoices.filter(needsJointInvoiceData).length;
+      const remaining = selectedJointInvoices().filter(needsJointInvoiceData).length;
       const blocked = selectedJointInvoices().filter((invoice) => !needsJointInvoiceData(invoice)
         && (invoice.blocked || invoice.jointSent)).length;
       const summary = `${updated} fatura(s) confirmada(s), ${removed} removida(s) e ${remaining} ainda sem confirmação.`;
@@ -848,6 +859,7 @@
     if (state.loading) return;
     state.jointInitialRetryCategory = null;
     state.jointSendRetry = false;
+    delete elements.jointSendButton.dataset.confirmSignature;
     setLoading(true);
     setMessage(`Buscando faturas vencidas em aberto de ${category.name}…`);
     elements.jointPreview.hidden = true;
@@ -858,8 +870,6 @@
       const preview = await requestJson(endpoint('joint-billing', { cnpj: category.cnpj, list: '1' }));
       renderJointPreview(preview);
       listed = true;
-      setLoading(false);
-      await retryJointErrors(preview);
     } catch (error) {
       if (!listed) {
         state.jointInitialRetryCategory = category;
@@ -1056,6 +1066,7 @@
     hard_bounce: 'Falha definitiva',
     bounced: 'Entrega recusada',
     review: 'Requer conferência',
+    not_sent: 'Não enviado — confirmação corrigida',
     error: 'Erro',
     waiting_contacts: 'Sem destinatário',
     resolved: 'Resolvido manualmente'
@@ -1141,6 +1152,69 @@
         }
       });
       actionButtons.append(previewButton);
+      if (record.jointBilling && record.status === 'review' && record.clientReference) {
+        const confirmDeliveryButton = document.createElement('button');
+        confirmDeliveryButton.type = 'button';
+        confirmDeliveryButton.className = 'button button-quiet log-confirm-delivery-button';
+        confirmDeliveryButton.textContent = 'Confirmar entrega no provedor';
+        confirmDeliveryButton.addEventListener('click', async () => {
+          const invoiceCount = Array.isArray(record.invoiceIds) ? record.invoiceIds.length : 0;
+          const recipientCount = String(record.email || '').split(',').filter(Boolean).length;
+          if (confirmDeliveryButton.dataset.confirmPending !== 'true') {
+            confirmDeliveryButton.dataset.confirmPending = 'true';
+            confirmDeliveryButton.textContent = `Confirmar ${invoiceCount} fatura(s) para ${recipientCount} destinatário(s) · sem reenvio`;
+            return;
+          }
+          confirmDeliveryButton.disabled = true;
+          setLoading(true);
+          try {
+            await requestJson(endpoint('joint-delivery-confirm'), {
+              method: 'POST',
+              body: JSON.stringify({ clientReference: record.clientReference, confirmAllRecipients: true })
+            });
+            await loadLogs({ page: state.logPage });
+            setMessage('Entrega registrada após conferência no provedor; nenhum e-mail foi reenviado.', 'success');
+          } catch (error) {
+            setMessage(error.message, 'error');
+            confirmDeliveryButton.disabled = false;
+          } finally {
+            setLoading(false);
+          }
+        });
+        actionButtons.append(confirmDeliveryButton);
+      }
+      if (record.jointBilling && record.status === 'delivered'
+        && record.confirmationSource === 'provider_panel' && record.clientReference) {
+        const retractButton = document.createElement('button');
+        retractButton.type = 'button';
+        retractButton.className = 'button button-quiet';
+        retractButton.textContent = 'Corrigir confirmação';
+        retractButton.addEventListener('click', async () => {
+          const invoiceCount = Array.isArray(record.invoiceIds) ? record.invoiceIds.length : 0;
+          if (retractButton.dataset.confirmPending !== 'true') {
+            retractButton.dataset.confirmPending = 'true';
+            retractButton.textContent = `Confirmar: referência ausente no provedor · liberar ${invoiceCount} fatura(s)`;
+            return;
+          }
+          retractButton.disabled = true;
+          setLoading(true);
+          try {
+            await requestJson(endpoint('joint-delivery-retract'), {
+              method: 'POST',
+              body: JSON.stringify({ clientReference: record.clientReference,
+                confirmProviderReferenceAbsent: true })
+            });
+            await loadLogs({ page: state.logPage });
+            setMessage('Confirmação corrigida; as faturas foram liberadas para nova conferência antes do envio.', 'success');
+          } catch (error) {
+            setMessage(error.message, 'error');
+            retractButton.disabled = false;
+          } finally {
+            setLoading(false);
+          }
+        });
+        actionButtons.append(retractButton);
+      }
       if (RESOLVABLE_LOG_STATUSES.has(record.status) && !retryable) actionButtons.append(resolveButton);
       action.appendChild(actionButtons);
       row.appendChild(action);
@@ -1681,7 +1755,16 @@
     const selected = selectedJointInvoices();
     if (!selected.length || !preview?.recipients?.length
       || selected.some(blocksJointSend)) return;
-    if (!window.confirm(`Enviar cobrança para ${preview.company.name}, com até ${selected.length} fatura(s) e anexos, a ${preview.recipients.length} destinatário(s)? Cada e-mail pronto será enviado automaticamente, com até 18 MB. Faturas cuja situação não puder ser confirmada na Brudam ficarão em espera para novas tentativas; nenhuma será enviada sem confirmação.`)) return;
+    const signature = jointSendSignature(preview, selected);
+    if (elements.jointSendButton.dataset.confirmSignature !== signature) {
+      elements.jointSendButton.dataset.confirmSignature = signature;
+      updateJointSelection();
+      setMessage(`Confirme o envio das ${selected.length} fatura(s) de ${preview.company.name} `
+        + `a ${preview.recipients.length} destinatário(s). Cada e-mail será enviado assim que estiver pronto; `
+        + 'faturas não confirmadas na Brudam ficarão em espera.', 'warning');
+      return;
+    }
+    delete elements.jointSendButton.dataset.confirmSignature;
     setLoading(true);
     setMessage('Preparando os anexos das faturas liberadas…');
     let sentBatches = 0;

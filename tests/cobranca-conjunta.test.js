@@ -5,6 +5,8 @@ const {
   previewJointBilling,
   refreshJointBillingInvoice,
   prepareJointBillingInvoice,
+  confirmJointDelivery,
+  retractJointDeliveryConfirmation,
   sendJointBilling: sendJointBillingCore
 } = require('../server/faturamento/cobranca-conjunta');
 const { savePreparedPackage, loadPreparedPackage } = require('../server/faturamento/cobranca-conjunta-cache');
@@ -568,6 +570,31 @@ test('falha HTTP 429 ao preparar anexos identifica a fatura e permite tentar nov
   assert.equal(dependencies.sent.length, 0);
 });
 
+test('boleto vencido sem registro gera erro definitivo sem repetir preparação', async () => {
+  const dependencies = mockDependencies({
+    getCategory: async () => ({ ...category, billingMethod: 'bank_slip' }),
+    fetchInvoicePdfData: async (id) => ({
+      invoice: { ...invoices.find((item) => item.id === id), payment: null },
+      client: { document: CNPJ }
+    }),
+    generateInvoiceBankSlip: async () => {
+      throw Object.assign(new Error('O vencimento da fatura já passou.'), { statusCode: 422 });
+    }
+  });
+  const checked = await refreshJointBillingInvoice({ cnpj: CNPJ, invoiceId: '101',
+    includePdfData: true }, dependencies);
+  await assert.rejects(prepareJointBillingInvoice({ cnpj: CNPJ, invoiceId: '101',
+    proof: checked.invoice.proof, snapshot: checked.invoice.snapshot }, dependencies),
+  (error) => error.statusCode === 422 && error.retryable === false
+    && error.invoiceId === '101' && /vencimento da fatura já passou/.test(error.message));
+});
+
+test('servidor recusa e-mail com mais de dez faturas antes de acessar documentos', async () => {
+  const ids = Array.from({ length: 11 }, (_, index) => String(index + 1));
+  await assert.rejects(sendJointBillingCore({ cnpj: CNPJ, invoiceIds: ids },
+    mockDependencies()), (error) => error.statusCode === 413 && /no máximo 10 faturas/.test(error.message));
+});
+
 test('não envia se algum DOCCOB faltar', async () => {
   const dependencies = mockDependencies({ findDoccobForInvoice: async ({ invoiceId }) =>
     invoiceId === '102' ? null : { invoice: { issuerCnpj: '00000000000000' } } });
@@ -742,6 +769,164 @@ test('webhook de cobrança conjunta registra confirmação para cada fatura', as
     } }]
   }, { store: webhookStore, now: () => new Date('2026-10-18T16:01:00Z') });
   assert.equal(delivery.state, 'delivered');
+});
+
+test('webhook de cobrança conjunta identifica destinatário no formato aninhado do provedor', async () => {
+  const dependencies = mockDependencies();
+  await sendJointBilling({ cnpj: CNPJ, invoiceIds: ['101', '102'] }, dependencies);
+  const [reference, savedReference] = dependencies.references[0];
+  const records = [];
+  let delivery = { state: 'review' };
+  const webhookStore = {
+    getDeliveryReference: async () => savedReference,
+    claimWebhookEvent: async () => true,
+    releaseWebhookEvent: async () => true,
+    getDelivery: async () => delivery,
+    saveDelivery: async (_event, _id, _email, record) => { delivery = record; },
+    addLog: async (record) => records.push(record)
+  };
+  for (const [index, email] of ['ana@example.com', 'beto@example.com'].entries()) {
+    const to = index === 0
+      ? [{ email_address: { address: email, name: 'Destinatário' } }]
+      : { email_address: { address: email, name: 'Destinatário' } };
+    await processWebhookPayload({
+      event_name: ['delivered'], webhook_request_id: `joint-nested-${index}`,
+      event_message: [{ request_id: `nested-${index}`, email_info: {
+        client_reference: reference, to
+      } }]
+    }, { store: webhookStore, now: () => new Date('2026-10-18T16:00:00Z') });
+  }
+  assert.deepEqual(records.map((record) => record.email), [
+    'ana@example.com', 'ana@example.com', 'beto@example.com', 'beto@example.com'
+  ]);
+  assert.equal(delivery.state, 'delivered');
+});
+
+test('confirmação manual de entrega altera apenas o lote reservado e registra auditoria sem enviar e-mail', async () => {
+  const clientReference = 'twt-joint-1234567890-0123456789abcdef';
+  const batchId = '1234567890';
+  const reference = {
+    clientReference, jointBilling: true, event: 'joint', invoiceId: batchId,
+    email: CNPJ, clientCnpj: CNPJ, clientName: 'Empresa Exemplo',
+    invoiceIds: ['101', '102'], recipientEmails: ['ana@example.com', 'beto@example.com']
+  };
+  const records = new Map([
+    [`joint:${batchId}:${CNPJ}`, { state: 'review', invoiceIds: ['101', '102'] }],
+    ['joint:101:__company__', { state: 'review', batchId }],
+    ['joint:102:__company__', { state: 'review', batchId }]
+  ]);
+  const logs = [];
+  const dependencies = {
+    getDeliveryReference: async (id) => id === clientReference ? reference : null,
+    getDelivery: async (event, id, email) => records.get(`${event}:${id}:${email}`),
+    saveDelivery: async (event, id, email, record) => records.set(`${event}:${id}:${email}`, record),
+    addLog: async (record) => logs.push(record),
+    now: () => new Date('2026-10-30T12:00:00Z')
+  };
+  await assert.rejects(confirmJointDelivery({ clientReference, confirmAllRecipients: false }, dependencies),
+    /Confirme a entrega/);
+  const result = await confirmJointDelivery({ clientReference, confirmAllRecipients: true }, dependencies);
+  assert.equal(result.status, 'delivered');
+  assert.equal(result.recipients, 2);
+  assert.equal(records.get(`joint:${batchId}:${CNPJ}`).state, 'delivered');
+  assert.equal(records.get('joint:101:__company__').state, 'delivered');
+  assert.deepEqual(logs.map((record) => record.invoiceId), ['101', '102']);
+  assert.ok(logs.every((record) => record.status === 'delivered'
+    && record.confirmationSource === 'provider_panel'
+    && record.email === 'ana@example.com, beto@example.com'));
+  const repeated = await confirmJointDelivery({ clientReference, confirmAllRecipients: true }, dependencies);
+  assert.equal(repeated.alreadyConfirmed, true);
+  assert.equal(logs.length, 2);
+});
+
+test('confirmação manual não sobrescreve rejeição registrada pelo provedor', async () => {
+  const clientReference = 'twt-joint-1234567890-0123456789abcdef';
+  let saves = 0;
+  await assert.rejects(confirmJointDelivery({ clientReference, confirmAllRecipients: true }, {
+    getDeliveryReference: async () => ({
+      clientReference, jointBilling: true, event: 'joint', invoiceId: '1234567890',
+      email: CNPJ, invoiceIds: ['101'], recipientEmails: ['ana@example.com']
+    }),
+    getDelivery: async () => ({ state: 'review', recipientEvents: {
+      'ana@example.com': { status: 'hard_bounce' }
+    } }),
+    saveDelivery: async () => { saves += 1; }
+  }), /evento incompatível/);
+  assert.equal(saves, 0);
+});
+
+test('corrige confirmação manual de lote sem envio no provedor e libera apenas suas faturas', async () => {
+  const clientReference = 'twt-joint-1234567890-0123456789abcdef';
+  const batchId = '1234567890';
+  const confirmedAt = '2026-10-30T12:00:00.000Z';
+  const reference = {
+    clientReference, jointBilling: true, event: 'joint', invoiceId: batchId,
+    email: CNPJ, clientCnpj: CNPJ, clientName: 'Empresa Exemplo',
+    invoiceIds: ['101', '102'], recipientEmails: ['ana@example.com', 'beto@example.com']
+  };
+  const records = new Map([
+    [`joint:${batchId}:${CNPJ}`, { state: 'delivered', confirmationSource: 'provider_panel',
+      manuallyConfirmedAt: confirmedAt }],
+    ['joint:101:__company__', { state: 'delivered', confirmationSource: 'provider_panel',
+      manuallyConfirmedAt: confirmedAt, batchId }],
+    ['joint:102:__company__', { state: 'delivered', confirmationSource: 'provider_panel',
+      manuallyConfirmedAt: confirmedAt, batchId }]
+  ]);
+  const logs = [];
+  const dependencies = {
+    getDeliveryReference: async () => reference,
+    getDelivery: async (event, id, email) => records.get(`${event}:${id}:${email}`),
+    retractManualJointDelivery: async ({ invoiceIds, confirmedAt: expected }) => {
+      assert.deepEqual(invoiceIds, ['101', '102']);
+      assert.equal(expected, confirmedAt);
+      records.delete('joint:101:__company__');
+      records.delete('joint:102:__company__');
+      reference.correctedAt = '2026-10-30T13:00:00.000Z';
+      return true;
+    },
+    addLog: async (record) => logs.push(record),
+    now: () => new Date('2026-10-30T13:00:00Z')
+  };
+  await assert.rejects(retractJointDeliveryConfirmation({ clientReference,
+    confirmProviderReferenceAbsent: false }, dependencies), /Confirme que a referência/);
+  const result = await retractJointDeliveryConfirmation({ clientReference,
+    confirmProviderReferenceAbsent: true }, dependencies);
+  assert.equal(result.corrected, 2);
+  assert.equal(records.has('joint:101:__company__'), false);
+  assert.deepEqual(logs.map((record) => record.status), ['not_sent', 'not_sent']);
+  const repeated = await retractJointDeliveryConfirmation({ clientReference,
+    confirmProviderReferenceAbsent: true }, dependencies);
+  assert.equal(repeated.alreadyCorrected, true);
+  assert.equal(logs.length, 2);
+});
+
+test('não libera lote com evidência de aceite SMTP após confirmação manual', async () => {
+  const clientReference = 'twt-joint-1234567890-0123456789abcdef';
+  let retractions = 0;
+  await assert.rejects(retractJointDeliveryConfirmation({ clientReference,
+    confirmProviderReferenceAbsent: true }, {
+    getDeliveryReference: async () => ({ clientReference, jointBilling: true, event: 'joint',
+      invoiceId: '1234567890', email: CNPJ, invoiceIds: ['101'],
+      recipientEmails: ['ana@example.com'] }),
+    getDelivery: async () => ({ state: 'delivered', confirmationSource: 'provider_panel',
+      manuallyConfirmedAt: '2026-10-30T12:00:00.000Z', messageId: 'accepted@example.com' }),
+    retractManualJointDelivery: async () => { retractions += 1; return true; }
+  }), /evidência de envio/);
+  assert.equal(retractions, 0);
+});
+
+test('correção da entrega usa uma transação Redis para liberar todos os marcadores', async () => {
+  const calls = [];
+  const result = await billingStore.retractManualJointDelivery({
+    clientReference: 'twt-joint-1234567890-0123456789abcdef',
+    invoiceIds: ['101', '102'], batchId: '1234567890', cnpj: CNPJ,
+    confirmedAt: '2026-10-30T12:00:00.000Z', correctedAt: '2026-10-30T13:00:00.000Z'
+  }, async (...args) => { calls.push(args); return 2; });
+  assert.equal(result, true);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], 'EVAL');
+  assert.equal(calls[0][2], '2');
+  assert.deepEqual(calls[0].slice(-2), ['joint:101:__company__', 'joint:102:__company__']);
 });
 
 test('mensagem contém números, empresa, pagamento e soma em reais', () => {

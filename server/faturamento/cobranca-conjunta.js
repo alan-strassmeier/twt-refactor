@@ -22,6 +22,7 @@ const store = require('./cobranca-store');
 const { savePreparedPackage, loadPreparedPackage } = require('./cobranca-conjunta-cache');
 
 const MAX_ATTACHMENT_BYTES = 18 * 1024 * 1024;
+const MAX_INVOICES_PER_EMAIL = 10;
 const INVOICE_CHECK_CONCURRENCY = 3;
 const EMPTY_INVOICE_RETRIES = 3;
 const PREVIEW_PROOF_TTL_MS = 30 * 60 * 1000;
@@ -433,9 +434,10 @@ const prepareJointBillingInvoice = async ({ cnpj: cnpjInput, invoiceId: requeste
     const status = Number(error?.upstreamStatus || error?.statusCode || 0);
     const reason = status === 429 ? 'A Brudam limitou a consulta dos documentos (HTTP 429).'
       : String(error?.message || 'Falha desconhecida ao preparar os documentos.').slice(0, 220);
+    const permanent = [409, 413, 422].includes(status) || error?.retryable === false;
     throw Object.assign(fail(`Fatura ${id}: ${reason} Nenhum e-mail foi enviado.`,
-      status === 429 ? 429 : status === 413 ? 413 : 503), {
-      invoiceId: id, upstreamStatus: status || null, retryable: status !== 413,
+      status === 429 ? 429 : permanent && status ? status : 503), {
+      invoiceId: id, upstreamStatus: status || null, retryable: !permanent,
       retryStage: error?.retryStage || 'prepare', cause: error
     });
   }
@@ -448,6 +450,9 @@ const sendJointBilling = async ({ cnpj: cnpjInput, invoiceIds, invoiceProofs,
     ? sortIds(invoiceIds) : null;
   if (!expectedIds || expectedIds.length !== invoiceIds.length) {
     throw fail('Confira a lista de faturas antes de enviar.', 422);
+  }
+  if (expectedIds.length > MAX_INVOICES_PER_EMAIL) {
+    throw fail(`Cada e-mail pode conter no máximo ${MAX_INVOICES_PER_EMAIL} faturas. Divida o envio em grupos menores.`, 413);
   }
   const cnpj = digits(cnpjInput);
   if (cnpj.length !== 14) throw fail('Informe um CNPJ válido.', 422);
@@ -642,6 +647,15 @@ const sendJointBilling = async ({ cnpj: cnpjInput, invoiceIds, invoiceProofs,
     const code = String(error?.code || '').toUpperCase();
     const definitelyNotAccepted = !smtpStarted || error?.deliveryAccepted === false
       || ['EAUTH', 'EDNS', 'ENOTFOUND', 'ECONNREFUSED'].includes(code);
+    console.error('[faturamento:cobranca-conjunta:envio]', {
+      invoiceCount: expectedIds.length,
+      attachmentBytes: attachments.reduce((sum, item) => sum + item.content.length, 0),
+      smtpStarted,
+      definitelyNotAccepted,
+      code: code.slice(0, 32),
+      responseCode: Number(error?.responseCode) || null,
+      command: String(error?.command || '').slice(0, 32)
+    });
     if (definitelyNotAccepted) {
       try { await release(event, batchId, recipientKey, claimId); } catch { /* falha fechada */ }
       await forEachBatch(claimedInvoiceIds, async (id) => {
@@ -662,7 +676,104 @@ const sendJointBilling = async ({ cnpj: cnpjInput, invoiceIds, invoiceProofs,
   }
 };
 
+const confirmJointDelivery = async ({ clientReference, confirmAllRecipients }, dependencies = {}) => {
+  const referenceId = String(clientReference || '').trim();
+  if (!/^twt-joint-[a-z0-9-]{20,120}$/i.test(referenceId) || confirmAllRecipients !== true) {
+    throw fail('Confirme a entrega a todos os destinatários usando a referência do envio conjunto.', 400);
+  }
+  const reference = await (dependencies.getDeliveryReference || store.getDeliveryReference)(referenceId);
+  const ids = reference?.invoiceIds;
+  const recipients = reference?.recipientEmails;
+  if (!reference?.jointBilling || reference.event !== 'joint'
+    || reference.clientReference !== referenceId || !Array.isArray(ids) || !ids.length
+    || !Array.isArray(recipients) || !recipients.length) {
+    throw fail('Envio conjunto não localizado para esta referência.', 404);
+  }
+  const get = dependencies.getDelivery || store.getDelivery;
+  const save = dependencies.saveDelivery || store.saveDelivery;
+  const addLog = dependencies.addLog || store.addLog;
+  const batch = await get('joint', reference.invoiceId, reference.email);
+  if (!batch) throw fail('Reserva do envio conjunto não localizada. Nenhum estado foi alterado.', 409);
+  if (batch.state === 'delivered') return { status: 'delivered', invoiceIds: ids, alreadyConfirmed: true };
+  if (!['review', 'sent'].includes(batch.state)
+    || Object.values(batch.recipientEvents || {}).some((entry) =>
+      ['soft_bounce', 'hard_bounce', 'bounced'].includes(entry?.status))) {
+    throw fail('Há evento incompatível com a entrega completa; confira o histórico no provedor.', 409);
+  }
+  const invoiceRecords = new Map();
+  await forEachBatch(ids, async (id) => {
+    const record = await get('joint', id, '__company__');
+    if (!record || String(record.batchId) !== String(reference.invoiceId)
+      || !['review', 'sent', 'delivered'].includes(record.state)) {
+      throw fail(`A reserva da fatura ${id} não corresponde ao envio confirmado. Nenhum estado foi alterado.`, 409);
+    }
+    invoiceRecords.set(id, record);
+  });
+  const confirmedAt = (dependencies.now ? dependencies.now() : new Date()).toISOString();
+  await forEachBatch(ids, (id) => save('joint', id, '__company__', {
+    ...invoiceRecords.get(id), state: 'delivered', manuallyConfirmedAt: confirmedAt,
+    confirmationSource: 'provider_panel'
+  }));
+  await save('joint', reference.invoiceId, reference.email, {
+    ...batch, state: 'delivered', manuallyConfirmedAt: confirmedAt,
+    confirmationSource: 'provider_panel'
+  });
+  await forEachBatch(ids, (id) => addLog({
+    ...reference, id: randomUUID(), invoiceId: id, createdAt: confirmedAt,
+    email: recipients.join(', '), status: 'delivered', manuallyConfirmedAt: confirmedAt,
+    confirmationSource: 'provider_panel',
+    message: `Entrega aos ${recipients.length} destinatário(s) confirmada manualmente no painel do provedor; nenhum e-mail foi reenviado.`
+  }));
+  return { status: 'delivered', invoiceIds: ids, recipients: recipients.length };
+};
+
+const retractJointDeliveryConfirmation = async ({ clientReference, confirmProviderReferenceAbsent }, dependencies = {}) => {
+  const referenceId = String(clientReference || '').trim();
+  if (!/^twt-joint-[a-z0-9-]{20,120}$/i.test(referenceId)
+    || confirmProviderReferenceAbsent !== true) {
+    throw fail('Confirme que a referência do lote não existe no provedor antes de corrigir a entrega.', 400);
+  }
+  const reference = await (dependencies.getDeliveryReference || store.getDeliveryReference)(referenceId);
+  const ids = reference?.invoiceIds;
+  if (!reference?.jointBilling || reference.event !== 'joint'
+    || reference.clientReference !== referenceId || !Array.isArray(ids) || !ids.length
+    || !Array.isArray(reference.recipientEmails) || !reference.recipientEmails.length) {
+    throw fail('Envio conjunto não localizado para esta referência.', 404);
+  }
+  if (reference.correctedAt) return { status: 'not_sent', invoiceIds: ids, alreadyCorrected: true };
+  const get = dependencies.getDelivery || store.getDelivery;
+  const batch = await get('joint', reference.invoiceId, reference.email);
+  if (batch?.state !== 'delivered' || batch.confirmationSource !== 'provider_panel'
+    || !batch.manuallyConfirmedAt || batch.messageId
+    || Object.keys(batch.recipientEvents || {}).length) {
+    throw fail('O lote possui evidência de envio ou não foi confirmado manualmente; correção bloqueada.', 409);
+  }
+  const confirmedAt = batch.manuallyConfirmedAt;
+  await forEachBatch(ids, async (id) => {
+    const record = await get('joint', id, '__company__');
+    if (record?.state !== 'delivered' || record.confirmationSource !== 'provider_panel'
+      || record.manuallyConfirmedAt !== confirmedAt
+      || String(record.batchId) !== String(reference.invoiceId)) {
+      throw fail(`A fatura ${id} não corresponde ao lote confirmado manualmente. Nenhum estado foi alterado.`, 409);
+    }
+  });
+  const correctedAt = (dependencies.now ? dependencies.now() : new Date()).toISOString();
+  const retract = dependencies.retractManualJointDelivery || store.retractManualJointDelivery;
+  const corrected = await retract({ clientReference: referenceId, invoiceIds: ids,
+    batchId: reference.invoiceId, cnpj: reference.email, confirmedAt, correctedAt });
+  if (!corrected) throw fail('O lote mudou durante a correção; confira os logs antes de tentar novamente.', 409);
+  const addLog = dependencies.addLog || store.addLog;
+  await forEachBatch(ids, (id) => addLog({
+    ...reference, id: randomUUID(), invoiceId: id, createdAt: correctedAt,
+    email: reference.recipientEmails.join(', '), status: 'not_sent', correctedAt,
+    correctionSource: 'provider_reference_absent',
+    message: 'Confirmação manual corrigida: referência não localizada no provedor. Fatura liberada para nova conferência e envio.'
+  }));
+  return { status: 'not_sent', invoiceIds: ids, corrected: ids.length };
+};
+
 module.exports = {
   companyAndInvoices, listJointBilling, previewJointBilling,
-  refreshJointBillingInvoice, prepareJointBillingInvoice, sendJointBilling, jointBillingText
+  refreshJointBillingInvoice, prepareJointBillingInvoice, sendJointBilling,
+  confirmJointDelivery, retractJointDeliveryConfirmation, jointBillingText
 };
