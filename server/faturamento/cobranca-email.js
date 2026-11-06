@@ -1,4 +1,5 @@
 const nodemailer = require('nodemailer');
+const freightNoticeConfig = require('./cobranca-aviso.json');
 
 const EVENT_TYPES = Object.freeze({
   initial: 'initial',
@@ -9,12 +10,42 @@ const EVENT_TYPES = Object.freeze({
 const DEFAULT_ALERT_EMAIL = 'adrianoldepaula@gmail.com';
 const LEGACY_ALERT_EMAIL = 'adriano@twt.com.br';
 
+const freightNoticeText = [
+  `*${freightNoticeConfig.title}*`, ...freightNoticeConfig.paragraphs,
+  `*${freightNoticeConfig.signature}*`
+].join('\n\n');
+
+const normalizeCompanyName = (value) => String(value || '')
+  .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
+
+const freightNoticeApplies = (companyNames, now = new Date(), config = freightNoticeConfig) => {
+  if (!config.enabled) return false;
+  const dateParts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit'
+  }).formatToParts(now);
+  const part = (type) => dateParts.find((entry) => entry.type === type)?.value;
+  const date = `${part('year')}-${part('month')}-${part('day')}`;
+  if (date < config.startDate) return false;
+  return [companyNames].flat().some((value) => {
+    const name = normalizeCompanyName(value);
+    return config.companyNameContains.some((part) => name.includes(normalizeCompanyName(part)))
+      || config.companyNameWords.some((word) => name.split(/[^A-Z0-9]+/).includes(normalizeCompanyName(word)));
+  });
+};
+
 const htmlEscape = (value) => String(value ?? '')
   .replace(/&/g, '&amp;')
   .replace(/</g, '&lt;')
   .replace(/>/g, '&gt;')
   .replace(/"/g, '&quot;')
   .replace(/'/g, '&#39;');
+
+const noticeMarkup = (value) => htmlEscape(value).replace(/\*([^*]+)\*/g, '<strong>$1</strong>');
+const freightNoticeHtml = `<section style="margin-top:24px;padding-top:20px;border-top:1px solid #d8e3ec">
+<p><strong>${htmlEscape(freightNoticeConfig.title)}</strong></p>
+${freightNoticeConfig.paragraphs.map((paragraph) => `<p>${noticeMarkup(paragraph)}</p>`).join('\n')}
+<p><strong>${htmlEscape(freightNoticeConfig.signature)}</strong></p>
+</section>`;
 
 const formatDate = (value) => {
   const match = String(value || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
@@ -93,7 +124,7 @@ const billingSubject = (event, data) => event === EVENT_TYPES.overdue
   ? 'Aviso de Fatura Vencida - TWT LOG'
   : `Fatura : ${data.invoice.id} Vecto: ${formatDate(data.invoice.dueAt)} - TWT LOG`;
 
-const billingText = (event, data, contact) => {
+const billingText = (event, data, contact, now = new Date()) => {
   const lines = ['Aviso de Faturamento'];
   if (event === EVENT_TYPES.reminder) lines.push('Perto do vencimento');
   lines.push('', `Prezado(a), ${contact.firstName}`);
@@ -108,10 +139,11 @@ const billingText = (event, data, contact) => {
     `Valor: ${formatCurrency(data.invoice.total)}`,
     `Cliente: ${clientDisplay(data)}.`
   );
+  if (freightNoticeApplies([data.client?.tradeName, data.client?.name], now)) lines.push('', freightNoticeText);
   return lines.join('\n');
 };
 
-const billingHtml = (event, data, contact) => {
+const billingHtml = (event, data, contact, now = new Date()) => {
   const overdue = event === EVENT_TYPES.overdue;
   const reminder = event === EVENT_TYPES.reminder;
   return `<!doctype html>
@@ -135,6 +167,7 @@ const billingHtml = (event, data, contact) => {
           <tr><td style="padding:9px 0;border-top:1px solid #e6edf2;color:#66798a">Valor</td><td style="padding:9px 0;border-top:1px solid #e6edf2;text-align:right;font-weight:700">${htmlEscape(formatCurrency(data.invoice.total))}</td></tr>
           <tr><td style="padding:9px 0;border-top:1px solid #e6edf2;color:#66798a">Cliente</td><td style="padding:9px 0;border-top:1px solid #e6edf2;text-align:right;font-weight:700">${htmlEscape(clientDisplay(data))}</td></tr>
         </table>
+        ${freightNoticeApplies([data.client?.tradeName, data.client?.name], now) ? freightNoticeHtml : ''}
       </td></tr>
     </table>
   </td></tr></table>
@@ -241,7 +274,7 @@ const sendBillingEmail = async ({
 
 const jointBillingSubject = 'Faturas vencidas';
 
-const jointBillingText = ({ companyName, invoices, paymentMethod, totalBalance }) => [
+const jointBillingText = ({ companyName, targetCompanyName, invoices, paymentMethod, totalBalance }, now = new Date()) => [
   `Aviso de Faturamento das faturas ${invoices.map(({ id }) => id).join(', ')}`,
   '',
   `Prezado(a) ${companyName}`,
@@ -249,24 +282,26 @@ const jointBillingText = ({ companyName, invoices, paymentMethod, totalBalance }
   ...invoices.map(({ id, overdueDays }) => `- Fatura ${id}: vencida há ${overdueDays} ${overdueDays === 1 ? 'dia' : 'dias'}`),
   '',
   `Forma de pagamento: ${paymentMethod}`,
-  `Valor Total: ${formatCurrency(totalBalance)}`
+  `Valor Total: ${formatCurrency(totalBalance)}`,
+  ...(freightNoticeApplies(targetCompanyName || companyName, now) ? ['', freightNoticeText] : [])
 ].join('\n');
 
-const jointBillingHtml = ({ companyName, invoices, paymentMethod, totalBalance }) => `<!doctype html>
+const jointBillingHtml = ({ companyName, targetCompanyName, invoices, paymentMethod, totalBalance }, now = new Date()) => `<!doctype html>
 <html lang="pt-BR"><body style="font-family:Arial,sans-serif;color:#1a3145">
 <h1>Aviso de Faturamento das faturas ${htmlEscape(invoices.map(({ id }) => id).join(', '))}</h1>
 <p>Prezado(a) ${htmlEscape(companyName)}</p>
 <p>Seguem as faturas em anexo:</p>
 <ul>${invoices.map(({ id, overdueDays }) => `<li>Fatura ${htmlEscape(id)}: vencida há ${overdueDays} ${overdueDays === 1 ? 'dia' : 'dias'}</li>`).join('')}</ul>
 <p>Forma de pagamento: ${htmlEscape(paymentMethod)}<br>Valor Total: ${htmlEscape(formatCurrency(totalBalance))}</p>
+${freightNoticeApplies(targetCompanyName || companyName, now) ? freightNoticeHtml : ''}
 </body></html>`;
 
 const sendJointBillingEmail = async ({
-  recipients, companyName, invoices, paymentMethod, totalBalance,
+  recipients, companyName, targetCompanyName, invoices, paymentMethod, totalBalance,
   attachments, clientReference, transport, config = zohoConfig()
 }) => {
   const activeTransport = transport || createZohoTransport(config);
-  const content = { companyName, invoices, paymentMethod, totalBalance };
+  const content = { companyName, targetCompanyName, invoices, paymentMethod, totalBalance };
   const info = await activeTransport.sendMail({
     disableFileAccess: true,
     disableUrlAccess: true,
@@ -311,5 +346,7 @@ module.exports = {
   jointBillingSubject,
   jointBillingText,
   jointBillingHtml,
-  sendJointBillingEmail
+  sendJointBillingEmail,
+  freightNoticeApplies,
+  freightNoticeText
 };

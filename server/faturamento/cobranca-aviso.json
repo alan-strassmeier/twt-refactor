@@ -1,0 +1,13 @@
+{
+  "enabled": true,
+  "startDate": "2026-11-06",
+  "companyNameContains": ["White Martis", "White Martins", "Verallia"],
+  "companyNameWords": ["BL"],
+  "title": "COMUNICADO — PRAZO DE PAGAMENTO DE FRETES",
+  "paragraphs": [
+    "Em conformidade com a Lei Federal nº 15.485/2026 e o Comunicado Geral SUROC nº 1/2026 da ANTT, publicado em 05/11/2026, informamos que o prazo máximo legal para quitação dos fretes rodoviários é de *30 (trinta) dias úteis*.",
+    "Em alinhamento com a nova legislação, a DSL do Brasil passa a adotar, para novas operações, o prazo comercial de *30 (trinta) dias corridos*, mediante alinhamento com o contratante.",
+    "Agradecemos a parceria e permanecemos à disposição para esclarecimentos."
+  ],
+  "signature": "DSL do Brasil"
+}
