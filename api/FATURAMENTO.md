@@ -122,6 +122,14 @@ Depois de cadastrar ou alterar as variáveis, faça um novo deployment.
 
 ## Cobrança automática por e-mail
 
+O comunicado de prazo de pagamento de fretes é controlado em
+`server/faturamento/cobranca-aviso.json`. Altere `enabled` para `false` para
+desligá-lo; `startDate` define o primeiro dia de envio no horário de São Paulo.
+Adicione ou remova nomes em `companyNameContains` (trechos do nome) e
+`companyNameWords` (palavras inteiras, como `BL`). O texto do comunicado está
+nos campos `title`, `paragraphs` e `signature`. As alterações exigem novo
+deployment e não modificam cobranças já enviadas.
+
 A aba **Cobrança de faturas** usa uma única função consolidada,
 `/api/faturamento/cobranca`, para permanecer dentro do limite de funções do
 plano Hobby. Nela é possível cadastrar e excluir empresas por CNPJ, cadastrar,

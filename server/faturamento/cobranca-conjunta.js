@@ -557,7 +557,8 @@ const sendJointBilling = async ({ cnpj: cnpjInput, invoiceIds, invoiceProofs,
   const emailPreview = {
     fromName: '', fromEmail: '', toName: preview.company.name,
     toEmail: recipientEmails.join(', '), subject: jointBillingSubject,
-    text: jointBillingText({ companyName: greetingName, invoices: selectedInvoices,
+    text: jointBillingText({ companyName: greetingName, targetCompanyName: preview.company.name,
+      invoices: selectedInvoices,
       paymentMethod, totalBalance: selectedTotalBalance }),
     priority: 'normal', attachments: attachments.map((item) => item.filename)
   };
@@ -604,6 +605,7 @@ const sendJointBilling = async ({ cnpj: cnpjInput, invoiceIds, invoiceProofs,
     try {
       result = await (dependencies.sendJointBillingEmail || sendJointBillingEmail)({
         recipients: preview.recipients, companyName: greetingName,
+        targetCompanyName: preview.company.name,
         invoiceIds: expectedIds, invoices: selectedInvoices, paymentMethod,
         totalBalance: selectedTotalBalance,
         attachments, clientReference, transport, config
