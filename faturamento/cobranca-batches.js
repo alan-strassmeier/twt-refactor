@@ -3,6 +3,7 @@
 
   const MAX_JOINT_ATTACHMENT_BYTES = 18 * 1024 * 1024;
   const MAX_JOINT_INVOICES_PER_BATCH = 10;
+  const MAX_JOINT_INVOICES_PER_DOWNLOAD = 100;
   const MAX_BATCH_WAIT_MS = 5 * 60 * 1000;
   const MAX_PREPARE_ATTEMPTS = 3;
 
@@ -22,6 +23,8 @@
 
   const streamJointBillingInvoices = async (invoices, { prepare, send, onPrepareError,
     concurrency = 2, now = Date.now, maxAttempts = MAX_PREPARE_ATTEMPTS,
+    maxInvoicesPerBatch = MAX_JOINT_INVOICES_PER_BATCH,
+    maxBatchWaitMs = MAX_BATCH_WAIT_MS,
     wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     shouldRetry = (invoice, error) => !invoice.removed && error.retryable !== false
       && error.status !== 413 }) => {
@@ -75,7 +78,7 @@
           await onPrepareError(invoice, error, { attempt, maxAttempts, willRetry });
           if (willRetry) deferred.push({ invoice, error });
           else errors += 1;
-          if (batch.length && now() - batchStartedAt >= MAX_BATCH_WAIT_MS) {
+          if (batch.length && now() - batchStartedAt >= maxBatchWaitMs) {
             const result = await flush();
             if (result?.status === 'review') return {
               sentBatches, sentInvoices, errors: errors + deferred.length, review: true
@@ -83,9 +86,9 @@
           }
           continue;
         }
-        if (batch.length && (batch.length >= MAX_JOINT_INVOICES_PER_BATCH
+        if (batch.length && (batch.length >= maxInvoicesPerBatch
           || batchBytes + bytes > MAX_JOINT_ATTACHMENT_BYTES
-          || now() - batchStartedAt >= MAX_BATCH_WAIT_MS)) {
+          || now() - batchStartedAt >= maxBatchWaitMs)) {
           const result = await flush();
           if (result?.status === 'review') return {
             sentBatches, sentInvoices, errors: errors + deferred.length, review: true
@@ -95,7 +98,7 @@
         batchBytes += bytes;
         batchStartedAt ??= now();
         if (batchBytes === MAX_JOINT_ATTACHMENT_BYTES
-          || batch.length === MAX_JOINT_INVOICES_PER_BATCH) {
+          || batch.length === maxInvoicesPerBatch) {
           const result = await flush();
           if (result?.status === 'review') return {
             sentBatches, sentInvoices, errors: errors + deferred.length, review: true
@@ -119,6 +122,7 @@
   if (typeof window !== 'undefined') window.streamJointBillingInvoices = streamJointBillingInvoices;
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = { jointProofNeedsRefresh, streamJointBillingInvoices,
-      MAX_JOINT_ATTACHMENT_BYTES, MAX_JOINT_INVOICES_PER_BATCH, MAX_BATCH_WAIT_MS };
+      MAX_JOINT_ATTACHMENT_BYTES, MAX_JOINT_INVOICES_PER_BATCH,
+      MAX_JOINT_INVOICES_PER_DOWNLOAD, MAX_BATCH_WAIT_MS };
   }
 })();

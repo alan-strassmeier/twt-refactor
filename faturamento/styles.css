@@ -1304,6 +1304,14 @@ body.modal-open {
   min-width: 145px;
 }
 
+#jointSendChoiceModal .nfse-confirm-actions {
+  flex-wrap: wrap;
+}
+
+#jointSendChoiceModal .nfse-confirm-actions .button {
+  flex: 1 1 145px;
+}
+
 .area-tabs {
   width: fit-content;
   max-width: 100%;

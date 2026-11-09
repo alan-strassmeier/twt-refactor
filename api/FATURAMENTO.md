@@ -214,7 +214,10 @@ Em cada execução o servidor:
    (incluindo o dia da borda, pois a Brudam filtra emissão apenas por data);
 2. envia o aviso inicial somente quando consegue montar o PDF da fatura e, para
    pagamentos que não sejam TED/DOC, anexar também o boleto. Para faturas DSL,
-   reúne e anexa em um único PDF todos os DACTEs vinculados no DOCCOB;
+   reúne e anexa em um único PDF todos os DACTEs vinculados no DOCCOB. No envio
+   individual, fatura, DACTEs, nota fiscal e boleto continuam como anexos
+   separados. Apenas no envio conjunto esses documentos são consolidados em um
+   único PDF, agrupados por fatura;
 3. em seguida percorre as faturas em aberto e envia **Perto do vencimento**
    quando faltam até dois dias, com prioridade alta;
 4. nessa mesma lista, envia aviso de vencida a partir de dois dias após o
@@ -223,6 +226,22 @@ Em cada execução o servidor:
 5. envia uma mensagem separada para `BILLING_ALERT_EMAIL` nos avisos próximos
    do vencimento e vencidos, sem incluir o endereço em cópia nas mensagens dos
    clientes.
+
+Na seção **Envio em conjunto**, **Baixar PDFs de cobrança** prepara e baixa os
+documentos consolidados das faturas selecionadas, inclusive as já enviadas,
+sem enviar mensagem nem alterar o histórico. Quando necessário, divide o
+download em vários PDFs de até 18 MB cada, sem o limite de 10 faturas dos
+e-mails (até 100 faturas por PDF como teto de segurança); o navegador pode pedir
+autorização para múltiplos downloads. A prévia e os anexos preparados continuam
+disponíveis para um envio posterior; as confirmações vencidas precisam ser
+atualizadas. Ao clicar em **Enviar cobrança conjunta**, um modal oferece enviar
+somente as ainda não enviadas ou incluir explicitamente as já enviadas. O
+servidor recusa o reenvio sem essa escolha e registra a nova tentativa
+separadamente, preservando o histórico anterior.
+O resumo contabiliza todas as faturas vencidas em aberto da listagem, mesmo as
+já enviadas. Antes da conferência individual, o saldo exibido é identificado
+como preliminar e usa o valor retornado pela listagem da Brudam; só o saldo
+confirmado pode liberar o envio.
 
 Para faturas emitidas antes de **16/09/2026**, a rotina não executa envio
 inicial histórico. Essas faturas só retornam à fila automática quando entram

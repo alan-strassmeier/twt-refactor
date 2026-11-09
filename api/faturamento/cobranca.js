@@ -1,4 +1,5 @@
 const { randomUUID, timingSafeEqual } = require('node:crypto');
+const { once } = require('node:events');
 const { sessionFromRequest } = require('../../server/faturamento/auth');
 const {
   parseJsonBody,
@@ -19,7 +20,7 @@ const { findDoccobForInvoice } = require('../../server/faturamento/r2-doccob');
 const { getBankSlipRecord } = require('../../server/faturamento/boleto-store');
 const {
   listJointBilling, previewJointBilling, refreshJointBillingInvoice,
-  prepareJointBillingInvoice, sendJointBilling, confirmJointDelivery,
+  prepareJointBillingInvoice, sendJointBilling, downloadJointBillingPdf, confirmJointDelivery,
   retractJointDeliveryConfirmation
 } = require('../../server/faturamento/cobranca-conjunta');
 const { listLiquidationLog } = require('../../server/faturamento/liquidation-log');
@@ -1025,6 +1026,27 @@ const handleJointBillingPrepare = async (req, res) => {
   sendJson(res, 200, await prepareJointBillingInvoice(body));
 };
 
+const handleJointBillingPdf = async (req, res) => {
+  if (!requireSession(req, res)) return;
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', 'POST');
+    sendJson(res, 405, { message: 'Método não permitido.' });
+    return;
+  }
+  if (!requireSameOrigin(req, res)) return;
+  const body = await parseJsonBody(req, 3 * 1024 * 1024);
+  const pdf = await downloadJointBillingPdf(body);
+  res.statusCode = 200;
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="${pdf.filename}"`);
+  res.setHeader('Cache-Control', 'private, no-store');
+  res.flushHeaders?.();
+  for (let offset = 0; offset < pdf.content.length; offset += 256 * 1024) {
+    if (!res.write(pdf.content.subarray(offset, offset + 256 * 1024))) await once(res, 'drain');
+  }
+  res.end();
+};
+
 const handleJointDeliveryConfirmation = async (req, res) => {
   if (!requireSession(req, res)) return;
   if (req.method !== 'POST') {
@@ -1119,6 +1141,7 @@ module.exports = async (req, res) => {
     if (query.route === 'joint-billing') return await handleJointBilling(req, res, query);
     if (query.route === 'joint-billing-refresh') return await handleJointBillingRefresh(req, res);
     if (query.route === 'joint-billing-prepare') return await handleJointBillingPrepare(req, res);
+    if (query.route === 'joint-billing-pdf') return await handleJointBillingPdf(req, res);
     if (query.route === 'joint-delivery-confirm') return await handleJointDeliveryConfirmation(req, res);
     if (query.route === 'joint-delivery-retract') return await handleJointDeliveryRetraction(req, res);
     if (query.route === 'process') return await handleProcess(req, res, query);
