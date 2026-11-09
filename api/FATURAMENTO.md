@@ -230,7 +230,8 @@ Em cada execução o servidor:
 Na seção **Envio em conjunto**, **Baixar PDFs de cobrança** prepara e baixa os
 documentos consolidados das faturas selecionadas, inclusive as já enviadas,
 sem enviar mensagem nem alterar o histórico. Quando necessário, divide o
-download em vários PDFs de até 10 faturas e 18 MB cada; o navegador pode pedir
+download em vários PDFs de até 18 MB cada, sem o limite de 10 faturas dos
+e-mails (até 100 faturas por PDF como teto de segurança); o navegador pode pedir
 autorização para múltiplos downloads. A prévia e os anexos preparados continuam
 disponíveis para um envio posterior; as confirmações vencidas precisam ser
 atualizadas. Ao clicar em **Enviar cobrança conjunta**, um modal oferece enviar

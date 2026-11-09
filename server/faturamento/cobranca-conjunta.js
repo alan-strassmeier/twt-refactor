@@ -23,6 +23,7 @@ const { savePreparedPackage, loadPreparedPackage } = require('./cobranca-conjunt
 
 const MAX_ATTACHMENT_BYTES = 18 * 1024 * 1024;
 const MAX_INVOICES_PER_EMAIL = 10;
+const MAX_INVOICES_PER_DOWNLOAD = 100;
 const INVOICE_CHECK_CONCURRENCY = 3;
 const EMPTY_INVOICE_RETRIES = 3;
 const PREVIEW_PROOF_TTL_MS = 30 * 60 * 1000;
@@ -458,8 +459,8 @@ const downloadJointBillingPdf = async ({ cnpj: cnpjInput, invoiceIds, invoicePro
   const ids = Array.isArray(invoiceIds) && invoiceIds.length > 0
     && invoiceIds.every((id) => /^\d{1,20}$/.test(String(id)) && Number(id) > 0)
     ? sortIds(invoiceIds) : null;
-  if (!ids || ids.length !== invoiceIds.length || ids.length > MAX_INVOICES_PER_EMAIL) {
-    throw fail(`Selecione entre 1 e ${MAX_INVOICES_PER_EMAIL} faturas distintas para baixar um PDF.`, 422);
+  if (!ids || ids.length !== invoiceIds.length || ids.length > MAX_INVOICES_PER_DOWNLOAD) {
+    throw fail(`Selecione entre 1 e ${MAX_INVOICES_PER_DOWNLOAD} faturas distintas para baixar um PDF.`, 422);
   }
   const cnpj = digits(cnpjInput);
   if (cnpj.length !== 14) throw fail('Informe um CNPJ válido.', 422);

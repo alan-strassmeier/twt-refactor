@@ -3059,6 +3059,7 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(html, /id="sendJointOnlyNew"/);
   assert.match(html, /id="sendJointIncludingSent"/);
   assert.match(html, /id="downloadJointBillingPdfButton"/);
+  assert.match(html, /O limite de 10 faturas vale somente para cada e-mail/);
   assert.match(html, /id="refreshJointBillingButton"[^>]*>[\s\S]*?Atualizar<\/button>/);
   assert.match(source, /filter\(needsJointInvoiceData\)[\s\S]*?endpoint\('joint-billing-refresh'\)/);
   assert.match(source, /endpoint\('joint-billing', \{ cnpj: category\.cnpj, list: '1' \}\)/);
@@ -3083,6 +3084,7 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(source, /includePdfData: true/);
   assert.match(source, /const invoicePackages = batch\.map/);
   assert.match(source, /streamJointBillingInvoices\(selected/);
+  assert.match(source, /maxInvoicesPerBatch: 100,\s*maxBatchWaitMs: Infinity/);
   const jointSendSource = source.slice(source.indexOf("elements.jointSendButton.addEventListener"),
     source.indexOf("elements.logsForm.addEventListener"));
   assert.equal((jointSendSource.match(/window\.confirm\(/g) || []).length, 0);

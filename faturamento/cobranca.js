@@ -1788,6 +1788,8 @@
     let downloadedInvoices = 0;
     try {
       const outcome = await window.streamJointBillingInvoices(selected, {
+        maxInvoicesPerBatch: 100,
+        maxBatchWaitMs: Infinity,
         prepare: async (invoice) => {
           setMessage(`Preparando PDF da fatura ${invoice.id}… ${downloadedInvoices} fatura(s) já baixada(s).`);
           return prepareJointInvoice(preview, invoice, { allowPreviouslySent: true });

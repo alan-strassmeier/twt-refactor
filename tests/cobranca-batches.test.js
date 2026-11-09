@@ -1,7 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { jointProofNeedsRefresh, streamJointBillingInvoices,
-  MAX_JOINT_ATTACHMENT_BYTES, MAX_JOINT_INVOICES_PER_BATCH, MAX_BATCH_WAIT_MS } =
+  MAX_JOINT_ATTACHMENT_BYTES, MAX_JOINT_INVOICES_PER_BATCH,
+  MAX_JOINT_INVOICES_PER_DOWNLOAD, MAX_BATCH_WAIT_MS } =
   require('../faturamento/cobranca-batches');
 
 test('divide o envio em e-mails de até 18 MB sem separar os anexos de uma fatura', async () => {
@@ -31,6 +32,27 @@ test('divide grupos pequenos após dez faturas para evitar mensagens com muitos 
     onPrepareError: async () => { throw new Error('Não esperado'); }
   });
   assert.deepEqual(sent.map((group) => group.length), [10, 10, 1]);
+});
+
+test('download agrupa mais de dez faturas até o limite de tamanho, mesmo após cinco minutos', async () => {
+  const downloaded = [];
+  let clock = 0;
+  const invoices = Array.from({ length: 20 }, (_, index) => ({ id: String(index + 1) }));
+  await streamJointBillingInvoices(invoices, {
+    maxInvoicesPerBatch: MAX_JOINT_INVOICES_PER_DOWNLOAD,
+    maxBatchWaitMs: Infinity,
+    concurrency: 1,
+    now: () => clock,
+    prepare: async ({ id }) => {
+      if (id === '2') clock = MAX_BATCH_WAIT_MS + 1;
+      return 1024 * 1024;
+    },
+    send: async (batch) => {
+      downloaded.push(batch.map(({ id }) => id));
+    },
+    onPrepareError: async () => { throw new Error('Não esperado'); }
+  });
+  assert.deepEqual(downloaded.map((group) => group.length), [18, 2]);
 });
 
 test('anexo individual exatamente no limite ocupa um e-mail próprio', async () => {
