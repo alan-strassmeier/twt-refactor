@@ -3055,6 +3055,10 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(html, /data-collection-section="jointBillingSection"/);
   assert.match(html, /id="jointBillingSearchForm"/);
   assert.match(html, /id="sendJointBillingButton"/);
+  assert.match(html, /id="jointSendChoiceModal"/);
+  assert.match(html, /id="sendJointOnlyNew"/);
+  assert.match(html, /id="sendJointIncludingSent"/);
+  assert.match(html, /id="downloadJointBillingPdfButton"/);
   assert.match(html, /id="refreshJointBillingButton"[^>]*>[\s\S]*?Atualizar<\/button>/);
   assert.match(source, /filter\(needsJointInvoiceData\)[\s\S]*?endpoint\('joint-billing-refresh'\)/);
   assert.match(source, /endpoint\('joint-billing', \{ cnpj: category\.cnpj, list: '1' \}\)/);
@@ -3063,7 +3067,9 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(source, /jointInitialRetryCategory[\s\S]*?jointSendButton\.textContent = 'Tentar novamente'/);
   assert.match(source, /const clearJointBillingMemory = \(\) => \{[\s\S]*?state\.jointPreview = null/);
   assert.match(source, /state\.collectionSection === 'jointBillingSection' && sectionId !== 'jointBillingSection'/);
-  assert.match(source, /const selectedJointInvoices = \(\) =>[\s\S]*?!invoice\.jointSent && !invoice\.sendReview/);
+  assert.match(source, /const selectedJointInvoices = \(includeSent = state\.jointIncludeSent\)/);
+  assert.match(source, /\(includeSent \|\| !invoice\.jointSent\) && !invoice\.sendReview/);
+  assert.match(source, /const selectedJointDownloadInvoices = \(\) =>/);
   assert.match(source, /const errorIds = selectedJointInvoices\(\)\.filter\(needsJointInvoiceData\)/);
   const loadJointCompanySource = source.slice(source.indexOf('const loadJointCompany = async'),
     source.indexOf('const renderPending ='));
@@ -3076,7 +3082,9 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(source, /streamJointBillingInvoices\(selected/);
   const jointSendSource = source.slice(source.indexOf("elements.jointSendButton.addEventListener"),
     source.indexOf("elements.logsForm.addEventListener"));
-  assert.equal((jointSendSource.match(/window\.confirm\(/g) || []).length, 1);
+  assert.equal((jointSendSource.match(/window\.confirm\(/g) || []).length, 0);
+  assert.match(jointSendSource, /askJointSendChoice\(preview\)/);
+  assert.match(jointSendSource, /includePreviouslySent: state\.jointIncludeSent/);
   assert.match(html, /cobranca-batches\.js/);
   assert.match(source, /endpoint\('joint-billing-prepare'\)/);
   assert.match(source, /const prepareJointInvoice = async/);

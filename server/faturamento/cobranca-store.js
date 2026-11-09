@@ -440,7 +440,10 @@ const RETRACT_MANUAL_JOINT_DELIVERY_SCRIPT = `
     or batch.manuallyConfirmedAt ~= ARGV[3] or batch.messageId
     or (batch.recipientEvents and next(batch.recipientEvents)) then return 0 end
   for index = 5, #ARGV do
-    if ARGV[index] ~= 'joint:' .. tostring(reference.invoiceIds[index - 4]) .. ':__company__'
+    local invoiceId = tostring(reference.invoiceIds[index - 4])
+    local markerEmail = reference.invoiceMarkerKeys and reference.invoiceMarkerKeys[invoiceId]
+      or '__company__'
+    if ARGV[index] ~= 'joint:' .. invoiceId .. ':' .. markerEmail
       then return 0 end
     local raw = redis.call('HGET', KEYS[1], ARGV[index])
     if not raw then return 0 end
@@ -460,11 +463,16 @@ const RETRACT_MANUAL_JOINT_DELIVERY_SCRIPT = `
   return #ARGV - 4
 `;
 
-const retractManualJointDelivery = async ({ clientReference, invoiceIds, batchId, cnpj,
-  confirmedAt, correctedAt }, command = redisCommand) => {
+const retractManualJointDelivery = async ({ clientReference, invoiceIds, invoiceMarkerKeys,
+  batchId, cnpj, confirmedAt, correctedAt }, command = redisCommand) => {
   const ids = [...new Set((invoiceIds || []).map(requiredInvoiceId))];
   if (!ids.length) return false;
-  const fields = ids.map((id) => deliveryField('joint', id, '__company__'));
+  const fields = ids.map((id) => {
+    const markerEmail = invoiceMarkerKeys?.[id] || '__company__';
+    if (!/^__company__(?::resend:\d{4}-\d{2}-\d{2})?$/.test(markerEmail)) return null;
+    return deliveryField('joint', id, markerEmail);
+  });
+  if (fields.includes(null)) return false;
   return Number(await command('EVAL', RETRACT_MANUAL_JOINT_DELIVERY_SCRIPT, '2',
     KEYS.deliveries, KEYS.deliveryReferences, String(clientReference),
     deliveryField('joint', requiredInvoiceId(batchId), requiredCnpj(cnpj)),

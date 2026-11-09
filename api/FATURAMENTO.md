@@ -227,11 +227,16 @@ Em cada execução o servidor:
    do vencimento e vencidos, sem incluir o endereço em cópia nas mensagens dos
    clientes.
 
-Na seção **Envio em conjunto**, **Baixar PDF de cobrança** prepara e baixa o
-mesmo documento consolidado do e-mail, sem enviar mensagem e sem marcar as
-faturas como enviadas. Selecione até 10 faturas, respeitando o limite de 18 MB
-por documento. A prévia e os anexos preparados continuam disponíveis para um
-envio posterior; as confirmações vencidas precisam ser atualizadas.
+Na seção **Envio em conjunto**, **Baixar PDFs de cobrança** prepara e baixa os
+documentos consolidados das faturas selecionadas, inclusive as já enviadas,
+sem enviar mensagem nem alterar o histórico. Quando necessário, divide o
+download em vários PDFs de até 10 faturas e 18 MB cada; o navegador pode pedir
+autorização para múltiplos downloads. A prévia e os anexos preparados continuam
+disponíveis para um envio posterior; as confirmações vencidas precisam ser
+atualizadas. Ao clicar em **Enviar cobrança conjunta**, um modal oferece enviar
+somente as ainda não enviadas ou incluir explicitamente as já enviadas. O
+servidor recusa o reenvio sem essa escolha e registra a nova tentativa
+separadamente, preservando o histórico anterior.
 
 Para faturas emitidas antes de **16/09/2026**, a rotina não executa envio
 inicial histórico. Essas faturas só retornam à fila automática quando entram

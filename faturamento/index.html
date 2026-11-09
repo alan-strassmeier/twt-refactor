@@ -420,11 +420,11 @@
                 </table>
               </div>
               <div class="joint-billing-actions">
-                <p>Faturas ignoradas ficam fora apenas deste envio, sem alterar a situação financeira delas. Cada e-mail inclui os documentos completos das faturas do seu grupo. Se um anexo falhar, as faturas já preparadas são mantidas para nova tentativa; grupos já enviados não são reenviados.</p>
+                <p>Faturas ignoradas ficam fora desta seleção, sem alterar a situação financeira delas. O download inclui também faturas já enviadas e pode gerar vários PDFs de até 10 faturas e 18 MB. Ao enviar, escolha se deseja incluir as faturas já enviadas novamente.</p>
                 <div class="joint-billing-buttons">
                   <button class="button button-quiet" id="refreshJointBillingButton" type="button"
                     title="Reconsultar somente as faturas com erro">Atualizar</button>
-                  <button class="button button-quiet" id="downloadJointBillingPdfButton" type="button">Baixar PDF de cobrança</button>
+                  <button class="button button-quiet" id="downloadJointBillingPdfButton" type="button">Baixar PDFs de cobrança</button>
                   <button class="button button-primary" id="sendJointBillingButton" type="button">Enviar cobrança conjunta</button>
                 </div>
               </div>
@@ -712,6 +712,21 @@
       <div class="nfse-confirm-actions">
         <button class="button" id="nfseCancelButton" type="button">Voltar</button>
         <button class="button button-primary" id="nfseIssueButton" type="button">Confirmar e emitir</button>
+      </div>
+    </section>
+  </div>
+  <div class="document-modal" id="jointSendChoiceModal" hidden>
+    <button class="document-modal-backdrop" id="jointSendChoiceBackdrop" type="button"
+      aria-label="Cancelar envio"></button>
+    <section class="document-modal-panel" role="dialog" aria-modal="true"
+      aria-labelledby="jointSendChoiceTitle" aria-describedby="jointSendChoiceDescription">
+      <span class="document-modal-eyebrow">Confirmar cobrança conjunta</span>
+      <h2 id="jointSendChoiceTitle">Incluir faturas já enviadas?</h2>
+      <p id="jointSendChoiceDescription"></p>
+      <div class="nfse-confirm-actions">
+        <button class="button" id="cancelJointSendChoice" type="button">Cancelar</button>
+        <button class="button" id="sendJointOnlyNew" type="button">Enviar só as não enviadas</button>
+        <button class="button button-primary" id="sendJointIncludingSent" type="button">Incluir já enviadas</button>
       </div>
     </section>
   </div>

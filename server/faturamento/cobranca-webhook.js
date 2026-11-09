@@ -324,7 +324,10 @@ const processWebhookPayload = async (payload, dependencies = {}) => {
             ? event.email || (reference.recipientEmails || []).join(', ')
             : reference.email || event.email,
           ...(reference.jointBilling ? { jointBilling: true, invoiceIds } : {}),
-          ...(reference.manualResend ? { manualResend: true } : {}),
+          ...(reference.manualResend && (!reference.jointBilling
+            || !Array.isArray(reference.previouslySentIds)
+            || reference.previouslySentIds.includes(String(invoiceId)))
+            ? { manualResend: true } : {}),
           ...(reference.recipientRole ? { recipientRole: reference.recipientRole } : {}),
           clientReference: event.clientReference,
           ...(reference.emailPreview ? { emailPreview: reference.emailPreview } : {}),

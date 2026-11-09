@@ -220,7 +220,10 @@ const listJointBilling = async (cnpjInput, dependencies = {}) => {
         'Aguardando conferência individual da fatura na Brudam.',
         blockDescription(kind)
       ].filter(Boolean).join(' · '),
-      jointSent: Boolean(jointDeliveries.get(id)), proof: null
+      jointSent: ['sent', 'delivered'].includes(jointDeliveries.get(id)?.state),
+      sendReview: Boolean(jointDeliveries.get(id))
+        && !['sent', 'delivered'].includes(jointDeliveries.get(id)?.state),
+      proof: null
     };
   });
   const recipients = (category.contacts || []).filter((contact) => contact.enabled !== false);
@@ -278,7 +281,8 @@ const previewJointBilling = async (cnpj, dependencies = {}, onlyInvoiceIds = nul
     const block = blocks.get(id);
     const kind = blockKind(block);
     const blocked = Boolean(invoice.unverified || block?.blocked);
-    const jointSent = Boolean(jointDeliveries.get(id));
+    const jointSent = ['sent', 'delivered'].includes(jointDeliveries.get(id)?.state);
+    const sendReview = Boolean(jointDeliveries.get(id)) && !jointSent;
     return {
       id: invoiceId(invoice.id),
       issuedAt: invoice.issuedAt,
@@ -289,8 +293,8 @@ const previewJointBilling = async (cnpj, dependencies = {}, onlyInvoiceIds = nul
       blocked,
       blockKind: kind,
       blockReason: [invoice.blockReason, blockDescription(kind)].filter(Boolean).join(' · '),
-      jointSent,
-      proof: !blocked && !jointSent ? invoiceProof(invoice, digits(category.cnpj), dependencies) : null
+      jointSent, sendReview,
+      proof: !blocked ? invoiceProof(invoice, digits(category.cnpj), dependencies) : null
     };
   });
   const recipients = (category.contacts || []).filter((contact) => contact.enabled !== false);
@@ -366,14 +370,15 @@ const refreshJointBillingInvoice = async ({ cnpj: cnpjInput, invoiceId: requeste
   }
   const jointDeliveries = await (dependencies.getJointDeliveries || store.getJointDeliveries)([id]);
   const blocked = Boolean(blocks.get(id)?.blocked);
-  const jointSent = Boolean(jointDeliveries.get(id));
-  const proof = !blocked && !jointSent ? invoiceProof(current, cnpj, dependencies) : null;
+  const jointSent = ['sent', 'delivered'].includes(jointDeliveries.get(id)?.state);
+  const sendReview = Boolean(jointDeliveries.get(id)) && !jointSent;
+  const proof = !blocked ? invoiceProof(current, cnpj, dependencies) : null;
   return { id, removed: false, invoice: {
     id, issuedAt: current.issuedAt, dueAt: current.dueAt,
     balance: Number(current.balance), overdueDays: overdueDays(current.dueAt, today),
     unverified: false, upstreamStatus: null, blocked,
     blockKind: kind, blockReason: blockDescription(kind),
-    jointSent, proof,
+    jointSent, sendReview, proof,
     snapshot: proof && pdfData ? invoiceSnapshot(pdfData, proof, dependencies) : null
   } };
 };
@@ -484,7 +489,7 @@ const downloadJointBillingPdf = async ({ cnpj: cnpjInput, invoiceIds, invoicePro
 };
 
 const sendJointBilling = async ({ cnpj: cnpjInput, invoiceIds, invoiceProofs,
-  invoiceSnapshots, invoicePackages }, dependencies = {}) => {
+  invoiceSnapshots, invoicePackages, includePreviouslySent = false }, dependencies = {}) => {
   const expectedIds = Array.isArray(invoiceIds) && invoiceIds.length > 0
     && invoiceIds.every((id) => /^\d{1,20}$/.test(String(id)) && Number(id) > 0)
     ? sortIds(invoiceIds) : null;
@@ -513,6 +518,14 @@ const sendJointBilling = async ({ cnpj: cnpjInput, invoiceIds, invoiceProofs,
   const getCategory = dependencies.getCategory || store.getCategory;
   const initialCategory = await getCategory(cnpj);
   if (!initialCategory) throw fail('Empresa não cadastrada nos e-mails de cobrança.', 404);
+  const previousDeliveries = await (dependencies.getJointDeliveries || store.getJointDeliveries)(expectedIds);
+  const previouslySentIds = expectedIds.filter((id) => previousDeliveries.get(id));
+  if (previouslySentIds.length && includePreviouslySent !== true) {
+    throw fail(`As faturas ${previouslySentIds.join(', ')} já foram enviadas. Confirme o reenvio no modal.`, 409);
+  }
+  if (previouslySentIds.some((id) => !['sent', 'delivered'].includes(previousDeliveries.get(id)?.state))) {
+    throw fail('Uma fatura selecionada tem envio em conferência. Verifique os logs antes de reenviar.', 409);
+  }
   const recipients = (initialCategory.contacts || []).filter((contact) => contact.enabled !== false)
     .map(({ firstName, lastName, email }) => ({ firstName, lastName, email }));
   if (!recipients.length) throw fail('Cadastre ao menos um destinatário ativo para esta empresa.');
@@ -573,7 +586,8 @@ const sendJointBilling = async ({ cnpj: cnpjInput, invoiceIds, invoiceProofs,
   const today = saoPauloDate(dependencies.now ? dependencies.now() : new Date());
   const selectedTotalBalance = Math.round(selected.reduce((sum, invoice) => sum + invoice.balance, 0) * 100) / 100;
   const selectedInvoices = selected.map(({ id, dueAt }) => ({ id, dueAt, overdueDays: overdueDays(dueAt, today) }));
-  const batchId = BigInt(`0x${createHash('sha256').update(`${cnpj}|${today}|${expectedIds.join(',')}`)
+  const resending = previouslySentIds.length > 0;
+  const batchId = BigInt(`0x${createHash('sha256').update(`${cnpj}|${today}|${expectedIds.join(',')}${resending ? `|${randomUUID()}` : ''}`)
     .digest('hex').slice(0, 16)}`).toString();
   const event = 'joint';
   const recipientKey = cnpj;
@@ -587,6 +601,8 @@ const sendJointBilling = async ({ cnpj: cnpjInput, invoiceIds, invoiceProofs,
   const release = dependencies.releaseDeliveryClaim || store.releaseDeliveryClaim;
   const addLog = dependencies.addLog || store.addLog;
   const claimedInvoiceIds = [];
+  const markerKey = (id) => resending && previousDeliveries.get(id)
+    ? `__company__:resend:${today}` : '__company__';
   const billingEvents = new Map(selected.map((invoice) => [invoiceId(invoice.id),
     billingEventForInvoice(invoice, today) || 'initial']));
   const clientReference = deliveryReference(event, batchId, recipientKey);
@@ -605,12 +621,16 @@ const sendJointBilling = async ({ cnpj: cnpjInput, invoiceIds, invoiceProofs,
   const metadata = {
     event, clientCnpj: cnpj, clientName: preview.company.name,
     contactName: preview.company.name, email: recipientEmails.join(', '),
-    invoiceIds: expectedIds, clientReference, emailPreview, jointBilling: true
+    invoiceIds: expectedIds, clientReference, emailPreview, jointBilling: true,
+    invoiceMarkerKeys: Object.fromEntries(expectedIds.map((id) => [id, markerKey(id)])),
+    manualResend: resending, previouslySentIds
   };
   const logEach = async (status, message, extra = {}) => {
     await forEachBatch(expectedIds, async (id) => {
       try {
-        await addLog({ ...metadata, ...extra, invoiceId: id, status, message, createdAt: new Date().toISOString() });
+        await addLog({ ...metadata, ...extra, invoiceId: id,
+          manualResend: Boolean(previousDeliveries.get(id)), status, message,
+          createdAt: new Date().toISOString() });
       } catch (error) {
         console.error('[faturamento:cobranca-conjunta:log]', { invoiceId: id, message: error.message });
       }
@@ -620,7 +640,7 @@ const sendJointBilling = async ({ cnpj: cnpjInput, invoiceIds, invoiceProofs,
   try {
     for (let index = 0; index < expectedIds.length; index += WRITE_BATCH_SIZE) {
       const ids = expectedIds.slice(index, index + WRITE_BATCH_SIZE);
-      const results = await Promise.allSettled(ids.map((id) => claim(event, id, '__company__', {
+      const results = await Promise.allSettled(ids.map((id) => claim(event, id, markerKey(id), {
         state: 'processing', claimId, createdAt: new Date().toISOString(),
         billingEvent: billingEvents.get(id), batchId
       })));
@@ -670,7 +690,7 @@ const sendJointBilling = async ({ cnpj: cnpjInput, invoiceIds, invoiceProofs,
     }
     await forEachBatch(claimedInvoiceIds, async (id) => {
       try {
-        await save(event, id, '__company__', {
+        await save(event, id, markerKey(id), {
           state: partial ? 'review' : 'sent', sentAt: new Date().toISOString(),
           billingEvent: billingEvents.get(id), batchId, messageId: result.messageId
         });
@@ -701,7 +721,7 @@ const sendJointBilling = async ({ cnpj: cnpjInput, invoiceIds, invoiceProofs,
     if (definitelyNotAccepted) {
       try { await release(event, batchId, recipientKey, claimId); } catch { /* falha fechada */ }
       await forEachBatch(claimedInvoiceIds, async (id) => {
-        try { await release(event, id, '__company__', claimId); } catch { /* falha fechada */ }
+        try { await release(event, id, markerKey(id), claimId); } catch { /* falha fechada */ }
       });
       await logEach('error', `Cobrança conjunta não enviada${code ? ` (${code})` : ''}.`,
         { retryable: true });
@@ -710,7 +730,7 @@ const sendJointBilling = async ({ cnpj: cnpjInput, invoiceIds, invoiceProofs,
     try { await save(event, batchId, recipientKey, { state: 'review', invoiceIds: expectedIds,
       message: String(error.message).slice(0, 180) }); } catch { /* reserva permanece */ }
     await forEachBatch(claimedInvoiceIds, async (id) => {
-      try { await save(event, id, '__company__', { state: 'review',
+      try { await save(event, id, markerKey(id), { state: 'review',
         billingEvent: billingEvents.get(id), batchId }); } catch { /* reserva permanece */ }
     });
     await logEach('review', 'Resultado SMTP incerto; confira no provedor antes de tentar novamente.');
@@ -743,8 +763,12 @@ const confirmJointDelivery = async ({ clientReference, confirmAllRecipients }, d
     throw fail('Há evento incompatível com a entrega completa; confira o histórico no provedor.', 409);
   }
   const invoiceRecords = new Map();
+  const markerKey = (id) => reference.invoiceMarkerKeys?.[id] || '__company__';
   await forEachBatch(ids, async (id) => {
-    const record = await get('joint', id, '__company__');
+    if (!/^__company__(?::resend:\d{4}-\d{2}-\d{2})?$/.test(markerKey(id))) {
+      throw fail(`A referência da fatura ${id} é inválida. Nenhum estado foi alterado.`, 409);
+    }
+    const record = await get('joint', id, markerKey(id));
     if (!record || String(record.batchId) !== String(reference.invoiceId)
       || !['review', 'sent', 'delivered'].includes(record.state)) {
       throw fail(`A reserva da fatura ${id} não corresponde ao envio confirmado. Nenhum estado foi alterado.`, 409);
@@ -752,7 +776,7 @@ const confirmJointDelivery = async ({ clientReference, confirmAllRecipients }, d
     invoiceRecords.set(id, record);
   });
   const confirmedAt = (dependencies.now ? dependencies.now() : new Date()).toISOString();
-  await forEachBatch(ids, (id) => save('joint', id, '__company__', {
+  await forEachBatch(ids, (id) => save('joint', id, markerKey(id), {
     ...invoiceRecords.get(id), state: 'delivered', manuallyConfirmedAt: confirmedAt,
     confirmationSource: 'provider_panel'
   }));
@@ -791,8 +815,12 @@ const retractJointDeliveryConfirmation = async ({ clientReference, confirmProvid
     throw fail('O lote possui evidência de envio ou não foi confirmado manualmente; correção bloqueada.', 409);
   }
   const confirmedAt = batch.manuallyConfirmedAt;
+  const markerKey = (id) => reference.invoiceMarkerKeys?.[id] || '__company__';
   await forEachBatch(ids, async (id) => {
-    const record = await get('joint', id, '__company__');
+    if (!/^__company__(?::resend:\d{4}-\d{2}-\d{2})?$/.test(markerKey(id))) {
+      throw fail(`A referência da fatura ${id} é inválida. Nenhum estado foi alterado.`, 409);
+    }
+    const record = await get('joint', id, markerKey(id));
     if (record?.state !== 'delivered' || record.confirmationSource !== 'provider_panel'
       || record.manuallyConfirmedAt !== confirmedAt
       || String(record.batchId) !== String(reference.invoiceId)) {
@@ -802,6 +830,7 @@ const retractJointDeliveryConfirmation = async ({ clientReference, confirmProvid
   const correctedAt = (dependencies.now ? dependencies.now() : new Date()).toISOString();
   const retract = dependencies.retractManualJointDelivery || store.retractManualJointDelivery;
   const corrected = await retract({ clientReference: referenceId, invoiceIds: ids,
+    invoiceMarkerKeys: reference.invoiceMarkerKeys,
     batchId: reference.invoiceId, cnpj: reference.email, confirmedAt, correctedAt });
   if (!corrected) throw fail('O lote mudou durante a correção; confira os logs antes de tentar novamente.', 409);
   const addLog = dependencies.addLog || store.addLog;

@@ -232,6 +232,101 @@ test('download usa os anexos preparados sem enviar e-mail nem marcar faturas com
   assert.equal(dependencies.logs.length, 0);
 });
 
+test('download inclui fatura já enviada sem alterar o registro de entrega', async () => {
+  const deliveries = async (ids) => new Map(ids.map((id) => [id,
+    id === '101' ? { state: 'sent', batchId: 'anterior' } : null]));
+  const dependencies = mockDependencies({
+    getJointDeliveries: deliveries,
+    loadPreparedPackage: async ({ invoiceId }) => [{
+      filename: `fatura-${invoiceId}.pdf`, content: Buffer.from(`pdf-${invoiceId}`),
+      contentType: 'application/pdf'
+    }],
+    mergeBillingAttachments: async (attachments, filename) => [{
+      filename, content: Buffer.from(attachments.map((item) => item.content.toString()).join('|'))
+    }]
+  });
+  const preview = await previewJointBilling(CNPJ, dependencies);
+  assert.equal(preview.invoices[0].jointSent, true);
+  assert.ok(preview.invoices[0].proof);
+  const refreshed = await refreshJointBillingInvoice({ cnpj: CNPJ, invoiceId: '101' }, dependencies);
+  assert.equal(refreshed.invoice.jointSent, true);
+  assert.ok(refreshed.invoice.proof);
+  const result = await downloadJointBillingPdf({ cnpj: CNPJ, invoiceIds: ['101', '102'],
+    invoiceProofs: preview.invoices.map(({ id, proof }) => ({ id, proof })),
+    invoicePackages: ['101', '102'].map((id) => ({ id, token: `token-${id}` }))
+  }, dependencies);
+  assert.equal(result.content.toString(), 'pdf-101|pdf-102');
+  assert.equal(dependencies.sent.length, 0);
+  assert.equal(dependencies.claims.length, 0);
+  assert.equal(dependencies.saves.length, 0);
+});
+
+test('resultado SMTP incerto não é apresentado como fatura entregue para reenvio', async () => {
+  const dependencies = mockDependencies({
+    getJointDeliveries: async (ids) => new Map(ids.map((id) => [id,
+      id === '101' ? { state: 'review', batchId: 'incerto' } : null]))
+  });
+  const preview = await previewJointBilling(CNPJ, dependencies);
+  assert.equal(preview.invoices[0].jointSent, false);
+  assert.equal(preview.invoices[0].sendReview, true);
+  const refreshed = await refreshJointBillingInvoice({ cnpj: CNPJ, invoiceId: '101' }, dependencies);
+  assert.equal(refreshed.invoice.sendReview, true);
+  await assert.rejects(sendJointBillingCore({ cnpj: CNPJ, invoiceIds: ['101'],
+    invoiceProofs: [{ id: '101', proof: refreshed.invoice.proof }], includePreviouslySent: true
+  }, dependencies), /envio em conferência/);
+  assert.equal(dependencies.sent.length, 0);
+});
+
+test('reenvio conjunto exige escolha explícita e preserva o marcador anterior', async () => {
+  const claimed = new Set();
+  const dependencies = mockDependencies({
+    getJointDeliveries: async (ids) => new Map(ids.map((id) => [id,
+      id === '101' ? { state: 'sent', batchId: 'anterior' } : null])),
+    claimDelivery: async (event, id, email, record) => {
+      dependencies.claims.push([event, id, email, record]);
+      const key = `${event}:${id}:${email}`;
+      if (claimed.has(key)) return false;
+      claimed.add(key);
+      return true;
+    }
+  });
+  const preview = await previewJointBilling(CNPJ, dependencies);
+  const invoiceProofs = preview.invoices.map(({ id, proof }) => ({ id, proof }));
+  const request = { cnpj: CNPJ, invoiceIds: ['101', '102'], invoiceProofs };
+  await assert.rejects(sendJointBillingCore(request, dependencies), /Confirme o reenvio no modal/);
+  assert.equal(dependencies.claims.length, 0);
+  const result = await sendJointBillingCore({ ...request, includePreviouslySent: true }, dependencies);
+  assert.equal(result.status, 'submitted');
+  assert.equal(dependencies.sent.length, 1);
+  assert.deepEqual(dependencies.sent[0].invoiceIds, ['101', '102']);
+  assert.ok(dependencies.claims.some(([, id, email]) => id === '101'
+    && email === '__company__:resend:2026-10-18'));
+  assert.ok(dependencies.claims.some(([, id, email]) => id === '102' && email === '__company__'));
+  assert.equal(dependencies.saves.some(([, id, email]) => id === '101' && email === '__company__'), false);
+  assert.equal(dependencies.logs.find((record) => record.invoiceId === '101').manualResend, true);
+  assert.equal(dependencies.logs.find((record) => record.invoiceId === '102').manualResend, false);
+  const [referenceId, reference] = dependencies.references[0];
+  const webhookLogs = [];
+  await processWebhookPayload({
+    event_name: ['delivered'], webhook_request_id: 'joint-resend-webhook',
+    event_message: [{ request_id: 'joint-resend-request', email_info: {
+      client_reference: referenceId, to: { email_address: [{ address: 'ana@example.com' }] }
+    } }]
+  }, { store: {
+    getDeliveryReference: async () => reference,
+    claimWebhookEvent: async () => true,
+    releaseWebhookEvent: async () => true,
+    getDelivery: async () => ({ state: 'sent' }),
+    saveDelivery: async () => {},
+    addLog: async (record) => webhookLogs.push(record)
+  }, now: () => new Date('2026-10-18T16:00:00Z') });
+  assert.equal(webhookLogs.find((record) => record.invoiceId === '101').manualResend, true);
+  assert.equal(webhookLogs.find((record) => record.invoiceId === '102').manualResend, undefined);
+  await assert.rejects(sendJointBillingCore({ ...request, includePreviouslySent: true }, dependencies),
+    /já participa de um envio conjunto/);
+  assert.equal(dependencies.sent.length, 1);
+});
+
 test('download rejeita prova inválida e seleção maior que um e-mail', async () => {
   const dependencies = mockDependencies();
   await assert.rejects(downloadJointBillingPdf({ cnpj: CNPJ, invoiceIds: ['101'],
@@ -876,6 +971,46 @@ test('confirmação manual de entrega altera apenas o lote reservado e registra 
   assert.equal(logs.length, 2);
 });
 
+test('confirmação de reenvio não altera a entrega anterior da mesma fatura', async () => {
+  const clientReference = 'twt-joint-1234567890-0123456789abcdef';
+  const batchId = '1234567890';
+  const marker = '__company__:resend:2026-10-30';
+  const reference = {
+    clientReference, jointBilling: true, event: 'joint', invoiceId: batchId,
+    email: CNPJ, clientCnpj: CNPJ, clientName: 'Empresa Exemplo',
+    invoiceIds: ['101', '102'], recipientEmails: ['ana@example.com'],
+    invoiceMarkerKeys: { '101': marker, '102': '__company__' }
+  };
+  const original = { state: 'delivered', batchId: 'lote-anterior' };
+  const records = new Map([
+    [`joint:${batchId}:${CNPJ}`, { state: 'review', invoiceIds: ['101', '102'] }],
+    ['joint:101:__company__', original],
+    [`joint:101:${marker}`, { state: 'review', batchId }],
+    ['joint:102:__company__', { state: 'review', batchId }]
+  ]);
+  const dependencies = {
+    getDeliveryReference: async () => reference,
+    getDelivery: async (event, id, email) => records.get(`${event}:${id}:${email}`),
+    saveDelivery: async (event, id, email, record) => records.set(`${event}:${id}:${email}`, record),
+    addLog: async () => {},
+    now: () => new Date('2026-10-30T12:00:00Z'),
+    retractManualJointDelivery: async ({ invoiceMarkerKeys }) => {
+      assert.deepEqual(invoiceMarkerKeys, reference.invoiceMarkerKeys);
+      records.delete(`joint:101:${marker}`);
+      records.delete('joint:102:__company__');
+      return true;
+    }
+  };
+  await confirmJointDelivery({ clientReference, confirmAllRecipients: true }, dependencies);
+  assert.equal(records.get(`joint:101:${marker}`).state, 'delivered');
+  assert.equal(records.get('joint:102:__company__').state, 'delivered');
+  assert.strictEqual(records.get('joint:101:__company__'), original);
+  await retractJointDeliveryConfirmation({ clientReference, confirmProviderReferenceAbsent: true },
+    dependencies);
+  assert.strictEqual(records.get('joint:101:__company__'), original);
+  assert.equal(records.has(`joint:101:${marker}`), false);
+});
+
 test('confirmação manual não sobrescreve rejeição registrada pelo provedor', async () => {
   const clientReference = 'twt-joint-1234567890-0123456789abcdef';
   let saves = 0;
@@ -964,6 +1099,21 @@ test('correção da entrega usa uma transação Redis para liberar todos os marc
   assert.equal(calls[0][0], 'EVAL');
   assert.equal(calls[0][2], '2');
   assert.deepEqual(calls[0].slice(-2), ['joint:101:__company__', 'joint:102:__company__']);
+});
+
+test('correção do reenvio libera o marcador novo, não o da entrega original', async () => {
+  const calls = [];
+  const result = await billingStore.retractManualJointDelivery({
+    clientReference: 'twt-joint-1234567890-0123456789abcdef',
+    invoiceIds: ['101', '102'],
+    invoiceMarkerKeys: { '101': '__company__:resend:2026-10-30', '102': '__company__' },
+    batchId: '1234567890', cnpj: CNPJ,
+    confirmedAt: '2026-10-30T12:00:00.000Z', correctedAt: '2026-10-30T13:00:00.000Z'
+  }, async (...args) => { calls.push(args); return 2; });
+  assert.equal(result, true);
+  assert.deepEqual(calls[0].slice(-2), [
+    'joint:101:__company__:resend:2026-10-30', 'joint:102:__company__'
+  ]);
 });
 
 test('mensagem contém números, empresa, pagamento e soma em reais', () => {
