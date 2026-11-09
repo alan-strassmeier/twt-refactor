@@ -18,10 +18,8 @@
     invoiceRows: document.getElementById('invoiceRows'),
     emptyState: document.getElementById('emptyState'),
     tableLoading: document.getElementById('tableLoading'),
-    previousPageButtons: [...document.querySelectorAll('[data-page-action="previous"]')],
-    nextPageButtons: [...document.querySelectorAll('[data-page-action="next"]')],
-    pageIndicators: [...document.querySelectorAll('[data-page-indicator]')],
-    resultRange: document.getElementById('resultRange'),
+    invoiceTableScroll: document.getElementById('invoiceTableScroll'),
+    invoiceLoadMore: document.getElementById('invoiceLoadMore'),
     invoiceCount: document.getElementById('invoiceCount'),
     totalAmount: document.getElementById('totalAmount'),
     paidAmount: document.getElementById('paidAmount'),
@@ -109,7 +107,8 @@
     sortKey: 'issuedAt',
     sortDirection: 'desc',
     view: 'list',
-    hasSearched: false
+    hasSearched: false,
+    activeFilters: null
   };
 
   const currency = new Intl.NumberFormat('pt-BR', {
@@ -969,23 +968,11 @@
     updateSortHeaders();
   };
 
-  const updatePaginationControls = () => {
-    const page = Math.floor(state.skip / LIMIT) + 1;
-    const previousDisabled = state.loading || state.skip === 0;
-    const nextDisabled = state.loading || !state.hasMore;
-    elements.pageIndicators.forEach((indicator) => {
-      indicator.textContent = `Página ${page}`;
-    });
-    elements.previousPageButtons.forEach((button) => {
-      button.disabled = previousDisabled;
-    });
-    elements.nextPageButtons.forEach((button) => {
-      button.disabled = nextDisabled;
-    });
-  };
-
-  const renderInvoices = (payload) => {
-    const invoices = Array.isArray(payload.invoices) ? payload.invoices : [];
+  const renderInvoices = (payload, { append = false } = {}) => {
+    const pageInvoices = Array.isArray(payload.invoices) ? payload.invoices : [];
+    const byId = new Map((append ? state.invoices : []).map((invoice) => [String(invoice.id), invoice]));
+    pageInvoices.forEach((invoice) => byId.set(String(invoice.id), invoice));
+    const invoices = [...byId.values()];
     state.invoices = invoices;
     const financialInvoices = invoices.filter((invoice) => {
       const statusLabel = String(invoice.statusLabel || '').toLocaleLowerCase('pt-BR');
@@ -994,7 +981,7 @@
     renderSortedRows();
     elements.emptyState.hidden = invoices.length > 0;
     elements.invoiceCount.textContent = String(invoices.length);
-    elements.invoiceCountLabel.textContent = 'Faturas na página';
+    elements.invoiceCountLabel.textContent = 'Faturas';
     elements.totalAmountLabel.textContent = 'Valor total';
     elements.paidAmountLabel.textContent = 'Valor pago';
     elements.balanceAmountLabel.textContent = 'Saldo';
@@ -1003,13 +990,7 @@
     elements.balanceAmount.textContent = currency.format(sum(financialInvoices, 'balance'));
 
     state.hasMore = Boolean(payload.pagination?.hasMore);
-    const start = invoices.length ? state.skip + 1 : 0;
-    const end = state.skip + invoices.length;
-    elements.resultRange.textContent = invoices.length
-      ? `Exibindo ${start}–${end}`
-      : 'Nenhum resultado nesta página';
     if (payload.controlWarning) elements.dashboardMessage.textContent = payload.controlWarning;
-    updatePaginationControls();
   };
 
   const chartColor = (index) => CHART_COLORS[index] ||
@@ -1267,6 +1248,7 @@
     state.sortKey = 'issuedAt';
     state.sortDirection = 'desc';
     state.hasSearched = false;
+    state.activeFilters = null;
     elements.invoiceRows.replaceChildren();
     setSelectedChartIndex(null);
     hideChartTooltip();
@@ -1285,7 +1267,7 @@
     elements.invoiceCount.textContent = '0';
     elements.invoiceCountLabel.textContent = state.view === 'debtors'
       ? 'Faturas pendentes'
-      : 'Faturas na página';
+      : 'Faturas';
     elements.totalAmountLabel.textContent = state.view === 'debtors'
       ? 'Empresas devedoras'
       : 'Valor total';
@@ -1298,16 +1280,14 @@
     elements.totalAmount.textContent = currency.format(0);
     elements.paidAmount.textContent = currency.format(0);
     elements.balanceAmount.textContent = currency.format(0);
-    elements.resultRange.textContent = 'Aguardando consulta';
-    updatePaginationControls();
+    elements.invoiceLoadMore.hidden = true;
+    elements.invoiceTableScroll.scrollTop = 0;
     elements.dashboardMessage.textContent = '';
   };
 
   const filterParams = () => {
     const params = new URLSearchParams();
     const data = new FormData(elements.filterForm);
-    const exactInvoiceId = String(data.get('id') || '').trim();
-    if (exactInvoiceId) state.skip = 0;
     for (const [key, rawValue] of data.entries()) {
       const value = String(rawValue).trim();
       if (!value) continue;
@@ -1320,7 +1300,7 @@
       );
     }
     params.set('limit', String(LIMIT));
-    params.set('skip', String(state.skip));
+    params.set('skip', '0');
     if (state.view === 'debtors') params.set('view', 'debtors');
     return params;
   };
@@ -1335,7 +1315,6 @@
     elements.viewButtons.forEach((button) => {
       button.disabled = loading;
     });
-    updatePaginationControls();
   };
 
   const setView = (view) => {
@@ -1358,28 +1337,74 @@
     scheduleBackToTopUpdate();
   };
 
-  const loadInvoices = async () => {
+  const loadInvoices = async ({ resume = false } = {}) => {
     if (state.loading) return;
     if (!elements.dateFilterInputs.every(validateDateFilter)) {
       elements.filterForm.reportValidity();
       return;
     }
-    const params = filterParams();
+    if (resume && (!state.hasMore || !state.activeFilters || state.view !== 'list')) return;
+    if (!resume) {
+      const params = filterParams();
+      state.activeFilters = params;
+      state.skip = 0;
+      state.hasMore = false;
+      if (state.view === 'list') {
+        state.invoices = [];
+        elements.invoiceRows.replaceChildren();
+        elements.emptyState.hidden = true;
+        elements.invoiceTableScroll.scrollTop = 0;
+        elements.invoiceCountLabel.textContent = 'Faturas';
+        elements.invoiceCount.textContent = '0';
+        elements.totalAmountLabel.textContent = 'Valor total';
+        elements.paidAmountLabel.textContent = 'Valor pago';
+        elements.balanceAmountLabel.textContent = 'Saldo';
+        elements.totalAmount.textContent = currency.format(0);
+        elements.paidAmount.textContent = currency.format(0);
+        elements.balanceAmount.textContent = currency.format(0);
+      }
+    }
     setLoading(true);
     elements.dashboardMessage.textContent = '';
+    elements.invoiceLoadMore.hidden = state.view !== 'list';
+    elements.invoiceLoadMore.disabled = true;
+    elements.invoiceLoadMore.textContent = 'Carregando faturas…';
     try {
-      const payload = await requestJson(`/api/faturamento/faturas?${params}`);
-      if (state.view === 'debtors') renderDebtorChart(payload);
-      else renderInvoices(payload);
+      if (state.view === 'debtors') {
+        renderDebtorChart(await requestJson(`/api/faturamento/faturas?${state.activeFilters}`));
+      } else {
+        let nextSkip = resume ? state.skip + LIMIT : 0;
+        let append = resume;
+        for (;;) {
+          if (nextSkip > 1000000) throw new Error('A consulta excedeu o limite de faturas da Brudam. Refine os filtros.');
+          const params = new URLSearchParams(state.activeFilters);
+          params.set('skip', String(nextSkip));
+          const payload = await requestJson(`/api/faturamento/faturas?${params}`);
+          renderInvoices(payload, { append });
+          state.skip = nextSkip;
+          if (!state.hasMore) break;
+          nextSkip += LIMIT;
+          append = true;
+          elements.invoiceLoadMore.textContent = `${state.invoices.length} fatura(s) carregada(s); buscando as demais…`;
+          await new Promise((resolve) => setTimeout(resolve, 200));
+        }
+      }
     } catch (error) {
       if (error.status === 401) {
         showPanel('login');
         elements.loginMessage.textContent = 'Sua sessão expirou. Entre novamente.';
       } else {
-        elements.dashboardMessage.textContent = error.message;
+        elements.dashboardMessage.textContent = state.hasMore
+          ? `Consulta parcial: ${error.message} Os valores acima incluem apenas as faturas carregadas.`
+          : error.message;
       }
     } finally {
       setLoading(false);
+      const canResume = !elements.dashboardPanel.hidden && state.view === 'list'
+        && state.hasMore;
+      elements.invoiceLoadMore.hidden = !canResume;
+      elements.invoiceLoadMore.disabled = !canResume;
+      if (canResume) elements.invoiceLoadMore.textContent = 'Tentar carregar as faturas restantes';
     }
   };
 
@@ -1475,20 +1500,7 @@
     hideChartTooltip();
   });
 
-  elements.previousPageButtons.forEach((button) => {
-    button.addEventListener('click', () => {
-      state.skip = Math.max(0, state.skip - LIMIT);
-      loadInvoices();
-    });
-  });
-
-  elements.nextPageButtons.forEach((button) => {
-    button.addEventListener('click', () => {
-      if (!state.hasMore) return;
-      state.skip += LIMIT;
-      loadInvoices();
-    });
-  });
+  elements.invoiceLoadMore.addEventListener('click', () => loadInvoices({ resume: true }));
 
   elements.sortHeaders.forEach((button) => {
     button.addEventListener('click', () => {

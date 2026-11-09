@@ -826,6 +826,56 @@ select:focus {
   overflow-x: auto;
 }
 
+.contained-list-panel {
+  height: 150vh;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.contained-list-panel > .table-scroll,
+#jointBillingPreview > .table-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.contained-list-panel .table-scroll thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+#jointBillingSection:not(:has(#jointBillingPreview:not([hidden]))) {
+  height: auto;
+}
+
+#jointBillingPreview:not([hidden]) {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.list-load-more {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 16px 24px;
+  border: 0;
+  border-radius: 0;
+  background: var(--blue-50);
+  color: var(--muted);
+  text-align: center;
+  font-size: .85rem;
+}
+
+.list-load-more:not(:disabled) {
+  color: var(--blue-600);
+  cursor: pointer;
+}
+
 table {
   width: 100%;
   min-width: 1660px;
