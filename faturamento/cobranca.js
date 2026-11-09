@@ -21,6 +21,7 @@
     jointTotal: document.getElementById('jointBillingTotal'),
     jointRows: document.getElementById('jointBillingRows'),
     jointRefreshButton: document.getElementById('refreshJointBillingButton'),
+    jointDownloadButton: document.getElementById('downloadJointBillingPdfButton'),
     jointSendButton: document.getElementById('sendJointBillingButton'),
     itauReconciliationPreviewForm: document.getElementById('itauReconciliationPreviewForm'),
     itauReconciliationInvoiceId: document.getElementById('itauReconciliationInvoiceId'),
@@ -634,6 +635,7 @@
     if (state.jointInitialRetryCategory) {
       elements.jointTotal.textContent = 'Lista ainda não carregada';
       elements.jointRefreshButton.disabled = true;
+      elements.jointDownloadButton.disabled = true;
       elements.jointSendButton.textContent = 'Tentar novamente';
       elements.jointSendButton.disabled = state.loading;
       return;
@@ -644,6 +646,8 @@
     elements.jointTotal.textContent = `${selected.length} selecionada(s) · Total: ${formatMoney(total)}`;
     const errorCount = selected.filter(needsJointInvoiceData).length;
     elements.jointRefreshButton.disabled = state.loading || errorCount === 0;
+    elements.jointDownloadButton.disabled = state.loading || !selected.length
+      || selected.some(blocksJointSend);
     elements.jointRefreshButton.title = errorCount
       ? `Reconsultar somente ${errorCount} fatura(s) com erro` : 'Nenhuma fatura com erro para atualizar';
     const confirming = elements.jointSendButton.dataset.confirmSignature
@@ -1744,6 +1748,62 @@
 
   elements.jointRefreshButton.addEventListener('click', async () => {
     await retryJointErrors(state.jointPreview);
+  });
+
+  elements.jointDownloadButton.addEventListener('click', async () => {
+    const preview = state.jointPreview;
+    const selected = selectedJointInvoices();
+    if (!preview || !selected.length || selected.some(blocksJointSend) || state.loading) return;
+    if (selected.length > 10) {
+      setMessage('Para baixar um PDF, selecione até 10 faturas. Ignore as demais apenas nesta seleção.', 'warning');
+      return;
+    }
+    setLoading(true);
+    try {
+      let totalBytes = 0;
+      for (const invoice of selected) {
+        setMessage(`Preparando o PDF da fatura ${invoice.id}…`);
+        totalBytes += await prepareJointInvoice(preview, invoice);
+        if (totalBytes > 18 * 1024 * 1024) {
+          throw new Error('Os documentos ultrapassam 18 MB. Selecione menos faturas.');
+        }
+      }
+      const body = {
+        cnpj: preview.company.cnpj,
+        invoiceIds: selected.map(({ id }) => id),
+        invoiceProofs: selected.map(({ id, proof }) => ({ id, proof })),
+        invoicePackages: selected.map(({ id, preparedToken }) => ({ id, token: preparedToken }))
+      };
+      const response = await fetch(endpoint('joint-billing-pdf'), {
+        method: 'POST', credentials: 'same-origin',
+        headers: { Accept: 'application/pdf', 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error(error.message || `Não foi possível baixar o PDF (HTTP ${response.status}).`);
+      }
+      if (!(response.headers.get('content-type') || '').includes('application/pdf')) {
+        throw new Error('O servidor não retornou um PDF válido.');
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `documentos-cobranca-faturas-${selected[0].id}-${selected.at(-1).id}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+      renderJointPreview(preview);
+      setMessage(`PDF de ${selected.length} fatura(s) baixado. Nenhum e-mail foi enviado.`, 'success');
+    } catch (error) {
+      renderJointPreview(preview);
+      setMessage(`PDF não baixado: ${error.message}`, 'error');
+    } finally {
+      setLoading(false);
+      updateJointSelection();
+    }
   });
 
   elements.jointSendButton.addEventListener('click', async () => {

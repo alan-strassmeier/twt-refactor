@@ -15,7 +15,7 @@ const {
 } = require('./cobranca-processor');
 const {
   EVENT_TYPES, zohoConfig, createZohoTransport, billingAttachments,
-  jointBillingSubject, jointBillingText, sendJointBillingEmail
+  jointBillingSubject, jointBillingText, sendJointBillingEmail, mergeBillingAttachments
 } = require('./cobranca-email');
 const { deliveryReference } = require('./cobranca-webhook');
 const store = require('./cobranca-store');
@@ -443,6 +443,46 @@ const prepareJointBillingInvoice = async ({ cnpj: cnpjInput, invoiceId: requeste
   }
 };
 
+const downloadJointBillingPdf = async ({ cnpj: cnpjInput, invoiceIds, invoiceProofs,
+  invoicePackages }, dependencies = {}) => {
+  const ids = Array.isArray(invoiceIds) && invoiceIds.length > 0
+    && invoiceIds.every((id) => /^\d{1,20}$/.test(String(id)) && Number(id) > 0)
+    ? sortIds(invoiceIds) : null;
+  if (!ids || ids.length !== invoiceIds.length || ids.length > MAX_INVOICES_PER_EMAIL) {
+    throw fail(`Selecione entre 1 e ${MAX_INVOICES_PER_EMAIL} faturas distintas para baixar um PDF.`, 422);
+  }
+  const cnpj = digits(cnpjInput);
+  if (cnpj.length !== 14) throw fail('Informe um CNPJ válido.', 422);
+  const proofById = new Map(Array.isArray(invoiceProofs)
+    ? invoiceProofs.map((item) => [invoiceId(item?.id), item?.proof]) : []);
+  const packageById = new Map(Array.isArray(invoicePackages)
+    ? invoicePackages.map((item) => [invoiceId(item?.id), item?.token]) : []);
+  if (proofById.size !== ids.length || invoiceProofs?.length !== ids.length
+    || packageById.size !== ids.length || invoicePackages?.length !== ids.length) {
+    throw fail('A confirmação ou os documentos das faturas estão incompletos. Atualize a prévia.', 409);
+  }
+  const category = await (dependencies.getCategory || store.getCategory)(cnpj);
+  if (!category) throw fail('Empresa não cadastrada nos e-mails de cobrança.', 404);
+  const attachments = [];
+  for (const id of ids) {
+    invoiceFromProof(proofById.get(id), id, cnpj, dependencies);
+    const group = await (dependencies.loadPreparedPackage || loadPreparedPackage)({
+      token: packageById.get(id), cnpj, invoiceId: id, proof: proofById.get(id)
+    }, { secret: previewSecret(dependencies), now: dependencies.now });
+    if (!Array.isArray(group) || !group.length) throw fail(`PDFs da fatura ${id} indisponíveis.`, 409);
+    attachments.push(...group);
+    if (attachments.reduce((sum, item) => sum + item.content.length, 0) > MAX_ATTACHMENT_BYTES) {
+      throw fail('Os documentos ultrapassam 18 MB. Selecione menos faturas.', 413);
+    }
+  }
+  const filename = `documentos-cobranca-faturas-${ids[0]}-${ids.at(-1)}.pdf`;
+  const [pdf] = await (dependencies.mergeBillingAttachments || mergeBillingAttachments)(attachments, filename);
+  if (!Buffer.isBuffer(pdf?.content) || pdf.content.length > MAX_ATTACHMENT_BYTES) {
+    throw fail('O PDF consolidado ultrapassa 18 MB. Selecione menos faturas.', 413);
+  }
+  return { filename, content: pdf.content, invoiceIds: ids };
+};
+
 const sendJointBilling = async ({ cnpj: cnpjInput, invoiceIds, invoiceProofs,
   invoiceSnapshots, invoicePackages }, dependencies = {}) => {
   const expectedIds = Array.isArray(invoiceIds) && invoiceIds.length > 0
@@ -777,5 +817,6 @@ const retractJointDeliveryConfirmation = async ({ clientReference, confirmProvid
 module.exports = {
   companyAndInvoices, listJointBilling, previewJointBilling,
   refreshJointBillingInvoice, prepareJointBillingInvoice, sendJointBilling,
+  downloadJointBillingPdf,
   confirmJointDelivery, retractJointDeliveryConfirmation, jointBillingText
 };

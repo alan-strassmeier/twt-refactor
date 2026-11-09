@@ -5,6 +5,7 @@ const {
   previewJointBilling,
   refreshJointBillingInvoice,
   prepareJointBillingInvoice,
+  downloadJointBillingPdf,
   confirmJointDelivery,
   retractJointDeliveryConfirmation,
   sendJointBilling: sendJointBillingCore
@@ -203,6 +204,42 @@ test('conferência guarda os dados da fatura para enviar sem buscá-los novament
   assert.equal(result.status, 'submitted');
   assert.equal(reads, 1);
   assert.equal(dependencies.sent.length, 1);
+});
+
+test('download usa os anexos preparados sem enviar e-mail nem marcar faturas como enviadas', async () => {
+  const loaded = [];
+  const dependencies = mockDependencies({
+    loadPreparedPackage: async ({ invoiceId }) => {
+      loaded.push(invoiceId);
+      return [{ filename: `fatura-${invoiceId}.pdf`, content: Buffer.from(`pdf-${invoiceId}`),
+        contentType: 'application/pdf' }];
+    },
+    mergeBillingAttachments: async (attachments, filename) => [{
+      filename, content: Buffer.from(attachments.map((item) => item.content.toString()).join('|'))
+    }]
+  });
+  const preview = await previewJointBilling(CNPJ, dependencies);
+  const invoiceProofs = preview.invoices.map(({ id, proof }) => ({ id, proof }));
+  const result = await downloadJointBillingPdf({ cnpj: CNPJ, invoiceIds: ['102', '101'],
+    invoiceProofs, invoicePackages: [{ id: '102', token: 'token-102' },
+      { id: '101', token: 'token-101' }] }, dependencies);
+  assert.deepEqual(result.invoiceIds, ['101', '102']);
+  assert.equal(result.content.toString(), 'pdf-101|pdf-102');
+  assert.deepEqual(loaded, ['101', '102']);
+  assert.equal(dependencies.sent.length, 0);
+  assert.equal(dependencies.claims.length, 0);
+  assert.equal(dependencies.saves.length, 0);
+  assert.equal(dependencies.logs.length, 0);
+});
+
+test('download rejeita prova inválida e seleção maior que um e-mail', async () => {
+  const dependencies = mockDependencies();
+  await assert.rejects(downloadJointBillingPdf({ cnpj: CNPJ, invoiceIds: ['101'],
+    invoiceProofs: [{ id: '101', proof: 'inválida' }],
+    invoicePackages: [{ id: '101', token: 'token' }] }, dependencies), /inválida/);
+  await assert.rejects(downloadJointBillingPdf({ cnpj: CNPJ,
+    invoiceIds: Array.from({ length: 11 }, (_, index) => String(index + 1))
+  }, dependencies), /1 e 10/);
 });
 
 test('após HTTP 429 só a fatura que falhou precisa de nova consulta', async () => {
