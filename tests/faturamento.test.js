@@ -213,6 +213,33 @@ test('coleta os filtros do formulário antes de desabilitar os campos', () => {
   assert.match(loadInvoices, /faturas\?\$\{params\}/);
 });
 
+test('carrega todas as páginas sem depender da rolagem e soma o resumo progressivamente', () => {
+  const html = readFileSync(require.resolve('../faturamento/index.html'), 'utf8');
+  const source = readFileSync(require.resolve('../faturamento/app.js'), 'utf8');
+  const styles = readFileSync(require.resolve('../faturamento/styles.css'), 'utf8');
+  const loadInvoices = source.slice(
+    source.indexOf('const loadInvoices = async'),
+    source.indexOf('elements.loginForm.addEventListener')
+  );
+  assert.match(loadInvoices, /for \(;;\)/);
+  assert.match(loadInvoices, /renderInvoices\(payload, \{ append \}\)/);
+  assert.match(loadInvoices, /if \(!state\.hasMore\) break/);
+  assert.match(loadInvoices, /nextSkip \+= LIMIT/);
+  assert.match(source, /sum\(financialInvoices, 'total'\)/);
+  assert.match(source, /sum\(financialInvoices, 'paid'\)/);
+  assert.match(source, /sum\(financialInvoices, 'balance'\)/);
+  assert.match(source, /const byId = new Map\(\(append \? state\.invoices : \[\]\)/);
+  assert.doesNotMatch(source, /invoiceTableScroll\.addEventListener\('scroll'/);
+  assert.match(html, /id="invoiceCountLabel">Faturas<\/span>/);
+  assert.doesNotMatch(html, /data-page-action|id="resultRange"/);
+  assert.ok(html.indexOf('data-collection-section="jointBillingSection"') > html.indexOf('data-collection-section="collectionContactsSection"'));
+  assert.ok(html.indexOf('data-collection-section="jointBillingSection"') < html.indexOf('data-collection-section="pendingDoccobSection"'));
+  assert.match(html, /class="table-card contained-list-panel" id="tableView"/);
+  assert.match(html, /class="collection-card collection-anchor-target contained-list-panel" id="jointBillingSection"/);
+  assert.match(html, /class="collection-card contained-list-panel" aria-labelledby="liquidationLogTitle"/);
+  assert.match(styles, /\.contained-list-panel\s*\{\s*height:\s*150vh/);
+});
+
 test('usa datas brasileiras nos filtros e converte para ISO antes da API', () => {
   const html = readFileSync(require.resolve('../faturamento/index.html'), 'utf8');
   const source = readFileSync(require.resolve('../faturamento/app.js'), 'utf8');

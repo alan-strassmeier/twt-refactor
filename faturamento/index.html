@@ -172,9 +172,9 @@
 
         <p class="dashboard-message" id="dashboardMessage" role="alert" aria-live="assertive"></p>
 
-        <section class="summary-grid" id="summaryGrid" aria-label="Resumo da página consultada">
+        <section class="summary-grid" id="summaryGrid" aria-label="Resumo das faturas consultadas">
           <article>
-            <span id="invoiceCountLabel">Faturas na página</span>
+            <span id="invoiceCountLabel">Faturas</span>
             <strong id="invoiceCount">0</strong>
           </article>
           <article>
@@ -191,22 +191,17 @@
           </article>
         </section>
 
-        <section class="table-card" id="tableView" aria-labelledby="invoiceTableTitle">
+        <section class="table-card contained-list-panel" id="tableView" aria-labelledby="invoiceTableTitle">
           <div class="table-heading">
             <div>
               <h2 id="invoiceTableTitle">Lista de faturas</h2>
-              <p id="resultRange">Até 100 resultados por página</p>
             </div>
             <div class="table-heading-actions">
               <span id="tableLoading" class="table-loading" hidden><span class="spinner" aria-hidden="true"></span> Conferindo faturas e empresas</span>
-              <nav class="pagination pagination-top" aria-label="Paginação superior das faturas">
-                <button class="button button-quiet" type="button" data-page-action="previous" disabled>Anterior</button>
-                <span data-page-indicator>Página 1</span>
-                <button class="button button-quiet" type="button" data-page-action="next" disabled>Próxima</button>
-              </nav>
             </div>
           </div>
-          <div class="table-scroll">
+          <div class="table-scroll" id="invoiceTableScroll" role="region"
+            aria-label="Faturas encontradas" tabindex="0">
             <table>
               <thead>
                 <tr>
@@ -231,11 +226,9 @@
               <strong>Nenhuma fatura encontrada</strong>
               <p>Revise os filtros e faça uma nova consulta.</p>
             </div>
-          </div>
-          <div class="pagination">
-            <button class="button button-quiet" id="previousPage" type="button" data-page-action="previous" disabled>Anterior</button>
-            <span id="pageIndicator" data-page-indicator>Página 1</span>
-            <button class="button button-quiet" id="nextPage" type="button" data-page-action="next" disabled>Próxima</button>
+            <button class="list-load-more" id="invoiceLoadMore" type="button" hidden disabled>
+              Carregando mais faturas…
+            </button>
           </div>
         </section>
 
@@ -337,14 +330,14 @@
               data-collection-section="collectionContactsSection" aria-controls="collectionContactsSection"
               aria-selected="true">E-mails cadastrados</button>
             <button class="collection-section-tab" type="button" role="tab"
+              data-collection-section="jointBillingSection" aria-controls="jointBillingSection"
+              aria-selected="false" tabindex="-1">Envio em conjunto</button>
+            <button class="collection-section-tab" type="button" role="tab"
               data-collection-section="pendingDoccobSection" aria-controls="pendingDoccobSection"
               aria-selected="false" tabindex="-1">Pendências</button>
             <button class="collection-section-tab" type="button" role="tab"
               data-collection-section="collectionLogsSection" aria-controls="collectionLogsSection"
               aria-selected="false" tabindex="-1">Logs de envio</button>
-            <button class="collection-section-tab" type="button" role="tab"
-              data-collection-section="jointBillingSection" aria-controls="jointBillingSection"
-              aria-selected="false" tabindex="-1">Envio em conjunto</button>
           </nav>
 
           <section class="collection-summary" aria-label="Resumo das cobranças">
@@ -392,7 +385,7 @@
             </div>
           </section>
 
-          <section class="collection-card collection-anchor-target" id="jointBillingSection"
+          <section class="collection-card collection-anchor-target contained-list-panel" id="jointBillingSection"
             role="tabpanel" aria-label="Envio em conjunto" hidden>
             <div class="collection-card-heading">
               <div>
@@ -413,7 +406,8 @@
                 <span id="jointBillingRecipients"></span>
                 <strong id="jointBillingTotal"></strong>
               </div>
-              <div class="table-scroll collection-table-scroll">
+              <div class="table-scroll collection-table-scroll" role="region"
+                aria-label="Faturas para envio em conjunto" tabindex="0">
                 <table class="collection-table">
                   <thead><tr><th>Fatura</th><th>Emissão</th><th>Vencimento</th><th>Saldo em aberto</th><th>Envio</th><th>Seleção</th></tr></thead>
                   <tbody id="jointBillingRows"></tbody>
@@ -605,7 +599,7 @@
             </div>
           </section>
 
-          <section class="collection-card" aria-labelledby="liquidationLogTitle">
+          <section class="collection-card contained-list-panel" aria-labelledby="liquidationLogTitle">
             <div class="collection-card-heading">
               <div>
                 <h2 id="liquidationLogTitle">Histórico de liquidações</h2>
@@ -613,7 +607,8 @@
               </div>
               <button class="button button-quiet" id="refreshLiquidationLog" type="button">Atualizar log</button>
             </div>
-            <div class="table-scroll collection-table-scroll">
+            <div class="table-scroll collection-table-scroll" role="region"
+              aria-label="Histórico de liquidações" tabindex="0">
               <table class="collection-table liquidation-log-table">
                 <thead><tr><th>Concluída em</th><th>Fatura</th><th>Origem</th><th>Data do pagamento</th><th>Valor pago</th></tr></thead>
                 <tbody id="liquidationLogRows"></tbody>
