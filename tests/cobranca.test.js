@@ -471,11 +471,7 @@ test('salva uma prévia textual do e-mail sem duplicar os PDFs', () => {
   assert.equal(preview.priority, 'high');
   assert.match(preview.subject, /Fatura : 11756/);
   assert.match(preview.text, /Perto do vencimento/);
-  assert.deepEqual(preview.attachments, [
-    'fatura-11756.pdf',
-    'dactes-fatura-11756.pdf',
-    'boleto-fatura-11756.pdf'
-  ]);
+  assert.deepEqual(preview.attachments, ['documentos-cobranca-fatura-11756.pdf']);
   assert.equal(Object.values(preview).some(Buffer.isBuffer), false);
 });
 
@@ -1928,11 +1924,7 @@ test('habilita a TWT no corte e envia fatura, boleto Bradesco e nota fiscal', as
   assert.equal(sentInput.dactePdf, null);
   assert.equal(sentInput.bankSlipPdf.toString(), 'boleto-bradesco');
   assert.equal(sentInput.nfsePdf.toString(), 'nota-fiscal');
-  assert.deepEqual(references[0].emailPreview.attachments, [
-    'fatura-11780.pdf',
-    'nota-fiscal-fatura-11780.pdf',
-    'boleto-fatura-11780.pdf'
-  ]);
+  assert.deepEqual(references[0].emailPreview.attachments, ['documentos-cobranca-fatura-11780.pdf']);
   assert.equal(context.summary.sent, 1);
 });
 
@@ -1999,7 +1991,7 @@ test('fatura TED envia somente a fatura e não tenta gerar boleto', async () => 
   });
   assert.equal(boletoCalls, 0);
   assert.equal(sentInput.bankSlipPdf, null);
-  assert.deepEqual(references[0].emailPreview.attachments, ['fatura-11756.pdf']);
+  assert.deepEqual(references[0].emailPreview.attachments, ['documentos-cobranca-fatura-11756.pdf']);
   assert.equal(logs[0].emailPreview.subject, 'Fatura : 11756 Vecto: 06/11/2026 - TWT LOG');
   assert.equal(context.summary.sent, 1);
 });

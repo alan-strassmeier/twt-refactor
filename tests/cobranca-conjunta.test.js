@@ -515,7 +515,7 @@ test('envio conjunto usa BILLING_ALERT_EMAIL em cópia sem alterar os destinatá
     invoices: [{ id: '101', overdueDays: 8 }],
     paymentMethod: 'Boleto bancário',
     totalBalance: 30.25,
-    attachments: [],
+    attachments: [{ filename: 'fatura-101.pdf', content: Buffer.from('pdf'), contentType: 'application/pdf' }],
     clientReference: 'test-joint-101',
     transport: { sendMail: async (value) => {
       message = value;

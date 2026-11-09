@@ -1,4 +1,5 @@
 const nodemailer = require('nodemailer');
+const { PDFDocument } = require('pdf-lib');
 const freightNoticeConfig = require('./cobranca-aviso.json');
 
 const EVENT_TYPES = Object.freeze({
@@ -198,6 +199,26 @@ const billingAttachments = ({ invoiceId, invoicePdf, dactePdf, nfsePdf, bankSlip
   }] : [])
 ];
 
+const mergeBillingAttachments = async (attachments, filename) => {
+  if (!attachments.length) throw new Error('Nenhum PDF disponível para a cobrança.');
+  if (attachments.length === 1) return [{ ...attachments[0], filename }];
+  const merged = await PDFDocument.create();
+  for (const attachment of attachments) {
+    if (!Buffer.isBuffer(attachment.content) || !attachment.content.length) {
+      throw new Error(`PDF de cobrança vazio: ${attachment.filename}.`);
+    }
+    let source;
+    try {
+      source = await PDFDocument.load(attachment.content, { updateMetadata: false });
+    } catch (error) {
+      throw new Error(`PDF de cobrança inválido: ${attachment.filename}.`, { cause: error });
+    }
+    const pages = await merged.copyPages(source, source.getPageIndices());
+    for (const page of pages) merged.addPage(page);
+  }
+  return [{ filename, content: Buffer.from(await merged.save()), contentType: 'application/pdf' }];
+};
+
 const billingEmailPreview = ({
   event,
   data,
@@ -214,12 +235,7 @@ const billingEmailPreview = ({
   subject: billingSubject(event, data),
   text: billingText(event, data, contact),
   priority: event === EVENT_TYPES.reminder || event === EVENT_TYPES.overdue ? 'high' : 'normal',
-  attachments: [
-    `fatura-${data.invoice.id}.pdf`,
-    ...(dactePdf ? [`dactes-fatura-${data.invoice.id}.pdf`] : []),
-    ...(nfsePdf ? [`nota-fiscal-fatura-${data.invoice.id}.pdf`] : []),
-    ...(bankSlipPdf ? [`boleto-fatura-${data.invoice.id}.pdf`] : [])
-  ]
+  attachments: [`documentos-cobranca-fatura-${data.invoice.id}.pdf`]
 });
 
 const sendBillingEmail = async ({
@@ -246,13 +262,9 @@ const sendBillingEmail = async ({
     subject: billingSubject(event, data),
     text: billingText(event, data, contact),
     html: billingHtml(event, data, contact),
-    attachments: billingAttachments({
-      invoiceId: data.invoice.id,
-      invoicePdf,
-      dactePdf,
-      nfsePdf,
-      bankSlipPdf
-    })
+    attachments: await mergeBillingAttachments(billingAttachments({
+      invoiceId: data.invoice.id, invoicePdf, dactePdf, nfsePdf, bankSlipPdf
+    }), `documentos-cobranca-fatura-${data.invoice.id}.pdf`)
   });
   const accepted = Array.isArray(info.accepted) ? info.accepted.map(String) : [];
   const rejected = Array.isArray(info.rejected) ? info.rejected.map(String) : [];
@@ -300,8 +312,15 @@ const sendJointBillingEmail = async ({
   recipients, companyName, targetCompanyName, invoices, paymentMethod, totalBalance,
   attachments, clientReference, transport, config = zohoConfig()
 }) => {
-  const activeTransport = transport || createZohoTransport(config);
   const content = { companyName, targetCompanyName, invoices, paymentMethod, totalBalance };
+  const mergedAttachments = await mergeBillingAttachments(attachments,
+    `documentos-cobranca-faturas-${invoices[0]?.id}-${invoices.at(-1)?.id}.pdf`);
+  if (mergedAttachments[0].content.length > 18 * 1024 * 1024) {
+    throw Object.assign(new Error('O PDF consolidado ultrapassa 18 MB. Divida as faturas em mais e-mails.'), {
+      statusCode: 413, expose: true, deliveryAccepted: false
+    });
+  }
+  const activeTransport = transport || createZohoTransport(config);
   const info = await activeTransport.sendMail({
     disableFileAccess: true,
     disableUrlAccess: true,
@@ -315,7 +334,7 @@ const sendJointBillingEmail = async ({
     subject: jointBillingSubject,
     text: jointBillingText(content),
     html: jointBillingHtml(content),
-    attachments
+    attachments: mergedAttachments
   });
   return {
     messageId: String(info.messageId || ''),
@@ -341,6 +360,7 @@ module.exports = {
   billingText,
   billingHtml,
   billingAttachments,
+  mergeBillingAttachments,
   billingEmailPreview,
   sendBillingEmail,
   jointBillingSubject,

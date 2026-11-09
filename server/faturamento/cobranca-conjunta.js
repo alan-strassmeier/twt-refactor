@@ -560,7 +560,7 @@ const sendJointBilling = async ({ cnpj: cnpjInput, invoiceIds, invoiceProofs,
     text: jointBillingText({ companyName: greetingName, targetCompanyName: preview.company.name,
       invoices: selectedInvoices,
       paymentMethod, totalBalance: selectedTotalBalance }),
-    priority: 'normal', attachments: attachments.map((item) => item.filename)
+    priority: 'normal', attachments: [`documentos-cobranca-faturas-${selectedInvoices[0]?.id}-${selectedInvoices.at(-1)?.id}.pdf`]
   };
   const metadata = {
     event, clientCnpj: cnpj, clientName: preview.company.name,
