@@ -649,8 +649,16 @@
     const selected = selectedJointInvoices();
     const downloadable = selectedJointDownloadInvoices();
     const needsRetry = selected.some((invoice) => invoice.prepareError);
-    const total = downloadable.reduce((sum, invoice) => sum + (Number(invoice.balance) || 0), 0);
-    elements.jointTotal.textContent = `${downloadable.length} selecionada(s) · Total: ${formatMoney(total)}`;
+    const listed = state.jointPreview?.invoices || [];
+    const amounts = listed.map((invoice) => invoice.balance ?? invoice.listedBalance);
+    const total = amounts.reduce((sum, amount) => sum + (Number(amount) || 0), 0);
+    const preliminary = listed.some((invoice) => invoice.unverified || invoice.balance == null);
+    const incomplete = amounts.some((amount) => amount == null || !Number.isFinite(Number(amount)));
+    const valueLabel = incomplete && amounts.every((amount) => amount == null)
+      ? 'Saldo ainda indisponível'
+      : `${preliminary ? 'Saldo preliminar' : 'Saldo confirmado'}${incomplete ? ' parcial' : ''}: ${formatMoney(total)}`;
+    elements.jointTotal.textContent = `${listed.length} fatura(s) em aberto na listagem · `
+      + `${downloadable.length} selecionada(s) · ${valueLabel}`;
     const errorCount = selected.filter(needsJointInvoiceData).length;
     elements.jointRefreshButton.disabled = state.loading || errorCount === 0;
     elements.jointDownloadButton.disabled = state.loading || !downloadable.length
@@ -679,7 +687,14 @@
       appendInvoiceNavigationCell(row, invoice.id);
       appendCell(row, formatDate(invoice.issuedAt));
       appendCell(row, formatDate(invoice.dueAt));
-      appendCell(row, invoice.balance == null ? 'Não confirmado' : formatMoney(invoice.balance));
+      const listedAmount = invoice.balance ?? invoice.listedBalance;
+      const balanceCell = appendCell(row, listedAmount == null
+        ? 'Não confirmado' : formatMoney(listedAmount));
+      if (invoice.balance == null && listedAmount != null) {
+        const note = document.createElement('small');
+        note.textContent = 'Valor da listagem; pendente de confirmação';
+        balanceCell.appendChild(note);
+      }
       const status = appendCell(row, invoice.sendReview ? 'Conferir envio nos logs'
         : invoice.jointSent ? 'Já enviado em conjunto'
           : invoice.blocked ? 'Bloqueado'
@@ -791,7 +806,9 @@
       };
       await Promise.all(Array.from({ length: Math.min(2, errorIds.length) }, () => worker()));
       preview.totalBalance = Math.round(preview.invoices.reduce(
-        (sum, invoice) => sum + (Number(invoice.balance) || 0), 0) * 100) / 100;
+        (sum, invoice) => sum + (Number(invoice.balance ?? invoice.listedBalance) || 0), 0) * 100) / 100;
+      preview.totalBalancePreliminary = preview.invoices.some((invoice) =>
+        invoice.unverified || invoice.balance == null);
       preview.blockedCount = preview.invoices.filter((invoice) => invoice.blocked).length;
       preview.jointSentCount = preview.invoices.filter((invoice) => invoice.jointSent).length;
       renderJointPreview(preview);

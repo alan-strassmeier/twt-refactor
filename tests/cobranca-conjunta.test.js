@@ -92,11 +92,26 @@ test('lista inicial não consulta faturas individuais e mantém cada uma pendent
   const preview = await listJointBilling(CNPJ, dependencies);
   assert.deepEqual(preview.invoices.map((invoice) => invoice.id), ['101', '102']);
   assert.ok(preview.invoices.every((invoice) => invoice.unverified && invoice.blocked && !invoice.proof));
+  assert.deepEqual(preview.invoices.map((invoice) => invoice.listedBalance), [50.25, 20]);
+  assert.equal(preview.totalBalance, 70.25);
+  assert.equal(preview.totalBalancePreliminary, true);
   assert.equal(dependencies.calls.length, 1);
   const refreshed = await refreshJointBillingInvoice({ cnpj: CNPJ, invoiceId: '101' },
     mockDependencies());
   assert.equal(refreshed.invoice.unverified, false);
   assert.ok(refreshed.invoice.proof);
+});
+
+test('total da listagem inclui faturas em aberto já enviadas em conjunto', async () => {
+  const dependencies = mockDependencies({
+    getJointDeliveries: async (ids) => new Map(ids.map((id) => [id,
+      id === '101' ? { state: 'sent', batchId: 'anterior' } : null]))
+  });
+  const preview = await listJointBilling(CNPJ, dependencies);
+  assert.equal(preview.invoices.length, 2);
+  assert.equal(preview.invoices[0].jointSent, true);
+  assert.equal(preview.totalBalance, 70.25);
+  assert.equal(preview.totalBalancePreliminary, true);
 });
 
 test('limite HTTP 429 na listagem inicial informa o motivo sem iniciar conferências individuais', async () => {

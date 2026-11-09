@@ -3070,6 +3070,9 @@ test('interface expõe cadastro, pendências e logs sem criar várias funções 
   assert.match(source, /const selectedJointInvoices = \(includeSent = state\.jointIncludeSent\)/);
   assert.match(source, /\(includeSent \|\| !invoice\.jointSent\) && !invoice\.sendReview/);
   assert.match(source, /const selectedJointDownloadInvoices = \(\) =>/);
+  assert.match(source, /invoice\.balance \?\? invoice\.listedBalance/);
+  assert.match(source, /Saldo preliminar/);
+  assert.match(source, /fatura\(s\) em aberto na listagem/);
   assert.match(source, /const errorIds = selectedJointInvoices\(\)\.filter\(needsJointInvoiceData\)/);
   const loadJointCompanySource = source.slice(source.indexOf('const loadJointCompany = async'),
     source.indexOf('const renderPending ='));

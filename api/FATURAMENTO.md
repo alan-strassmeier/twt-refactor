@@ -237,6 +237,10 @@ atualizadas. Ao clicar em **Enviar cobrança conjunta**, um modal oferece enviar
 somente as ainda não enviadas ou incluir explicitamente as já enviadas. O
 servidor recusa o reenvio sem essa escolha e registra a nova tentativa
 separadamente, preservando o histórico anterior.
+O resumo contabiliza todas as faturas vencidas em aberto da listagem, mesmo as
+já enviadas. Antes da conferência individual, o saldo exibido é identificado
+como preliminar e usa o valor retornado pela listagem da Brudam; só o saldo
+confirmado pode liberar o envio.
 
 Para faturas emitidas antes de **16/09/2026**, a rotina não executa envio
 inicial histórico. Essas faturas só retornam à fila automática quando entram

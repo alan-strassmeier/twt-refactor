@@ -214,7 +214,8 @@ const listJointBilling = async (cnpjInput, dependencies = {}) => {
     const kind = blockKind(block);
     return {
       id, issuedAt: invoice.issuedAt, dueAt: invoice.dueAt,
-      balance: null, overdueDays: overdueDays(invoice.dueAt, today),
+      balance: null, listedBalance: Number(invoice.balance),
+      overdueDays: overdueDays(invoice.dueAt, today),
       unverified: true, blocked: true, blockKind: kind,
       blockReason: [
         'Aguardando conferência individual da fatura na Brudam.',
@@ -230,7 +231,11 @@ const listJointBilling = async (cnpjInput, dependencies = {}) => {
   return {
     company: { cnpj, name: category.name, billingMethod: category.billingMethod },
     recipients: recipients.map(({ firstName, lastName, email }) => ({ firstName, lastName, email })),
-    invoices: entries, totalBalance: 0, blockedCount: entries.length,
+    invoices: entries,
+    totalBalance: Math.round(entries.reduce((sum, invoice) =>
+      sum + invoice.listedBalance, 0) * 100) / 100,
+    totalBalancePreliminary: true,
+    blockedCount: entries.length,
     jointSentCount: entries.filter((invoice) => invoice.jointSent).length
   };
 };
