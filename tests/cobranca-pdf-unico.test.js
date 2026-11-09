@@ -31,7 +31,7 @@ test('não envia PDF inválido e não mexe no único PDF existente', async () =>
   assert.equal(result[0].content, original);
 });
 
-test('envio individual entrega um único PDF ao SMTP', async () => {
+test('envio individual preserva PDFs separados ao SMTP', async () => {
   let sent;
   await sendBillingEmail({
     event: EVENT_TYPES.initial,
@@ -42,8 +42,11 @@ test('envio individual entrega um único PDF ao SMTP', async () => {
     transport: { sendMail: async (message) => { sent = message; return { accepted: ['ana@example.com'] }; } },
     config: { fromName: 'TWT', fromEmail: 'faturamento@twt.com.br' }
   });
-  assert.equal(sent.attachments.length, 1);
-  assert.equal((await PDFDocument.load(sent.attachments[0].content)).getPageCount(), 3);
+  assert.deepEqual(sent.attachments.map(({ filename }) => filename), [
+    'fatura-101.pdf', 'dactes-fatura-101.pdf', 'nota-fiscal-fatura-101.pdf'
+  ]);
+  assert.deepEqual(await Promise.all(sent.attachments.map(async ({ content }) =>
+    (await PDFDocument.load(content)).getPageCount())), [1, 1, 1]);
 });
 
 test('envio conjunto entrega um único PDF com as faturas na sequência', async () => {

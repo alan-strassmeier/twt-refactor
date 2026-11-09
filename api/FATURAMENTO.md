@@ -213,11 +213,11 @@ Em cada execução o servidor:
 1. consulta primeiro as faturas em aberto emitidas nas últimas 72 horas
    (incluindo o dia da borda, pois a Brudam filtra emissão apenas por data);
 2. envia o aviso inicial somente quando consegue montar o PDF da fatura e, para
-   pagamentos que não sejam TED/DOC, obter também o boleto. Para faturas DSL,
-   reúne os DACTEs vinculados no DOCCOB. Antes de enviar, consolida fatura,
-   DACTEs, nota fiscal e boleto (quando aplicáveis) em um único PDF. No envio
-   conjunto, esse único PDF contém os documentos de todas as faturas do e-mail,
-   agrupados por fatura;
+   pagamentos que não sejam TED/DOC, anexar também o boleto. Para faturas DSL,
+   reúne e anexa em um único PDF todos os DACTEs vinculados no DOCCOB. No envio
+   individual, fatura, DACTEs, nota fiscal e boleto continuam como anexos
+   separados. Apenas no envio conjunto esses documentos são consolidados em um
+   único PDF, agrupados por fatura;
 3. em seguida percorre as faturas em aberto e envia **Perto do vencimento**
    quando faltam até dois dias, com prioridade alta;
 4. nessa mesma lista, envia aviso de vencida a partir de dois dias após o

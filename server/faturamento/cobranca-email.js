@@ -235,7 +235,12 @@ const billingEmailPreview = ({
   subject: billingSubject(event, data),
   text: billingText(event, data, contact),
   priority: event === EVENT_TYPES.reminder || event === EVENT_TYPES.overdue ? 'high' : 'normal',
-  attachments: [`documentos-cobranca-fatura-${data.invoice.id}.pdf`]
+  attachments: [
+    `fatura-${data.invoice.id}.pdf`,
+    ...(dactePdf ? [`dactes-fatura-${data.invoice.id}.pdf`] : []),
+    ...(nfsePdf ? [`nota-fiscal-fatura-${data.invoice.id}.pdf`] : []),
+    ...(bankSlipPdf ? [`boleto-fatura-${data.invoice.id}.pdf`] : [])
+  ]
 });
 
 const sendBillingEmail = async ({
@@ -262,9 +267,13 @@ const sendBillingEmail = async ({
     subject: billingSubject(event, data),
     text: billingText(event, data, contact),
     html: billingHtml(event, data, contact),
-    attachments: await mergeBillingAttachments(billingAttachments({
-      invoiceId: data.invoice.id, invoicePdf, dactePdf, nfsePdf, bankSlipPdf
-    }), `documentos-cobranca-fatura-${data.invoice.id}.pdf`)
+    attachments: billingAttachments({
+      invoiceId: data.invoice.id,
+      invoicePdf,
+      dactePdf,
+      nfsePdf,
+      bankSlipPdf
+    })
   });
   const accepted = Array.isArray(info.accepted) ? info.accepted.map(String) : [];
   const rejected = Array.isArray(info.rejected) ? info.rejected.map(String) : [];
